@@ -83,6 +83,7 @@ filegroup {
         "backend/Backend.cpp",
         "backend/BackendClient.cpp",
         "backend/BackendManager.cpp",
+        "backend/BackendRpi5.cpp",
 
         "hwc2_device/DrmHwcTwo.cpp",
         "hwc2_device/HwcDisplay.cpp",
