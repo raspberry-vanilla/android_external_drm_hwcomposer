@@ -34,9 +34,9 @@ enum class CtmHandling {
 class PipelineToFrontendBindingInterface {
  public:
   virtual ~PipelineToFrontendBindingInterface() = default;
-  virtual bool BindDisplay(std::shared_ptr<DrmDisplayPipeline>);
-  virtual bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline>);
-  virtual void FinalizeDisplayBinding();
+  virtual bool BindDisplay(std::shared_ptr<DrmDisplayPipeline>) = 0;
+  virtual bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline>) = 0;
+  virtual void FinalizeDisplayBinding() = 0;
 };
 
 class ResourceManager {
@@ -47,7 +47,7 @@ class ResourceManager {
   ResourceManager &operator=(const ResourceManager &) = delete;
   ResourceManager(const ResourceManager &&) = delete;
   ResourceManager &&operator=(const ResourceManager &&) = delete;
-  ~ResourceManager() = default;
+  ~ResourceManager();
 
   void Init();
 
