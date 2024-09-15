@@ -42,11 +42,13 @@
 #include "cutils/native_handle.h"
 #include "hardware/hwcomposer_defs.h"
 #include "hwc2_device/HwcDisplay.h"
+#include "hwc2_device/HwcDisplayConfigs.h"
 #include "hwc2_device/HwcLayer.h"
 #include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
 
 using ::android::HwcDisplay;
+using ::android::HwcDisplayConfigs;
 
 #include "utils/log.h"
 
@@ -522,14 +524,14 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigs(
 
   uint32_t num_configs = 0;
   hwc3::Error error = Hwc2toHwc3Error(
-      display->GetDisplayConfigs(&num_configs, nullptr));
+      display->LegacyGetDisplayConfigs(&num_configs, nullptr));
   if (error != hwc3::Error::kNone) {
     return ToBinderStatus(error);
   }
 
   std::vector<hwc2_config_t> out_configs(num_configs);
   error = Hwc2toHwc3Error(
-      display->GetDisplayConfigs(&num_configs, out_configs.data()));
+      display->LegacyGetDisplayConfigs(&num_configs, out_configs.data()));
   if (error != hwc3::Error::kNone) {
     return ToBinderStatus(error);
   }
@@ -928,6 +930,71 @@ ndk::ScopedAStatus ComposerClient::setVsyncEnabled(int64_t display_id,
 ndk::ScopedAStatus ComposerClient::setIdleTimerEnabled(int64_t /*display_id*/,
                                                        int32_t /*timeout*/) {
   DEBUG_FUNC();
+  return ToBinderStatus(hwc3::Error::kUnsupported);
+}
+
+ndk::ScopedAStatus ComposerClient::getOverlaySupport(
+    OverlayProperties* /*out_overlay_properties*/) {
+  return ToBinderStatus(hwc3::Error::kUnsupported);
+}
+
+ndk::ScopedAStatus ComposerClient::getHdrConversionCapabilities(
+    std::vector<common::HdrConversionCapability>* /*out_capabilities*/) {
+  return ToBinderStatus(hwc3::Error::kUnsupported);
+}
+
+ndk::ScopedAStatus ComposerClient::setHdrConversionStrategy(
+    const common::HdrConversionStrategy& /*conversion_strategy*/,
+    common::Hdr* /*out_hdr*/) {
+  return ToBinderStatus(hwc3::Error::kUnsupported);
+}
+
+ndk::ScopedAStatus ComposerClient::setRefreshRateChangedCallbackDebugEnabled(
+    int64_t /*display*/, bool /*enabled*/) {
+  return ToBinderStatus(hwc3::Error::kUnsupported);
+}
+
+ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
+    int64_t display_id, int32_t /*max_frame_interval_ns*/,
+    std::vector<DisplayConfiguration>* configurations) {
+  DEBUG_FUNC();
+  const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
+  HwcDisplay* display = GetDisplay(display_id);
+  if (display == nullptr) {
+    return ToBinderStatus(hwc3::Error::kBadDisplay);
+  }
+
+  const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
+  for (const auto& [id, config] : configs.hwc_configs) {
+    static const int kNanosecondsPerSecond = 1E9;
+    configurations->emplace_back(
+        DisplayConfiguration{.configId = static_cast<int32_t>(config.id),
+                             .width = config.mode.GetRawMode().hdisplay,
+                             .height = config.mode.GetRawMode().vdisplay,
+                             .configGroup = static_cast<int32_t>(
+                                 config.group_id),
+                             .vsyncPeriod = static_cast<int>(kNanosecondsPerSecond * double(
+                                 1 / config.mode.GetVRefresh()))});
+
+    if (configs.mm_width != 0) {
+      // ideally this should be vdisplay/mm_heigth, however mm_height
+      // comes from edid parsing and is highly unreliable. Viewing the
+      // rarity of anisotropic displays, falling back to a single value
+      // for dpi yield more correct output.
+      static const float kMmPerInch = 25.4;
+      float dpi = float(config.mode.GetRawMode().hdisplay) * kMmPerInch /
+                  float(configs.mm_width);
+      configurations->back().dpi = {.x = dpi, .y = dpi};
+    }
+
+    // TODO: Populate vrrConfig.
+  }
+  return ndk::ScopedAStatus::ok();
+}
+
+ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
+    int64_t /*display*/, const ClockMonotonicTimestamp& /*expected_present_time*/,
+    int32_t /*frame_interval_ns*/) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
