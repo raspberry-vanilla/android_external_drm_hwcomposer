@@ -202,9 +202,15 @@ hwc3::Error ComposerClient::ValidateDisplayInternal(
     return Hwc2toHwc3Error(hwc2_error);
   }
 
+  hwc3::Error error = Hwc2toHwc3Error(
+      display.GetChangedCompositionTypes(&num_types, nullptr, nullptr));
+  if (error != hwc3::Error::kNone) {
+    return error;
+  }
+
   std::vector<hwc2_layer_t> hwc_changed_layers(num_types);
   std::vector<int32_t> hwc_composition_types(num_types);
-  hwc3::Error error = Hwc2toHwc3Error(
+  error = Hwc2toHwc3Error(
       display.GetChangedCompositionTypes(&num_types, hwc_changed_layers.data(),
                                          hwc_composition_types.data()));
   if (error != hwc3::Error::kNone) {
@@ -966,15 +972,13 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
 
   const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
   for (const auto& [id, config] : configs.hwc_configs) {
-    static const int kNanosecondsPerSecond = 1E9;
     configurations->emplace_back(
         DisplayConfiguration{.configId = static_cast<int32_t>(config.id),
                              .width = config.mode.GetRawMode().hdisplay,
                              .height = config.mode.GetRawMode().vdisplay,
                              .configGroup = static_cast<int32_t>(
                                  config.group_id),
-                             .vsyncPeriod = static_cast<int>(kNanosecondsPerSecond * double(
-                                 1 / config.mode.GetVRefresh()))});
+                             .vsyncPeriod = config.mode.GetVSyncPeriodNs()});
 
     if (configs.mm_width != 0) {
       // ideally this should be vdisplay/mm_heigth, however mm_height
