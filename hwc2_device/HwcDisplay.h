@@ -23,6 +23,7 @@
 #include <sstream>
 
 #include "HwcDisplayConfigs.h"
+#include "compositor/ColorInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
 #include "drm/DrmAtomicStateManager.h"
@@ -58,7 +59,7 @@ class HwcDisplay {
     return configs_;
   }
 
-  // HWC Hooks
+  // HWC2 Hooks - these should not be used outside of the hwc2 device.
   HWC2::Error AcceptDisplayChanges();
   HWC2::Error CreateLayer(hwc2_layer_t *layer);
   HWC2::Error DestroyLayer(hwc2_layer_t layer);
@@ -233,6 +234,8 @@ class HwcDisplay {
   static constexpr int kCtmCols = 3;
   std::shared_ptr<drm_color_ctm> color_matrix_;
   android_color_transform_t color_transform_hint_{};
+  int32_t content_type_{};
+  Colorspace colorspace_{};
 
   std::shared_ptr<DrmKmsPlan> current_plan_;
 
@@ -241,7 +244,7 @@ class HwcDisplay {
   Stats prev_stats_;
   std::string DumpDelta(HwcDisplay::Stats delta);
 
-  void SetColorMarixToIdentity();
+  void SetColorMatrixToIdentity();
 
   HWC2::Error Init();
 

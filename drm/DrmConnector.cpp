@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <drm/drm_mode.h>
 #define LOG_TAG "drmhwc"
 
 #include "DrmConnector.h"
@@ -44,22 +45,21 @@ namespace android {
 
 constexpr size_t kTypesCount = 21;
 
-static bool GetOptionalConnectorProperty(const DrmDevice &dev,
-                                         const DrmConnector &connector,
-                                         const char *prop_name,
-                                         DrmProperty *property) {
-  return dev.GetProperty(connector.GetId(), DRM_MODE_OBJECT_CONNECTOR,
-                         prop_name, property) == 0;
-}
+auto DrmConnector::GetConnectorProperty(const char *prop_name,
+                                        DrmProperty *property,
+                                        bool is_optional) -> bool {
+  auto err = drm_->GetProperty(GetId(), DRM_MODE_OBJECT_CONNECTOR, prop_name,
+                               property);
+  if (err == 0)
+    return true;
 
-static bool GetConnectorProperty(const DrmDevice &dev,
-                                 const DrmConnector &connector,
-                                 const char *prop_name, DrmProperty *property) {
-  if (!GetOptionalConnectorProperty(dev, connector, prop_name, property)) {
-    ALOGE("Could not get %s property\n", prop_name);
-    return false;
+  if (is_optional) {
+    ALOGV("Could not get optional %s property from connector %d", prop_name,
+          GetId());
+  } else {
+    ALOGE("Could not get %s property from connector %d", prop_name, GetId());
   }
-  return true;
+  return false;
 }
 
 auto DrmConnector::CreateInstance(DrmDevice &dev, uint32_t connector_id,
@@ -74,28 +74,75 @@ auto DrmConnector::CreateInstance(DrmDevice &dev, uint32_t connector_id,
   auto c = std::unique_ptr<DrmConnector>(
       new DrmConnector(std::move(conn), &dev, index));
 
-  if (!GetConnectorProperty(dev, *c, "DPMS", &c->dpms_property_) ||
-      !GetConnectorProperty(dev, *c, "CRTC_ID", &c->crtc_id_property_)) {
-    return {};
-  }
-
-  c->UpdateEdidProperty();
-
-  if (c->IsWriteback() &&
-      (!GetConnectorProperty(dev, *c, "WRITEBACK_PIXEL_FORMATS",
-                             &c->writeback_pixel_formats_) ||
-       !GetConnectorProperty(dev, *c, "WRITEBACK_FB_ID",
-                             &c->writeback_fb_id_) ||
-       !GetConnectorProperty(dev, *c, "WRITEBACK_OUT_FENCE_PTR",
-                             &c->writeback_out_fence_))) {
+  if (!c->Init()) {
+    ALOGE("Failed to initialize connector %d", connector_id);
     return {};
   }
 
   return c;
 }
 
+auto DrmConnector::Init()-> bool {
+  if (!GetConnectorProperty("DPMS", &dpms_property_) ||
+      !GetConnectorProperty("CRTC_ID", &crtc_id_property_)) {
+    return false;
+  }
+
+  UpdateEdidProperty();
+
+  if (IsWriteback() &&
+      (!GetConnectorProperty("WRITEBACK_PIXEL_FORMATS",
+                             &writeback_pixel_formats_) ||
+       !GetConnectorProperty("WRITEBACK_FB_ID", &writeback_fb_id_) ||
+       !GetConnectorProperty("WRITEBACK_OUT_FENCE_PTR",
+                             &writeback_out_fence_))) {
+    return false;
+  }
+
+  if (GetConnectorProperty("Colorspace", &colorspace_property_,
+                           /*is_optional=*/true)) {
+    colorspace_property_.AddEnumToMap("Default", Colorspace::kDefault,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("SMPTE_170M_YCC", Colorspace::kSmpte170MYcc,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("BT709_YCC", Colorspace::kBt709Ycc,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("XVYCC_601", Colorspace::kXvycc601,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("XVYCC_709", Colorspace::kXvycc709,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("SYCC_601", Colorspace::kSycc601,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("opYCC_601", Colorspace::kOpycc601,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("opRGB", Colorspace::kOprgb,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("BT2020_CYCC", Colorspace::kBt2020Cycc,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("BT2020_RGB", Colorspace::kBt2020Rgb,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("BT2020_YCC", Colorspace::kBt2020Ycc,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("DCI-P3_RGB_D65", Colorspace::kDciP3RgbD65,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("DCI-P3_RGB_Theater", Colorspace::kDciP3RgbTheater,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("RGB_WIDE_FIXED", Colorspace::kRgbWideFixed,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("RGB_WIDE_FLOAT", Colorspace::kRgbWideFloat,
+                                      colorspace_enum_map_);
+    colorspace_property_.AddEnumToMap("BT601_YCC", Colorspace::kBt601Ycc,
+                                      colorspace_enum_map_);
+  }
+
+  GetConnectorProperty("content type", &content_type_property_,
+                       /*is_optional=*/true);
+
+  return true;
+}
+
 int DrmConnector::UpdateEdidProperty() {
-  return GetOptionalConnectorProperty(*drm_, *this, "EDID", &edid_property_)
+  return GetConnectorProperty("EDID", &edid_property_, /*is_optional=*/true)
              ? 0
              : -EINVAL;
 }
@@ -215,4 +262,14 @@ int DrmConnector::UpdateModes() {
   return 0;
 }
 
+bool DrmConnector::IsLinkStatusGood() {
+  if (GetConnectorProperty("link-status", &link_status_property_, false)) {
+    auto link_status_property_value = link_status_property_.GetValue();
+    if (link_status_property_value &&
+        (link_status_property_value == DRM_MODE_LINK_STATUS_BAD))
+      return false;
+  }
+
+  return true;
+}
 }  // namespace android
