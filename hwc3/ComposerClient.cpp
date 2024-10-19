@@ -190,6 +190,28 @@ std::optional<HWC2::Composition> AidlToCompositionType(
   }
 }
 
+#if __ANDROID_API__ < 35
+
+class DisplayConfiguration {
+ public:
+  class Dpi {
+   public:
+    float x = 0.000000F;
+    float y = 0.000000F;
+  };
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  int32_t configId = 0;
+  int32_t width = 0;
+  int32_t height = 0;
+  std::optional<Dpi> dpi;
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  int32_t configGroup = 0;
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  int32_t vsyncPeriod = 0;
+};
+
+#endif
+
 DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
     const HwcDisplayConfigs& configs, const HwcDisplayConfig& config) {
   DisplayConfiguration aidl_configuration =
@@ -527,12 +549,20 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
     return;
   }
 
-  HwcLayerWrapper layer_wrapper{command.layer, layer};
+  HwcLayer::LayerProperties properties;
   if (command.buffer) {
-    ExecuteSetLayerBuffer(display_id, layer_wrapper, *command.buffer);
+    HwcLayer::Buffer buffer;
+    auto err = ImportLayerBuffer(display_id, command.layer, *command.buffer,
+                                 &buffer.buffer_handle);
+    if (err != hwc3::Error::kNone) {
+      cmd_result_writer_->AddError(err);
+      return;
+    }
+    buffer.acquire_fence = ::android::MakeSharedFd(
+        command.buffer->fence.dup().release());
+    properties.buffer.emplace(buffer);
   }
 
-  HwcLayer::LayerProperties properties;
   properties.blend_mode = AidlToBlendMode(command.blendMode);
   properties.color_space = AidlToColorSpace(command.dataspace);
   properties.sample_range = AidlToSampleRange(command.dataspace);
@@ -572,9 +602,7 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     DispatchLayerCommand(command.display, layer_cmd);
   }
 
-  if (command.brightness) {
-    ExecuteSetDisplayBrightness(command.display, *command.brightness);
-  }
+  // TODO: Implement support for display brightness.
   if (command.colorTransformMatrix) {
     ExecuteSetDisplayColorTransform(command.display,
                                     *command.colorTransformMatrix);
@@ -1173,6 +1201,8 @@ ndk::ScopedAStatus ComposerClient::setRefreshRateChangedCallbackDebugEnabled(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
+#if __ANDROID_API__ >= 35
+
 ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
     int64_t display_id, int32_t /*max_frame_interval_ns*/,
     std::vector<DisplayConfiguration>* configurations) {
@@ -1197,6 +1227,8 @@ ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
+#endif
+
 std::string ComposerClient::Dump() {
   uint32_t size = 0;
   hwc_->Dump(&size, nullptr);
@@ -1212,43 +1244,18 @@ std::string ComposerClient::Dump() {
   return binder;
 }
 
-void ComposerClient::ExecuteSetLayerBuffer(int64_t display_id,
-                                           HwcLayerWrapper& layer,
-                                           const Buffer& buffer) {
-  buffer_handle_t imported_buffer = nullptr;
+hwc3::Error ComposerClient::ImportLayerBuffer(
+    int64_t display_id, int64_t layer_id, const Buffer& buffer,
+    buffer_handle_t* out_imported_buffer) {
+  *out_imported_buffer = nullptr;
 
   auto releaser = composer_resources_->CreateResourceReleaser(true);
-  auto err = composer_resources_->GetLayerBuffer(display_id, layer.layer_id,
-                                                 buffer, &imported_buffer,
+  auto err = composer_resources_->GetLayerBuffer(display_id, layer_id, buffer,
+                                                 out_imported_buffer,
                                                  releaser.get());
-  if (err != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(err);
-    return;
-  }
-
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-  auto fence_fd = const_cast<ndk::ScopedFileDescriptor&>(buffer.fence)
-                      .release();
-  err = Hwc2toHwc3Error(layer.layer->SetLayerBuffer(imported_buffer, fence_fd));
-  if (err != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(err);
-  }
+  return err;
 }
 
-void ComposerClient::ExecuteSetDisplayBrightness(
-    uint64_t display_id, const DisplayBrightness& command) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  auto error = Hwc2toHwc3Error(
-      display->SetDisplayBrightness(command.brightness));
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-  }
-}
 void ComposerClient::ExecuteSetDisplayColorTransform(
     uint64_t display_id, const std::vector<float>& matrix) {
   auto* display = GetDisplay(display_id);

@@ -39,11 +39,6 @@ namespace aidl::android::hardware::graphics::composer3::impl {
 
 class DrmHwcThree;
 
-struct HwcLayerWrapper {
-  int64_t layer_id;
-  ::android::HwcLayer* layer;
-};
-
 class ComposerClient : public BnComposerClient {
  public:
   ComposerClient();
@@ -145,6 +140,9 @@ class ComposerClient : public BnComposerClient {
       common::Hdr* out_hdr) override;
   ndk::ScopedAStatus setRefreshRateChangedCallbackDebugEnabled(
       int64_t display, bool enabled) override;
+
+#if __ANDROID_API__ >= 35
+
   ndk::ScopedAStatus getDisplayConfigurations(
       int64_t display, int32_t max_frame_interval_ns,
       std::vector<DisplayConfiguration>* configurations) override;
@@ -152,19 +150,21 @@ class ComposerClient : public BnComposerClient {
       int64_t display, const ClockMonotonicTimestamp& expected_present_time,
       int32_t frame_interval_ns) override;
 
+#endif
+
  protected:
   ::ndk::SpAIBinder createBinder() override;
 
  private:
+  hwc3::Error ImportLayerBuffer(int64_t display_id, int64_t layer_id,
+                                const Buffer& buffer,
+                                buffer_handle_t* out_imported_buffer);
+
   // Layer commands
   void DispatchLayerCommand(int64_t display_id, const LayerCommand& command);
-  void ExecuteSetLayerBuffer(int64_t display_id, HwcLayerWrapper& layer_id,
-                             const Buffer& buffer);
 
   // Display commands
   void ExecuteDisplayCommand(const DisplayCommand& command);
-  void ExecuteSetDisplayBrightness(uint64_t display_id,
-                                   const DisplayBrightness& command);
   void ExecuteSetDisplayColorTransform(uint64_t display_id,
                                        const std::vector<float>& matrix);
   void ExecuteSetDisplayClientTarget(uint64_t display_id,
