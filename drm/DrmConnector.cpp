@@ -23,10 +23,12 @@
 
 #include <array>
 #include <cerrno>
+#include <cinttypes>
 #include <cstdint>
 #include <sstream>
 
 #include "DrmDevice.h"
+#include "compositor/DisplayInfo.h"
 #include "utils/log.h"
 
 #include <cutils/properties.h>
@@ -137,6 +139,26 @@ auto DrmConnector::Init()-> bool {
 
   GetConnectorProperty("content type", &content_type_property_,
                        /*is_optional=*/true);
+
+  if (GetConnectorProperty("panel orientation", &panel_orientation_,
+                           /*is_optional=*/true)) {
+    panel_orientation_
+        .AddEnumToMapReverse("Normal",
+                             PanelOrientation::kModePanelOrientationNormal,
+                             panel_orientation_enum_map_);
+    panel_orientation_
+        .AddEnumToMapReverse("Upside Down",
+                             PanelOrientation::kModePanelOrientationBottomUp,
+                             panel_orientation_enum_map_);
+    panel_orientation_
+        .AddEnumToMapReverse("Left Side Up",
+                             PanelOrientation::kModePanelOrientationLeftUp,
+                             panel_orientation_enum_map_);
+    panel_orientation_
+        .AddEnumToMapReverse("Right Side Up",
+                             PanelOrientation::kModePanelOrientationRightUp,
+                             panel_orientation_enum_map_);
+  }
 
   return true;
 }
@@ -272,4 +294,26 @@ bool DrmConnector::IsLinkStatusGood() {
 
   return true;
 }
+
+std::optional<PanelOrientation> DrmConnector::GetPanelOrientation() {
+  if (!panel_orientation_.GetValue().has_value()) {
+    ALOGW("No panel orientation property available.");
+    return {};
+  }
+
+  /* The value_or(0) satisfies the compiler warning. However,
+   * panel_orientation_.GetValue() is guaranteed to have a value since we check
+   * has_value() and return early otherwise.
+   */
+  uint64_t panel_orientation_value = panel_orientation_.GetValue().value_or(0);
+
+  if (panel_orientation_enum_map_.count(panel_orientation_value) == 1) {
+    return panel_orientation_enum_map_[panel_orientation_value];
+  }
+
+  ALOGE("Unknown panel orientation: panel_orientation = %" PRIu64,
+        panel_orientation_value);
+  return {};
+}
+
 }  // namespace android

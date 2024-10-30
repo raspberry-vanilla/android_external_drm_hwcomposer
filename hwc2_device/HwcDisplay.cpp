@@ -24,9 +24,14 @@
 #include "backend/Backend.h"
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
+#include "compositor/DisplayInfo.h"
+#include "drm/DrmConnector.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
 #include "utils/log.h"
 #include "utils/properties.h"
+
+using ::android::DrmDisplayPipeline;
 
 namespace android {
 
@@ -109,22 +114,9 @@ void HwcDisplay::Deinit() {
     AtomicCommitArgs a_args{};
     a_args.composition = std::make_shared<DrmKmsPlan>();
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-/*
- *  TODO:
- *  Unfortunately the following causes regressions on db845c
- *  with VtsHalGraphicsComposerV2_3TargetTest due to the display
- *  never coming back. Patches to avoiding that issue on the
- *  the kernel side unfortunately causes further crashes in
- *  drm_hwcomposer, because the client detach takes longer then the
- *  1 second max VTS expects. So for now as a workaround, lets skip
- *  deactivating the display on deinit, which matches previous
- *  behavior prior to commit d0494d9b8097
- */
-#if 0
     a_args.composition = {};
     a_args.active = false;
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-#endif
 
     current_plan_.reset();
     backend_.reset();
@@ -194,6 +186,23 @@ HWC2::Error HwcDisplay::Init() {
   SetColorMatrixToIdentity();
 
   return HWC2::Error::None;
+}
+
+std::optional<PanelOrientation> HwcDisplay::getDisplayPhysicalOrientation() {
+  if (IsInHeadlessMode()) {
+    // The pipeline can be nullptr in headless mode, so return the default
+    // "normal" mode.
+    return PanelOrientation::kModePanelOrientationNormal;
+  }
+
+  DrmDisplayPipeline &pipeline = GetPipe();
+  if (pipeline.connector == nullptr || pipeline.connector->Get() == nullptr) {
+    ALOGW(
+        "No display pipeline present to query the panel orientation property.");
+    return {};
+  }
+
+  return pipeline.connector->Get()->GetPanelOrientation();
 }
 
 HWC2::Error HwcDisplay::ChosePreferredConfig() {
