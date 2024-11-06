@@ -27,7 +27,6 @@ cc_defaults {
     shared_libs: [
         "android.hardware.graphics.composer@2.1-resources",
         "android.hardware.graphics.composer@2.2-resources",
-        "libbase",
         "libcutils",
         "libdrm",
         "libhardware",
