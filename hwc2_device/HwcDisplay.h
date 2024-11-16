@@ -74,9 +74,17 @@ class HwcDisplay {
   // is queued up to take effect in the future.
   auto GetLastRequestedConfig() const -> const HwcDisplayConfig *;
 
+  // Set a config synchronously. If the requested config fails to be committed,
+  // this will return with an error. Otherwise, the config will have been
+  // committed to the kernel on successful return.
+  ConfigError SetConfig(hwc2_config_t config);
+
   // Queue a configuration change to take effect in the future.
   auto QueueConfig(hwc2_config_t config, int64_t desired_time, bool seamless,
                    QueuedConfigTiming *out_timing) -> ConfigError;
+
+  // Get the HwcDisplayConfig, or nullptor if none.
+  auto GetConfig(hwc2_config_t config_id) const -> const HwcDisplayConfig *;
 
   // HWC2 Hooks - these should not be used outside of the hwc2 device.
   HWC2::Error AcceptDisplayChanges();
@@ -220,15 +228,18 @@ class HwcDisplay {
   auto getDisplayPhysicalOrientation() -> std::optional<PanelOrientation>;
 
  private:
+  AtomicCommitArgs CreateModesetCommit(
+      const HwcDisplayConfig *config,
+      const std::optional<LayerData> &modeset_layer);
+
   HwcDisplayConfigs configs_;
 
   DrmHwc *const hwc_;
 
   SharedFd present_fence_;
 
-  std::optional<DrmMode> staged_mode_;
   int64_t staged_mode_change_time_{};
-  uint32_t staged_mode_config_id_{};
+  std::optional<uint32_t> staged_mode_config_id_{};
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 
