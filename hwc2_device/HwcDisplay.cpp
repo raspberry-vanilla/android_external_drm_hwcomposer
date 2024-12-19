@@ -232,6 +232,8 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
   ALOGV("Blocking config succeeded.");
   configs_.active_config_id = config;
   staged_mode_config_id_.reset();
+  vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+  // set new vsync period
   return ConfigError::kNone;
 }
 
@@ -263,9 +265,7 @@ auto HwcDisplay::QueueConfig(hwc2_config_t config, int64_t desired_time,
   staged_mode_config_id_ = config;
 
   // Enable vsync events until the mode has been applied.
-  last_vsync_ts_ = 0;
-  vsync_tracking_en_ = true;
-  vsync_worker_->VSyncControl(true);
+  vsync_worker_->SetVsyncTimestampTracking(true);
 
   return ConfigError::kNone;
 }
@@ -301,8 +301,6 @@ void HwcDisplay::Deinit() {
   }
 
   if (vsync_worker_) {
-    // TODO: There should be a mechanism to wait for this worker to complete,
-    // otherwise there is a race condition while destructing the HwcDisplay.
     vsync_worker_->StopThread();
     vsync_worker_ = {};
   }
@@ -313,31 +311,8 @@ void HwcDisplay::Deinit() {
 HWC2::Error HwcDisplay::Init() {
   ChosePreferredConfig();
 
-  auto vsw_callbacks = (VSyncWorkerCallbacks){
-      .out_event =
-          [this](int64_t timestamp) {
-            const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
-            if (vsync_event_en_) {
-              uint32_t period_ns{};
-              GetDisplayVsyncPeriod(&period_ns);
-              hwc_->SendVsyncEventToClient(handle_, timestamp, period_ns);
-            }
-            if (vsync_tracking_en_) {
-              last_vsync_ts_ = timestamp;
-            }
-            if (!vsync_event_en_ && !vsync_tracking_en_) {
-              vsync_worker_->VSyncControl(false);
-            }
-          },
-      .get_vperiod_ns = [this]() -> uint32_t {
-        uint32_t outVsyncPeriod = 0;
-        GetDisplayVsyncPeriod(&outVsyncPeriod);
-        return outVsyncPeriod;
-      },
-  };
-
   if (type_ != HWC2::DisplayType::Virtual) {
-    vsync_worker_ = VSyncWorker::CreateInstance(pipeline_, vsw_callbacks);
+    vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
     if (!vsync_worker_) {
       ALOGE("Failed to create event worker for d=%d\n", int(handle_));
       return HWC2::Error::BadDisplay;
@@ -683,7 +658,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   uint32_t prev_vperiod_ns = 0;
   GetDisplayVsyncPeriod(&prev_vperiod_ns);
 
-  auto mode_update_commited_ = false;
+  std::optional<uint32_t> new_vsync_period_ns;
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
     const HwcDisplayConfig *staged_config = GetConfig(
@@ -698,10 +673,9 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                      .bottom = int(staged_config->mode.GetRawMode().vdisplay)});
 
     configs_.active_config_id = staged_mode_config_id_.value();
-
     a_args.display_mode = staged_config->mode;
     if (!a_args.test_only) {
-      mode_update_commited_ = true;
+      new_vsync_period_ns = staged_config->mode.GetVSyncPeriodNs();
     }
   }
 
@@ -777,12 +751,15 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
     return HWC2::Error::BadParameter;
   }
 
-  if (mode_update_commited_) {
+  if (new_vsync_period_ns) {
+    vsync_worker_->SetVsyncPeriodNs(new_vsync_period_ns.value());
     staged_mode_config_id_.reset();
-    vsync_tracking_en_ = false;
-    if (last_vsync_ts_ != 0) {
+
+    vsync_worker_->SetVsyncTimestampTracking(false);
+    uint32_t last_vsync_ts = vsync_worker_->GetLastVsyncTimestamp();
+    if (last_vsync_ts != 0) {
       hwc_->SendVsyncPeriodTimingChangedEventToClient(handle_,
-                                                      last_vsync_ts_ +
+                                                      last_vsync_ts +
                                                           prev_vperiod_ns);
     }
   }
@@ -1072,8 +1049,17 @@ HWC2::Error HwcDisplay::SetVsyncEnabled(int32_t enabled) {
   }
 
   vsync_event_en_ = HWC2_VSYNC_ENABLE == enabled;
+
   if (vsync_event_en_) {
-    vsync_worker_->VSyncControl(true);
+    DrmHwc *hwc = hwc_;
+    hwc2_display_t id = handle_;
+    // Callback will be called from the vsync thread.
+    auto callback = [hwc, id](int64_t timestamp, uint32_t period_ns) {
+      hwc->SendVsyncEventToClient(id, timestamp, period_ns);
+    };
+    vsync_worker_->SetTimestampCallback(callback);
+  } else {
+    vsync_worker_->SetTimestampCallback(std::nullopt);
   }
   return HWC2::Error::None;
 }
@@ -1170,9 +1156,7 @@ HWC2::Error HwcDisplay::SetActiveConfigWithConstraints(
   outTimeline->newVsyncAppliedTimeNanos = vsyncPeriodChangeConstraints
                                               ->desiredTimeNanos;
 
-  last_vsync_ts_ = 0;
-  vsync_tracking_en_ = true;
-  vsync_worker_->VSyncControl(true);
+  vsync_worker_->SetVsyncTimestampTracking(true);
 
   return HWC2::Error::None;
 }

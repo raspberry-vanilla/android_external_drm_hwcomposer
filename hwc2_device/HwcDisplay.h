@@ -246,10 +246,8 @@ class HwcDisplay {
   std::unique_ptr<Backend> backend_;
   std::shared_ptr<FlatteningController> flatcon_;
 
-  std::shared_ptr<VSyncWorker> vsync_worker_;
+  std::unique_ptr<VSyncWorker> vsync_worker_;
   bool vsync_event_en_{};
-  bool vsync_tracking_en_{};
-  int64_t last_vsync_ts_{};
 
   const hwc2_display_t handle_;
   HWC2::DisplayType type_;
