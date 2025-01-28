@@ -60,8 +60,12 @@ using ::android::LayerTransform;
 namespace aidl::android::hardware::graphics::composer3::impl {
 namespace {
 
+constexpr int kCtmRows = 4;
+constexpr int kCtmColumns = 4;
+constexpr int kCtmSize = kCtmRows * kCtmColumns;
+
 // clang-format off
-constexpr std::array<float, 16> kIdentityMatrix = {
+constexpr std::array<float, kCtmSize> kIdentityMatrix = {
     1.0F, 0.0F, 0.0F, 0.0F,
     0.0F, 1.0F, 0.0F, 0.0F,
     0.0F, 0.0F, 1.0F, 0.0F,
@@ -89,12 +93,8 @@ std::optional<BufferBlendMode> AidlToBlendMode(
 }
 
 std::optional<BufferColorSpace> AidlToColorSpace(
-    const std::optional<ParcelableDataspace>& dataspace) {
-  if (!dataspace) {
-    return std::nullopt;
-  }
-
-  int32_t standard = static_cast<int32_t>(dataspace->dataspace) &
+    const common::Dataspace& dataspace) {
+  int32_t standard = static_cast<int32_t>(dataspace) &
                      static_cast<int32_t>(common::Dataspace::STANDARD_MASK);
   switch (standard) {
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT709):
@@ -116,13 +116,17 @@ std::optional<BufferColorSpace> AidlToColorSpace(
   }
 }
 
-std::optional<BufferSampleRange> AidlToSampleRange(
+std::optional<BufferColorSpace> AidlToColorSpace(
     const std::optional<ParcelableDataspace>& dataspace) {
   if (!dataspace) {
     return std::nullopt;
   }
+  return AidlToColorSpace(dataspace->dataspace);
+}
 
-  int32_t sample_range = static_cast<int32_t>(dataspace->dataspace) &
+std::optional<BufferSampleRange> AidlToSampleRange(
+    const common::Dataspace& dataspace) {
+  int32_t sample_range = static_cast<int32_t>(dataspace) &
                          static_cast<int32_t>(common::Dataspace::RANGE_MASK);
   switch (sample_range) {
     case static_cast<int32_t>(common::Dataspace::RANGE_FULL):
@@ -135,6 +139,14 @@ std::optional<BufferSampleRange> AidlToSampleRange(
       ALOGE("Unsupported sample range: %d", sample_range);
       return std::nullopt;
   }
+}
+
+std::optional<BufferSampleRange> AidlToSampleRange(
+    const std::optional<ParcelableDataspace>& dataspace) {
+  if (!dataspace) {
+    return std::nullopt;
+  }
+  return AidlToSampleRange(dataspace->dataspace);
 }
 
 bool IsSupportedCompositionType(
@@ -161,12 +173,46 @@ bool IsSupportedCompositionType(
   }
 }
 
+hwc3::Error ValidateColorTransformMatrix(
+    const std::optional<std::vector<float>>& color_transform_matrix) {
+  if (!color_transform_matrix) {
+    return hwc3::Error::kNone;
+  }
+
+  if (color_transform_matrix->size() != kCtmSize) {
+    ALOGE("Expected color transform matrix of size %d, got size %d.", kCtmSize,
+          (int)color_transform_matrix->size());
+    return hwc3::Error::kBadParameter;
+  }
+
+  // Without HW support, we cannot correctly process matrices with an offset.
+  constexpr int kOffsetIndex = kCtmColumns * 3;
+  for (int i = kOffsetIndex; i < kOffsetIndex + 3; i++) {
+    if (color_transform_matrix.value()[i] != 0.F)
+      return hwc3::Error::kUnsupported;
+  }
+  return hwc3::Error::kNone;
+}
+
 bool ValidateLayerBrightness(const std::optional<LayerBrightness>& brightness) {
   if (!brightness) {
     return true;
   }
   return !(std::signbit(brightness->brightness) ||
            std::isnan(brightness->brightness));
+}
+
+std::optional<std::array<float, kCtmSize>> AidlToColorTransformMatrix(
+    const std::optional<std::vector<float>>& aidl_color_transform_matrix) {
+  if (!aidl_color_transform_matrix ||
+      aidl_color_transform_matrix->size() < kCtmSize) {
+    return std::nullopt;
+  }
+
+  std::array<float, kCtmSize> color_transform_matrix = kIdentityMatrix;
+  std::copy(aidl_color_transform_matrix->begin(),
+            aidl_color_transform_matrix->end(), color_transform_matrix.begin());
+  return color_transform_matrix;
 }
 
 std::optional<HWC2::Composition> AidlToCompositionType(
@@ -278,28 +324,16 @@ std::optional<LayerTransform> AidlToLayerTransform(
     return std::nullopt;
   }
 
-  uint32_t transform = LayerTransform::kIdentity;
-  // 270* and 180* cannot be combined with flips. More specifically, they
-  // already contain both horizontal and vertical flips, so those fields are
-  // redundant in this case. 90* rotation can be combined with either horizontal
-  // flip or vertical flip, so treat it differently
-  if (aidl_transform->transform == common::Transform::ROT_270) {
-    transform = LayerTransform::kRotate270;
-  } else if (aidl_transform->transform == common::Transform::ROT_180) {
-    transform = LayerTransform::kRotate180;
-  } else {
-    auto aidl_transform_bits = static_cast<uint32_t>(aidl_transform->transform);
-    if ((aidl_transform_bits &
-         static_cast<uint32_t>(common::Transform::FLIP_H)) != 0)
-      transform |= LayerTransform::kFlipH;
-    if ((aidl_transform_bits &
-         static_cast<uint32_t>(common::Transform::FLIP_V)) != 0)
-      transform |= LayerTransform::kFlipV;
-    if ((aidl_transform_bits &
-         static_cast<uint32_t>(common::Transform::ROT_90)) != 0)
-      transform |= LayerTransform::kRotate90;
-  }
-  return static_cast<LayerTransform>(transform);
+  using aidl::android::hardware::graphics::common::Transform;
+
+  return (LayerTransform){
+      .hflip = (int32_t(aidl_transform->transform) &
+                int32_t(Transform::FLIP_H)) != 0,
+      .vflip = (int32_t(aidl_transform->transform) &
+                int32_t(Transform::FLIP_V)) != 0,
+      .rotate90 = (int32_t(aidl_transform->transform) &
+                   int32_t(Transform::ROT_90)) != 0,
+  };
 }
 
 }  // namespace
@@ -410,113 +444,6 @@ ndk::ScopedAStatus ComposerClient::destroyVirtualDisplay(int64_t display_id) {
   return ToBinderStatus(err);
 }
 
-hwc3::Error ComposerClient::ValidateDisplayInternal(
-    HwcDisplay& display, std::vector<int64_t>* out_changed_layers,
-    std::vector<Composition>* out_composition_types,
-    int32_t* out_display_request_mask,
-    std::vector<int64_t>* out_requested_layers,
-    std::vector<int32_t>* out_request_masks,
-    ClientTargetProperty* /*out_client_target_property*/,
-    DimmingStage* /*out_dimming_stage*/) {
-  DEBUG_FUNC();
-
-  uint32_t num_types = 0;
-  uint32_t num_requests = 0;
-  const HWC2::Error hwc2_error = display.ValidateDisplay(&num_types,
-                                                         &num_requests);
-
-  /* Check if display has pending changes and no errors */
-  if (hwc2_error != HWC2::Error::None &&
-      hwc2_error != HWC2::Error::HasChanges) {
-    return Hwc2toHwc3Error(hwc2_error);
-  }
-
-  hwc3::Error error = Hwc2toHwc3Error(
-      display.GetChangedCompositionTypes(&num_types, nullptr, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-
-  std::vector<hwc2_layer_t> hwc_changed_layers(num_types);
-  std::vector<int32_t> hwc_composition_types(num_types);
-  error = Hwc2toHwc3Error(
-      display.GetChangedCompositionTypes(&num_types, hwc_changed_layers.data(),
-                                         hwc_composition_types.data()));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-
-  int32_t display_reqs = 0;
-  out_request_masks->resize(num_requests);
-  std::vector<hwc2_layer_t> hwc_requested_layers(num_requests);
-  error = Hwc2toHwc3Error(
-      display.GetDisplayRequests(&display_reqs, &num_requests,
-                                 hwc_requested_layers.data(),
-                                 out_request_masks->data()));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-
-  for (const auto& layer : hwc_changed_layers) {
-    out_changed_layers->emplace_back(Hwc2LayerToHwc3(layer));
-  }
-  for (const auto& type : hwc_composition_types) {
-    out_composition_types->emplace_back(Hwc2CompositionTypeToHwc3(type));
-  }
-  for (const auto& layer : hwc_requested_layers) {
-    out_requested_layers->emplace_back(Hwc2LayerToHwc3(layer));
-  }
-  *out_display_request_mask = display_reqs;
-
-  /* Client target property/dimming stage unsupported */
-  return hwc3::Error::kNone;
-}
-
-hwc3::Error ComposerClient::PresentDisplayInternal(
-    uint64_t display_id, ::android::base::unique_fd& out_display_fence,
-    std::unordered_map<int64_t, ::android::base::unique_fd>&
-        out_release_fences) {
-  DEBUG_FUNC();
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    return hwc3::Error::kBadDisplay;
-  }
-
-  if (composer_resources_->MustValidateDisplay(display_id)) {
-    return hwc3::Error::kNotValidated;
-  }
-
-  int32_t present_fence = -1;
-  auto error = Hwc2toHwc3Error(display->PresentDisplay(&present_fence));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-  out_display_fence.reset(present_fence);
-
-  uint32_t release_fence_count = 0;
-  error = Hwc2toHwc3Error(
-      display->GetReleaseFences(&release_fence_count, nullptr, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-
-  std::vector<hwc2_layer_t> hwc_layers(release_fence_count);
-  std::vector<int32_t> hwc_fences(release_fence_count);
-  error = Hwc2toHwc3Error(display->GetReleaseFences(&release_fence_count,
-                                                    hwc_layers.data(),
-                                                    hwc_fences.data()));
-  if (error != hwc3::Error::kNone) {
-    return error;
-  }
-
-  for (size_t i = 0; i < hwc_layers.size(); i++) {
-    auto layer = Hwc2LayerToHwc3(hwc_layers[i]);
-    out_release_fences[layer] = ::android::base::unique_fd{hwc_fences[i]};
-  }
-
-  return hwc3::Error::kNone;
-}
-
 ::android::HwcDisplay* ComposerClient::GetDisplay(uint64_t display_id) {
   return hwc_->GetDisplay(display_id);
 }
@@ -553,13 +480,11 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
   if (command.buffer) {
     HwcLayer::Buffer buffer;
     auto err = ImportLayerBuffer(display_id, command.layer, *command.buffer,
-                                 &buffer.buffer_handle);
+                                 &buffer);
     if (err != hwc3::Error::kNone) {
       cmd_result_writer_->AddError(err);
       return;
     }
-    buffer.acquire_fence = ::android::MakeSharedFd(
-        command.buffer->fence.dup().release());
     properties.buffer.emplace(buffer);
   }
 
@@ -593,7 +518,8 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
 
 void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
   const int64_t display_id = command.display;
-  if (hwc_->GetDisplay(display_id) == nullptr) {
+  HwcDisplay* display = hwc_->GetDisplay(display_id);
+  if (display == nullptr) {
     cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
     return;
   }
@@ -604,14 +530,22 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     return;
   }
 
+  hwc3::Error error = ValidateColorTransformMatrix(
+      command.colorTransformMatrix);
+  if (error != hwc3::Error::kNone) {
+    ALOGE("Invalid color transform matrix.");
+    cmd_result_writer_->AddError(error);
+    return;
+  }
+
   for (const auto& layer_cmd : command.layers) {
     DispatchLayerCommand(command.display, layer_cmd);
   }
 
-  if (command.colorTransformMatrix) {
-    ExecuteSetDisplayColorTransform(command.display,
-                                    *command.colorTransformMatrix);
+  if (cmd_result_writer_->HasError()) {
+    return;
   }
+
   if (command.clientTarget) {
     ExecuteSetDisplayClientTarget(command.display, *command.clientTarget);
   }
@@ -619,18 +553,65 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     ExecuteSetDisplayOutputBuffer(command.display,
                                   *command.virtualDisplayOutputBuffer);
   }
-  if (command.validateDisplay) {
-    ExecuteValidateDisplay(command.display, command.expectedPresentTime);
+
+  std::optional<std::array<float, kCtmSize>> ctm = AidlToColorTransformMatrix(
+      command.colorTransformMatrix);
+  if (ctm) {
+    display->SetColorTransformMatrix(ctm.value());
   }
+
+  if (command.validateDisplay || command.presentOrValidateDisplay) {
+    std::vector<HwcDisplay::ChangedLayer>
+        changed_layers = display->ValidateStagedComposition();
+    DisplayChanges changes{};
+    for (auto [layer_id, composition_type] : changed_layers) {
+      changes.AddLayerCompositionChange(command.display,
+                                        Hwc2LayerToHwc3(layer_id),
+                                        static_cast<Composition>(
+                                            composition_type));
+    }
+    cmd_result_writer_->AddChanges(changes);
+    composer_resources_->SetDisplayMustValidateState(display_id, false);
+
+    // TODO: DisplayRequests are not implemented.
+
+    /* TODO: Add check if it's possible to skip display validation for
+     * presentOrValidateDisplay */
+    if (command.presentOrValidateDisplay) {
+      cmd_result_writer_
+          ->AddPresentOrValidateResult(display_id,
+                                       PresentOrValidate::Result::Validated);
+    }
+  }
+
   if (command.acceptDisplayChanges) {
-    ExecuteAcceptDisplayChanges(command.display);
+    display->AcceptDisplayChanges();
   }
+
   if (command.presentDisplay) {
-    ExecutePresentDisplay(command.display);
-  }
-  if (command.presentOrValidateDisplay) {
-    ExecutePresentOrValidateDisplay(command.display,
-                                    command.expectedPresentTime);
+    if (composer_resources_->MustValidateDisplay(display_id)) {
+      cmd_result_writer_->AddError(hwc3::Error::kNotValidated);
+      return;
+    }
+    ::android::SharedFd present_fence;
+    std::vector<HwcDisplay::ReleaseFence> release_fences;
+    bool ret = display->PresentStagedComposition(present_fence, release_fences);
+
+    if (!ret) {
+      cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
+      return;
+    }
+
+    using ::android::base::unique_fd;
+    cmd_result_writer_->AddPresentFence(  //
+        display_id, unique_fd(::android::DupFd(present_fence)));
+
+    std::unordered_map<int64_t, unique_fd> hal_release_fences;
+    for (const auto& [layer_id, release_fence] : release_fences) {
+      hal_release_fences[Hwc2LayerToHwc3(layer_id)] =  //
+          unique_fd(::android::DupFd(release_fence));
+    }
+    cmd_result_writer_->AddReleaseFence(display_id, hal_release_fences);
   }
 }
 
@@ -1305,41 +1286,19 @@ std::string ComposerClient::Dump() {
   return binder;
 }
 
-hwc3::Error ComposerClient::ImportLayerBuffer(
-    int64_t display_id, int64_t layer_id, const Buffer& buffer,
-    buffer_handle_t* out_imported_buffer) {
-  *out_imported_buffer = nullptr;
-
-  auto releaser = composer_resources_->CreateResourceReleaser(true);
+hwc3::Error ComposerClient::ImportLayerBuffer(int64_t display_id,
+                                              int64_t layer_id,
+                                              const Buffer& buffer,
+                                              HwcLayer::Buffer* out_buffer) {
+  auto releaser = ComposerResources::CreateResourceReleaser(true);
   auto err = composer_resources_->GetLayerBuffer(display_id, layer_id, buffer,
-                                                 out_imported_buffer,
+                                                 &out_buffer->buffer_handle,
                                                  releaser.get());
+  out_buffer->acquire_fence = ::android::MakeSharedFd(
+      buffer.fence.dup().release());
   return err;
 }
 
-void ComposerClient::ExecuteSetDisplayColorTransform(
-    uint64_t display_id, const std::vector<float>& matrix) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  auto almost_equal = [](auto a, auto b) {
-    const float epsilon = 0.001F;
-    return std::abs(a - b) < epsilon;
-  };
-  const bool is_identity = std::equal(matrix.begin(), matrix.end(),
-                                      kIdentityMatrix.begin(), almost_equal);
-
-  const int32_t hint = is_identity ? HAL_COLOR_TRANSFORM_IDENTITY
-                                   : HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX;
-
-  auto error = Hwc2toHwc3Error(display->SetColorTransform(matrix.data(), hint));
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-  }
-}
 void ComposerClient::ExecuteSetDisplayClientTarget(
     uint64_t display_id, const ClientTarget& command) {
   auto* display = GetDisplay(display_id);
@@ -1358,7 +1317,7 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
   damage_regions.rects = regions.data();
 
   buffer_handle_t imported_buffer = nullptr;
-  auto buf_releaser = composer_resources_->CreateResourceReleaser(true);
+  auto buf_releaser = ComposerResources::CreateResourceReleaser(true);
 
   auto error = composer_resources_->GetDisplayClientTarget(display_id,
                                                            command.buffer,
@@ -1390,7 +1349,7 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(uint64_t display_id,
   }
 
   buffer_handle_t imported_buffer = nullptr;
-  auto buf_releaser = composer_resources_->CreateResourceReleaser(true);
+  auto buf_releaser = ComposerResources::CreateResourceReleaser(true);
 
   auto error = composer_resources_->GetDisplayOutputBuffer(display_id, buffer,
                                                            &imported_buffer,
@@ -1407,131 +1366,6 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(uint64_t display_id,
     cmd_result_writer_->AddError(error);
     return;
   }
-}
-void ComposerClient::ExecuteValidateDisplay(
-    int64_t display_id,
-    std::optional<ClockMonotonicTimestamp> /*expected_present_time*/
-) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  /* TODO: Handle expectedPresentTime */
-  /* This can be implemented in multiple ways. For example, the expected present
-   * time property can be implemented by the DRM driver directly as a CRTC
-   * property. See:
-   * https://cs.android.com/android/platform/superproject/main/+/b8b3b1646e64d0235f77b9e717a3e4082e26f2a8:hardware/google/graphics/common/libhwc2.1/libdrmresource/drm/drmcrtc.cpp;drc=468f6172546ab98983de18210222f231f16b21e1;l=88
-   * Unfortunately there doesn't seem to be a standardised way of delaying
-   * presentation with a timestamp in the DRM API. What we can do alternatively
-   * is to spawn a separate presentation thread that could handle the VBlank
-   * events by using DRM_MODE_PAGE_FLIP_EVENT and schedule them appropriately.
-   */
-
-  std::vector<int64_t> changed_layers;
-  std::vector<Composition> composition_types;
-  int32_t display_request_mask = 0;
-  std::vector<int64_t> requested_layers;
-  std::vector<int32_t> request_masks;
-
-  const hwc3::Error error = ValidateDisplayInternal(*display, &changed_layers,
-                                                    &composition_types,
-                                                    &display_request_mask,
-                                                    &requested_layers,
-                                                    &request_masks, nullptr,
-                                                    nullptr);
-
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-  }
-
-  // If a CommandError has been been set for the current DisplayCommand, then
-  // no other results should be returned besides the error.
-  if (cmd_result_writer_->HasError()) {
-    return;
-  }
-
-  DisplayChanges changes{};
-  for (size_t i = 0; i < composition_types.size(); i++) {
-    changes.AddLayerCompositionChange(display_id, changed_layers[i],
-                                      composition_types[i]);
-  }
-
-  std::vector<DisplayRequest::LayerRequest> layer_requests;
-  for (size_t i = 0; i < requested_layers.size(); i++) {
-    layer_requests.push_back({requested_layers[i], request_masks[i]});
-  }
-
-  const DisplayRequest request_changes{display_id, display_request_mask,
-                                       layer_requests};
-  changes.display_request_changes = request_changes;
-
-  cmd_result_writer_->AddChanges(changes);
-  composer_resources_->SetDisplayMustValidateState(display_id, false);
-}
-
-void ComposerClient::ExecuteAcceptDisplayChanges(int64_t display_id) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  auto error = Hwc2toHwc3Error(display->AcceptDisplayChanges());
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-    return;
-  }
-}
-
-void ComposerClient::ExecutePresentDisplay(int64_t display_id) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  ::android::base::unique_fd display_fence;
-  std::unordered_map<int64_t, ::android::base::unique_fd> release_fences;
-  auto error = PresentDisplayInternal(display_id, display_fence,
-                                      release_fences);
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-  }
-  if (cmd_result_writer_->HasError()) {
-    return;
-  }
-
-  cmd_result_writer_->AddPresentFence(display_id, std::move(display_fence));
-  cmd_result_writer_->AddReleaseFence(display_id, release_fences);
-}
-
-void ComposerClient::ExecutePresentOrValidateDisplay(
-    int64_t display_id,
-    std::optional<ClockMonotonicTimestamp> expected_present_time) {
-  auto* display = GetDisplay(display_id);
-  if (display == nullptr) {
-    cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
-    return;
-  }
-
-  /* TODO: Handle expectedPresentTime */
-  /* This can be implemented in multiple ways. For example, the expected present
-   * time property can be implemented by the DRM driver directly as a CRTC
-   * property. See:
-   * https://cs.android.com/android/platform/superproject/main/+/b8b3b1646e64d0235f77b9e717a3e4082e26f2a8:hardware/google/graphics/common/libhwc2.1/libdrmresource/drm/drmcrtc.cpp;drc=468f6172546ab98983de18210222f231f16b21e1;l=88
-   * Unfortunately there doesn't seem to be a standardised way of delaying
-   * presentation with a timestamp in the DRM API. What we can do alternatively
-   * is to spawn a separate presentation thread that could handle the VBlank
-   * events by using DRM_MODE_PAGE_FLIP_EVENT and schedule them appropriately.
-   */
-
-  /* TODO: Add check if it's possible to skip display validation */
-  ExecuteValidateDisplay(display_id, expected_present_time);
-  cmd_result_writer_
-      ->AddPresentOrValidateResult(display_id,
-                                   PresentOrValidate::Result::Validated);
 }
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

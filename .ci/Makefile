@@ -53,14 +53,6 @@ TIDY_CHECKS_FINE := *                                   \
     -readability-redundant-member-init                  \
     -cppcoreguidelines-avoid-const-or-ref-data-members  \
     -cert-err33-c                                       \
-    -readability-math-missing-parentheses               \
-    -readability-avoid-unconditional-preprocessor-if    \
-    -modernize-type-traits                              \
-    -clang-analyzer-optin.core.EnumCastOutOfRange       \
-    -performance-inefficient-vector-operation           \
-    -readability-static-accessed-through-instance       \
-    -misc-use-internal-linkage                          \
-    -performance-avoid-endl                             \
 
 TIDY_CHECKS_NORMAL :=                                   \
     $(TIDY_CHECKS_FINE)                                 \

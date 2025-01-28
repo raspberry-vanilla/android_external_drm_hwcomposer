@@ -20,6 +20,7 @@
 
 #include "aidl/android/hardware/graphics/composer3/BnComposerClient.h"
 #include "aidl/android/hardware/graphics/composer3/LayerCommand.h"
+#include "hwc2_device/HwcLayer.h"
 #include "hwc3/CommandResultWriter.h"
 #include "hwc3/ComposerResources.h"
 #include "hwc3/Utils.h"
@@ -29,10 +30,7 @@ using AidlPixelFormat = aidl::android::hardware::graphics::common::PixelFormat;
 using AidlNativeHandle = aidl::android::hardware::common::NativeHandle;
 
 namespace android {
-
 class HwcDisplay;
-class HwcLayer;
-
 }  // namespace android
 
 namespace aidl::android::hardware::graphics::composer3::impl {
@@ -163,40 +161,16 @@ class ComposerClient : public BnComposerClient {
  private:
   hwc3::Error ImportLayerBuffer(int64_t display_id, int64_t layer_id,
                                 const Buffer& buffer,
-                                buffer_handle_t* out_imported_buffer);
+                                ::android::HwcLayer::Buffer* out_buffer);
 
   // Layer commands
   void DispatchLayerCommand(int64_t display_id, const LayerCommand& command);
 
   // Display commands
   void ExecuteDisplayCommand(const DisplayCommand& command);
-  void ExecuteSetDisplayColorTransform(uint64_t display_id,
-                                       const std::vector<float>& matrix);
   void ExecuteSetDisplayClientTarget(uint64_t display_id,
                                      const ClientTarget& command);
   void ExecuteSetDisplayOutputBuffer(uint64_t display_id, const Buffer& buffer);
-  void ExecuteValidateDisplay(
-      int64_t display_id,
-      std::optional<ClockMonotonicTimestamp> expected_present_time);
-  void ExecuteAcceptDisplayChanges(int64_t display_id);
-  void ExecutePresentDisplay(int64_t display_id);
-  void ExecutePresentOrValidateDisplay(
-      int64_t display_id,
-      std::optional<ClockMonotonicTimestamp> expected_present_time);
-
-  static hwc3::Error ValidateDisplayInternal(
-      ::android::HwcDisplay& display, std::vector<int64_t>* out_changed_layers,
-      std::vector<Composition>* out_composition_types,
-      int32_t* out_display_request_mask,
-      std::vector<int64_t>* out_requested_layers,
-      std::vector<int32_t>* out_request_masks,
-      ClientTargetProperty* out_client_target_property,
-      DimmingStage* out_dimming_stage);
-
-  hwc3::Error PresentDisplayInternal(
-      uint64_t display_id, ::android::base::unique_fd& out_display_fence,
-      std::unordered_map<int64_t, ::android::base::unique_fd>&
-          out_release_fences);
 
   ::android::HwcDisplay* GetDisplay(uint64_t display_id);
 

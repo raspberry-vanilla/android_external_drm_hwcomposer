@@ -52,6 +52,9 @@ class HwcDisplay {
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay();
 
+  void SetColorTransformMatrix(
+      const std::array<float, 16> &color_transform_matrix);
+
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
@@ -85,6 +88,23 @@ class HwcDisplay {
 
   // Get the HwcDisplayConfig, or nullptor if none.
   auto GetConfig(hwc2_config_t config_id) const -> const HwcDisplayConfig *;
+
+  // To be called after SetDisplayProperties. Returns an empty vector if the
+  // requested layers have been validated, otherwise the vector describes
+  // the requested composition type changes.
+  using ChangedLayer = std::pair<hwc2_layer_t, HWC2::Composition>;
+  auto ValidateStagedComposition() -> std::vector<ChangedLayer>;
+
+  // Mark previously validated properties as ready to present.
+  auto AcceptValidatedComposition() -> void;
+
+  // Present previously staged properties, and return fences to indicate when
+  // the new content has been presented, and when the previous buffers have
+  // been released.
+  using ReleaseFence = std::pair<hwc2_layer_t, SharedFd>;
+  auto PresentStagedComposition(SharedFd &out_present_fence,
+                                std::vector<ReleaseFence> &out_release_fences)
+      -> bool;
 
   // HWC2 Hooks - these should not be used outside of the hwc2 device.
   HWC2::Error AcceptDisplayChanges();
@@ -260,8 +280,6 @@ class HwcDisplay {
   uint16_t virtual_disp_width_{};
   uint16_t virtual_disp_height_{};
   int32_t color_mode_{};
-  static constexpr int kCtmRows = 3;
-  static constexpr int kCtmCols = 3;
   std::shared_ptr<drm_color_ctm> color_matrix_;
   android_color_transform_t color_transform_hint_{};
   int32_t content_type_{};
