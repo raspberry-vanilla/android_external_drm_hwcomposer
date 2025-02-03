@@ -24,6 +24,7 @@
 #include <xf86drmMode.h>
 
 #include <hardware/gralloc.h>
+#include <ui/ColorSpace.h>
 #include <ui/GraphicBufferAllocator.h>
 #include <ui/GraphicBufferMapper.h>
 #include <ui/PixelFormat.h>
@@ -39,6 +40,7 @@
 #include "utils/properties.h"
 
 using ::android::DrmDisplayPipeline;
+using ColorGamut = ::android::ColorSpace;
 
 namespace android {
 
@@ -611,11 +613,23 @@ HWC2::Error HwcDisplay::GetClientTargetSupport(uint32_t width, uint32_t height,
 }
 
 HWC2::Error HwcDisplay::GetColorModes(uint32_t *num_modes, int32_t *modes) {
-  if (!modes)
-    *num_modes = 1;
+  if (!modes) {
+    std::vector<Colormode> temp_modes;
+    GetEdid()->GetColorModes(temp_modes);
+    *num_modes = temp_modes.size();
+    return HWC2::Error::None;
+  }
 
-  if (modes)
-    *modes = HAL_COLOR_MODE_NATIVE;
+  std::vector<Colormode> temp_modes;
+  std::vector<int32_t> out_modes(modes, modes + *num_modes);
+  GetEdid()->GetColorModes(temp_modes);
+  if (temp_modes.empty()) {
+    out_modes.emplace_back(HAL_COLOR_MODE_NATIVE);
+    return HWC2::Error::None;
+  }
+
+  for (auto &c : temp_modes)
+    out_modes.emplace_back(static_cast<int32_t>(c));
 
   return HWC2::Error::None;
 }
@@ -731,12 +745,35 @@ HWC2::Error HwcDisplay::GetDozeSupport(int32_t *support) {
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::GetHdrCapabilities(uint32_t *num_types,
-                                           int32_t * /*types*/,
-                                           float * /*max_luminance*/,
-                                           float * /*max_average_luminance*/,
-                                           float * /*min_luminance*/) {
-  *num_types = 0;
+HWC2::Error HwcDisplay::GetHdrCapabilities(uint32_t *num_types, int32_t *types,
+                                           float *max_luminance,
+                                           float *max_average_luminance,
+                                           float *min_luminance) {
+  if (!types) {
+    std::vector<ui::Hdr> temp_types;
+    float lums[3] = {0.F};
+    GetEdid()->GetHdrCapabilities(temp_types, &lums[0], &lums[1], &lums[2]);
+    *num_types = temp_types.size();
+    return HWC2::Error::None;
+  }
+
+  std::vector<ui::Hdr> temp_types;
+  std::vector<int32_t> out_types(types, types + *num_types);
+  GetEdid()->GetHdrCapabilities(temp_types, max_luminance,
+                                max_average_luminance, min_luminance);
+  for (auto &t : temp_types) {
+    switch (t) {
+      case ui::Hdr::HDR10:
+        out_types.emplace_back(HAL_HDR_HDR10);
+        break;
+      case ui::Hdr::HLG:
+        out_types.emplace_back(HAL_HDR_HLG);
+        break;
+      default:
+        // Ignore any other HDR types
+        break;
+    }
+  }
   return HWC2::Error::None;
 }
 
@@ -787,6 +824,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
+  args.hdr_metadata = hdr_metadata_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -816,6 +854,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
+  a_args.hdr_metadata = hdr_metadata_;
 
   uint32_t prev_vperiod_ns = 0;
   GetDisplayVsyncPeriod(&prev_vperiod_ns);
@@ -1040,29 +1079,47 @@ HWC2::Error HwcDisplay::SetColorMode(int32_t mode) {
   /* Maps to the Colorspace DRM connector property:
    * https://elixir.bootlin.com/linux/v6.11/source/include/drm/drm_connector.h#L538
    */
-  if (mode < HAL_COLOR_MODE_NATIVE || mode > HAL_COLOR_MODE_DISPLAY_P3)
+  if (mode < HAL_COLOR_MODE_NATIVE || mode > HAL_COLOR_MODE_DISPLAY_BT2020)
     return HWC2::Error::BadParameter;
 
   switch (mode) {
     case HAL_COLOR_MODE_NATIVE:
+      hdr_metadata_.reset();
       colorspace_ = Colorspace::kDefault;
       break;
     case HAL_COLOR_MODE_STANDARD_BT601_625:
     case HAL_COLOR_MODE_STANDARD_BT601_625_UNADJUSTED:
     case HAL_COLOR_MODE_STANDARD_BT601_525:
     case HAL_COLOR_MODE_STANDARD_BT601_525_UNADJUSTED:
+      hdr_metadata_.reset();
       // The DP spec does not say whether this is the 525 or the 625 line version.
       colorspace_ = Colorspace::kBt601Ycc;
       break;
     case HAL_COLOR_MODE_STANDARD_BT709:
     case HAL_COLOR_MODE_SRGB:
+      hdr_metadata_.reset();
       colorspace_ = Colorspace::kBt709Ycc;
       break;
     case HAL_COLOR_MODE_DCI_P3:
     case HAL_COLOR_MODE_DISPLAY_P3:
+      hdr_metadata_.reset();
       colorspace_ = Colorspace::kDciP3RgbD65;
       break;
+    case HAL_COLOR_MODE_DISPLAY_BT2020: {
+      std::vector<ui::Hdr> hdr_types;
+      GetEdid()->GetSupportedHdrTypes(hdr_types);
+      if (!hdr_types.empty()) {
+        auto ret = SetHdrOutputMetadata(hdr_types.front());
+        if (ret != HWC2::Error::None)
+          return ret;
+      }
+      colorspace_ = Colorspace::kBt2020Rgb;
+      break;
+    }
     case HAL_COLOR_MODE_ADOBE_RGB:
+    case HAL_COLOR_MODE_BT2020:
+    case HAL_COLOR_MODE_BT2100_PQ:
+    case HAL_COLOR_MODE_BT2100_HLG:
     default:
       return HWC2::Error::Unsupported;
   }
@@ -1244,6 +1301,61 @@ HWC2::Error HwcDisplay::GetDisplayVsyncPeriod(
   return GetDisplayAttribute(configs_.active_config_id,
                              HWC2_ATTRIBUTE_VSYNC_PERIOD,
                              (int32_t *)(outVsyncPeriod));
+}
+
+// Display primary values are coded as unsigned 16-bit values in units of
+// 0.00002, where 0x0000 represents zero and 0xC350 represents 1.0000.
+static uint64_t ToU16ColorValue(float in) {
+  constexpr float kPrimariesFixedPoint = 50000.F;
+  return static_cast<uint64_t>(kPrimariesFixedPoint * in);
+}
+
+HWC2::Error HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
+  hdr_metadata_ = std::make_shared<hdr_output_metadata>();
+  hdr_metadata_->metadata_type = 0;
+  auto *m = &hdr_metadata_->hdmi_metadata_type1;
+  m->metadata_type = 0;
+
+  switch (type) {
+    case ui::Hdr::HDR10:
+      m->eotf = 2;  // PQ
+      break;
+    case ui::Hdr::HLG:
+      m->eotf = 3;  // HLG
+      break;
+    default:
+      return HWC2::Error::Unsupported;
+  }
+
+  // Most luminance values are coded as an unsigned 16-bit value in units of 1
+  // cd/m2, where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2.
+  std::vector<ui::Hdr> types;
+  float hdr_luminance[3]{0.F, 0.F, 0.F};
+  GetEdid()->GetHdrCapabilities(types, &hdr_luminance[0], &hdr_luminance[1],
+                                &hdr_luminance[2]);
+  m->max_display_mastering_luminance = m->max_cll = static_cast<uint64_t>(
+      hdr_luminance[0]);
+  m->max_fall = static_cast<uint64_t>(hdr_luminance[1]);
+  // The min luminance value is coded as an unsigned 16-bit value in units of
+  // 0.0001 cd/m2, where 0x0001 represents 0.0001 cd/m2 and 0xFFFF
+  // represents 6.5535 cd/m2.
+  m->min_display_mastering_luminance = static_cast<uint64_t>(hdr_luminance[2] *
+                                                             10000.F);
+
+  auto gamut = ColorGamut::BT2020();
+  auto primaries = gamut.getPrimaries();
+  m->display_primaries[0].x = ToU16ColorValue(primaries[0].x);
+  m->display_primaries[0].y = ToU16ColorValue(primaries[0].y);
+  m->display_primaries[1].x = ToU16ColorValue(primaries[1].x);
+  m->display_primaries[1].y = ToU16ColorValue(primaries[1].y);
+  m->display_primaries[2].x = ToU16ColorValue(primaries[2].x);
+  m->display_primaries[2].y = ToU16ColorValue(primaries[2].y);
+
+  auto whitePoint = gamut.getWhitePoint();
+  m->white_point.x = ToU16ColorValue(whitePoint.x);
+  m->white_point.y = ToU16ColorValue(whitePoint.y);
+
+  return HWC2::Error::None;
 }
 
 #if __ANDROID_API__ > 29

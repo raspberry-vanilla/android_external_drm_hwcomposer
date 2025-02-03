@@ -91,6 +91,12 @@ auto DrmConnector::Init()-> bool {
   }
 
   UpdateEdidProperty();
+#if HAS_LIBDISPLAY_INFO
+  auto edid = LibdisplayEdidWrapper::Create(GetEdidBlob());
+  edid_wrapper_ = edid ? std::move(edid) : std::make_unique<EdidWrapper>();
+#else
+  edid_wrapper_ = std::make_unique<EdidWrapper>();
+#endif
 
   if (IsWriteback() &&
       (!GetConnectorProperty("WRITEBACK_PIXEL_FORMATS",
@@ -101,8 +107,7 @@ auto DrmConnector::Init()-> bool {
     return false;
   }
 
-  if (GetConnectorProperty("Colorspace", &colorspace_property_,
-                           /*is_optional=*/true)) {
+  if (GetOptionalConnectorProperty("Colorspace", &colorspace_property_)) {
     colorspace_property_.AddEnumToMap("Default", Colorspace::kDefault,
                                       colorspace_enum_map_);
     colorspace_property_.AddEnumToMap("SMPTE_170M_YCC", Colorspace::kSmpte170MYcc,
@@ -131,17 +136,19 @@ auto DrmConnector::Init()-> bool {
                                       colorspace_enum_map_);
     colorspace_property_.AddEnumToMap("RGB_WIDE_FIXED", Colorspace::kRgbWideFixed,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("RGB_WIDE_FLOAT", Colorspace::kRgbWideFloat,
+    colorspace_property_.AddEnumToMap("RGB_WIDE_FLOAT",
+                                      Colorspace::kRgbWideFloat,
                                       colorspace_enum_map_);
     colorspace_property_.AddEnumToMap("BT601_YCC", Colorspace::kBt601Ycc,
                                       colorspace_enum_map_);
   }
 
-  GetConnectorProperty("content type", &content_type_property_,
-                       /*is_optional=*/true);
+  GetOptionalConnectorProperty("content type", &content_type_property_);
 
-  if (GetConnectorProperty("panel orientation", &panel_orientation_,
-                           /*is_optional=*/true)) {
+  GetOptionalConnectorProperty("HDR_OUTPUT_METADATA",
+                               &hdr_output_metadata_property_);
+
+  if (GetOptionalConnectorProperty("panel orientation", &panel_orientation_)) {
     panel_orientation_
         .AddEnumToMapReverse("Normal",
                              PanelOrientation::kModePanelOrientationNormal,
@@ -164,9 +171,7 @@ auto DrmConnector::Init()-> bool {
 }
 
 int DrmConnector::UpdateEdidProperty() {
-  return GetConnectorProperty("EDID", &edid_property_, /*is_optional=*/true)
-             ? 0
-             : -EINVAL;
+  return GetOptionalConnectorProperty("EDID", &edid_property_) ? 0 : -EINVAL;
 }
 
 auto DrmConnector::GetEdidBlob() -> DrmModePropertyBlobUnique {

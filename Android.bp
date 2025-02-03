@@ -39,6 +39,7 @@ cc_defaults {
 
     static_libs: [
         "libaidlcommonsupport",
+        "libdisplay_info",
     ],
 
     header_libs: [
@@ -51,6 +52,7 @@ cc_defaults {
     ],
 
     cppflags: [
+        "-DHAS_LIBDISPLAY_INFO",
         "-DHWC2_INCLUDE_STRINGIFICATION",
         "-DHWC2_USE_CPP11",
     ],
@@ -101,6 +103,7 @@ filegroup {
         "hwc2_device/HwcLayer.cpp",
         "hwc2_device/hwc2_device.cpp",
 
+        "utils/LibdisplayEdidWrapper.cpp",
         "utils/fd.cpp",
         "utils/properties.cpp",
     ],

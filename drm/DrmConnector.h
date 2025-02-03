@@ -27,10 +27,13 @@
 #include "DrmProperty.h"
 #include "DrmUnique.h"
 #include "compositor/DisplayInfo.h"
+#include "utils/EdidWrapper.h"
 
 namespace android {
 
 class DrmDevice;
+
+using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 
 class DrmConnector : public PipelineBindable<DrmConnector> {
  public:
@@ -42,6 +45,9 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   int UpdateEdidProperty();
   auto GetEdidBlob() -> DrmModePropertyBlobUnique;
+  auto GetParsedEdid() -> EdidWrapperUnique & {
+    return edid_wrapper_;
+  }
 
   auto GetDev() const -> DrmDevice & {
     return *drm_;
@@ -109,6 +115,10 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return content_type_property_;
   }
 
+  auto &GetHdrOutputMetadataProperty() const {
+    return hdr_output_metadata_property_;
+  }
+
   auto &GetWritebackFbIdProperty() const {
     return writeback_fb_id_;
   }
@@ -147,6 +157,12 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   auto Init() -> bool;
   auto GetConnectorProperty(const char *prop_name, DrmProperty *property,
                             bool is_optional = false) -> bool;
+  auto GetOptionalConnectorProperty(const char *prop_name,
+                                    DrmProperty *property) -> bool {
+    return GetConnectorProperty(prop_name, property, /*is_optional=*/true);
+  }
+
+  EdidWrapperUnique edid_wrapper_;
 
   const uint32_t index_in_res_array_;
 
@@ -157,6 +173,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmProperty edid_property_;
   DrmProperty colorspace_property_;
   DrmProperty content_type_property_;
+  DrmProperty hdr_output_metadata_property_;
 
   DrmProperty link_status_property_;
   DrmProperty writeback_pixel_formats_;
