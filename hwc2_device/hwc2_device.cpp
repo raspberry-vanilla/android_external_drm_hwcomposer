@@ -19,10 +19,16 @@
 
 #define LOG_TAG "drmhwc"
 
+#include <cassert>
 #include <cinttypes>
+#include <memory>
+#include <optional>
+
+#include <cutils/native_handle.h>
 
 #include "DrmHwcTwo.h"
 #include "backend/Backend.h"
+#include "hwc2_device/HwcLayer.h"
 #include "utils/log.h"
 
 namespace android {
@@ -41,6 +47,110 @@ static std::string GetFuncName(const char *pretty_function) {
   p1 += strlen(start);
   auto p2 = str.find(',', p1);
   return str.substr(p1, p2 - p1);
+}
+
+class Hwc2DeviceLayer : public FrontendLayerBase {
+ public:
+  auto HandleNextBuffer(buffer_handle_t buffer_handle, int32_t fence_fd)
+      -> std::pair<std::optional<HwcLayer::LayerProperties>,
+                   bool /* not a swapchain */> {
+    auto slot = GetSlotNumber(buffer_handle);
+
+    if (invalid_) {
+      return std::make_pair(std::nullopt, true);
+    }
+
+    bool buffer_provided = false;
+    bool not_a_swapchain = true;
+    int32_t slot_id = 0;
+
+    if (slot.has_value()) {
+      buffer_provided = swchain_slots_[slot.value()];
+      slot_id = slot.value();
+      not_a_swapchain = true;
+    }
+
+    HwcLayer::LayerProperties lp;
+    if (!buffer_provided) {
+      auto bo_info = BufferInfoGetter::GetInstance()->GetBoInfo(buffer_handle);
+      if (!bo_info) {
+        invalid_ = true;
+        return std::make_pair(std::nullopt, true);
+      }
+
+      lp.slot_buffer = {
+          .slot_id = slot_id,
+          .bi = bo_info,
+      };
+    }
+    lp.active_slot = {
+        .slot_id = slot_id,
+        .fence = MakeSharedFd(fence_fd),
+    };
+
+    return std::make_pair(lp, not_a_swapchain);
+  }
+
+  void SwChainClearCache() {
+    swchain_lookup_table_.clear();
+    swchain_slots_.clear();
+    swchain_reassembled_ = false;
+  }
+
+ private:
+  auto GetSlotNumber(buffer_handle_t buffer_handle) -> std::optional<int32_t> {
+    auto unique_id = BufferInfoGetter::GetInstance()->GetUniqueId(
+        buffer_handle);
+    if (!unique_id) {
+      ALOGE("Failed to get unique id for buffer handle %p", buffer_handle);
+      return std::nullopt;
+    }
+
+    if (swchain_lookup_table_.count(*unique_id) == 0) {
+      SwChainReassemble(*unique_id);
+      return std::nullopt;
+    }
+
+    if (!swchain_reassembled_) {
+      return std::nullopt;
+    }
+
+    return swchain_lookup_table_[*unique_id];
+  }
+
+  void SwChainReassemble(BufferUniqueId unique_id) {
+    if (swchain_lookup_table_.count(unique_id) != 0) {
+      if (swchain_lookup_table_[unique_id] ==
+          int(swchain_lookup_table_.size()) - 1) {
+        /* Skip same buffer */
+        return;
+      }
+      if (swchain_lookup_table_[unique_id] == 0) {
+        swchain_reassembled_ = true;
+        return;
+      }
+      /* Tracking error */
+      SwChainClearCache();
+      return;
+    }
+
+    swchain_lookup_table_[unique_id] = int(swchain_lookup_table_.size());
+  }
+
+  bool invalid_{}; /* Layer is invalid and should be skipped */
+  std::map<BufferUniqueId, int /*slot*/> swchain_lookup_table_;
+  std::map<int /*slot*/, bool /*buffer_provided*/> swchain_slots_;
+  bool swchain_reassembled_{};
+};
+
+static auto GetHwc2DeviceLayer(HwcLayer &layer)
+    -> std::shared_ptr<Hwc2DeviceLayer> {
+  auto frontend_private_data = layer.GetFrontendPrivateData();
+  if (!frontend_private_data) {
+    frontend_private_data = std::make_shared<Hwc2DeviceLayer>();
+    layer.SetFrontendPrivateData(frontend_private_data);
+  }
+  return std::static_pointer_cast<Hwc2DeviceLayer>(frontend_private_data);
 }
 
 struct Drmhwc2Device : hwc2_device {
@@ -140,6 +250,81 @@ static BufferSampleRange Hwc2ToSampleRange(int32_t dataspace) {
   }
 }
 
+/* Display functions */
+
+static int32_t SetClientTarget(hwc2_device_t *device, hwc2_display_t display,
+                               buffer_handle_t target, int32_t acquire_fence,
+                               int32_t dataspace, hwc_region_t /*damage*/) {
+  ALOGV("SetClientTarget");
+  LOCK_COMPOSER(device);
+  GET_DISPLAY(display);
+
+  auto &client_layer = idisplay->GetClientLayer();
+  auto h2l = GetHwc2DeviceLayer(client_layer);
+  if (!h2l) {
+    client_layer.SetFrontendPrivateData(std::make_shared<Hwc2DeviceLayer>());
+  }
+
+  if (target == nullptr) {
+    client_layer.ClearSlots();
+    h2l->SwChainClearCache();
+
+    return 0;
+  }
+
+  auto [lp, not_a_swapchain] = h2l->HandleNextBuffer(target, acquire_fence);
+  if (!lp) {
+    ALOGE("Failed to process client target");
+    return static_cast<int32_t>(HWC2::Error::BadLayer);
+  }
+
+  if (not_a_swapchain) {
+    client_layer.ClearSlots();
+  }
+
+  lp->color_space = Hwc2ToColorSpace(dataspace);
+  lp->sample_range = Hwc2ToSampleRange(dataspace);
+
+  idisplay->GetClientLayer().SetLayerProperties(lp.value());
+
+  return 0;
+}
+
+static int32_t SetOutputBuffer(hwc2_device_t *device, hwc2_display_t display,
+                               buffer_handle_t buffer, int32_t release_fence) {
+  ALOGV("SetOutputBuffer");
+  LOCK_COMPOSER(device);
+  GET_DISPLAY(display);
+
+  auto &writeback_layer = idisplay->GetWritebackLayer();
+  if (!writeback_layer) {
+    ALOGE("Writeback layer is not available");
+    return static_cast<int32_t>(HWC2::Error::BadLayer);
+  }
+
+  auto h2l = GetHwc2DeviceLayer(*writeback_layer);
+  if (!h2l) {
+    writeback_layer->SetFrontendPrivateData(
+        std::make_shared<Hwc2DeviceLayer>());
+  }
+
+  auto [lp, not_a_swapchain] = h2l->HandleNextBuffer(buffer, release_fence);
+  if (!lp) {
+    ALOGE("Failed to process output buffer");
+    return static_cast<int32_t>(HWC2::Error::BadLayer);
+  }
+
+  if (not_a_swapchain) {
+    writeback_layer->ClearSlots();
+  }
+
+  writeback_layer->SetLayerProperties(lp.value());
+
+  return 0;
+}
+
+/* Layer functions */
+
 static int32_t SetLayerBlendMode(hwc2_device_t *device, hwc2_display_t display,
                                  hwc2_layer_t layer,
                                  int32_t /*hwc2_blend_mode_t*/ mode) {
@@ -181,10 +366,19 @@ static int32_t SetLayerBuffer(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
   GET_LAYER(layer);
 
-  HwcLayer::LayerProperties layer_properties;
-  layer_properties.buffer = {.buffer_handle = buffer,
-                             .acquire_fence = MakeSharedFd(acquire_fence)};
-  ilayer->SetLayerProperties(layer_properties);
+  auto h2l = GetHwc2DeviceLayer(*ilayer);
+
+  auto [lp, not_a_swapchain] = h2l->HandleNextBuffer(buffer, acquire_fence);
+  if (!lp) {
+    ALOGV("Failed to process layer buffer");
+    return static_cast<int32_t>(HWC2::Error::BadLayer);
+  }
+
+  if (not_a_swapchain) {
+    ilayer->ClearSlots();
+  }
+
+  ilayer->SetLayerProperties(lp.value());
 
   return 0;
 }
@@ -244,7 +438,11 @@ static int32_t SetLayerDisplayFrame(hwc2_device_t *device,
   GET_LAYER(layer);
 
   HwcLayer::LayerProperties layer_properties;
-  layer_properties.display_frame = frame;
+  layer_properties.display_frame = {
+      .i_rect = DstRectInfo::IRect{.left = frame.left,
+                                   .top = frame.top,
+                                   .right = frame.right,
+                                   .bottom = frame.bottom}};
   ilayer->SetLayerProperties(layer_properties);
 
   return 0;
@@ -280,7 +478,11 @@ static int32_t SetLayerSourceCrop(hwc2_device_t *device, hwc2_display_t display,
   GET_LAYER(layer);
 
   HwcLayer::LayerProperties layer_properties;
-  layer_properties.source_crop = crop;
+  layer_properties.source_crop = {
+      .f_rect = SrcRectInfo::FRect{.left = crop.left,
+                                   .top = crop.top,
+                                   .right = crop.right,
+                                   .bottom = crop.bottom}};
   ilayer->SetLayerProperties(layer_properties);
 
   return 0;
@@ -442,10 +644,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
           DisplayHook<decltype(&HwcDisplay::SetActiveConfig),
                       &HwcDisplay::SetActiveConfig, hwc2_config_t>);
     case HWC2::FunctionDescriptor::SetClientTarget:
-      return ToHook<HWC2_PFN_SET_CLIENT_TARGET>(
-          DisplayHook<decltype(&HwcDisplay::SetClientTarget),
-                      &HwcDisplay::SetClientTarget, buffer_handle_t, int32_t,
-                      int32_t, hwc_region_t>);
+      return (hwc2_function_pointer_t)SetClientTarget;
     case HWC2::FunctionDescriptor::SetColorMode:
       return ToHook<HWC2_PFN_SET_COLOR_MODE>(
           DisplayHook<decltype(&HwcDisplay::SetColorMode),
@@ -455,9 +654,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
           DisplayHook<decltype(&HwcDisplay::SetColorTransform),
                       &HwcDisplay::SetColorTransform, const float *, int32_t>);
     case HWC2::FunctionDescriptor::SetOutputBuffer:
-      return ToHook<HWC2_PFN_SET_OUTPUT_BUFFER>(
-          DisplayHook<decltype(&HwcDisplay::SetOutputBuffer),
-                      &HwcDisplay::SetOutputBuffer, buffer_handle_t, int32_t>);
+      return (hwc2_function_pointer_t)SetOutputBuffer;
     case HWC2::FunctionDescriptor::SetPowerMode:
       return ToHook<HWC2_PFN_SET_POWER_MODE>(
           DisplayHook<decltype(&HwcDisplay::SetPowerMode),

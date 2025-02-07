@@ -40,6 +40,7 @@
 #include <cutils/native_handle.h>
 #include <hardware/hwcomposer2.h>
 #include <hardware/hwcomposer_defs.h>
+#include <ui/GraphicBufferMapper.h>
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
@@ -49,11 +50,13 @@
 #include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
 
+using ::android::DstRectInfo;
 using ::android::HwcDisplay;
 using ::android::HwcDisplayConfig;
 using ::android::HwcDisplayConfigs;
 using ::android::HwcLayer;
 using ::android::LayerTransform;
+using ::android::SrcRectInfo;
 
 #include "utils/log.h"
 
@@ -290,18 +293,29 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
   return aidl_configuration;
 }
 
-std::optional<hwc_rect> AidlToRect(const std::optional<common::Rect>& rect) {
+std::optional<DstRectInfo> AidlToRect(const std::optional<common::Rect>& rect) {
   if (!rect) {
     return std::nullopt;
   }
-  return hwc_rect{rect->left, rect->top, rect->right, rect->bottom};
+  DstRectInfo dst_rec;
+  dst_rec.i_rect = {.left = rect->left,
+                    .top = rect->top,
+                    .right = rect->right,
+                    .bottom = rect->bottom};
+  return dst_rec;
 }
 
-std::optional<hwc_frect> AidlToFRect(const std::optional<common::FRect>& rect) {
+std::optional<SrcRectInfo> AidlToFRect(
+    const std::optional<common::FRect>& rect) {
   if (!rect) {
     return std::nullopt;
   }
-  return hwc_frect{rect->left, rect->top, rect->right, rect->bottom};
+  SrcRectInfo src_rect;
+  src_rect.f_rect = {.left = rect->left,
+                     .top = rect->top,
+                     .right = rect->right,
+                     .bottom = rect->bottom};
+  return src_rect;
 }
 
 std::optional<float> AidlToAlpha(const std::optional<PlaneAlpha>& alpha) {
@@ -338,17 +352,121 @@ std::optional<LayerTransform> AidlToLayerTransform(
 
 }  // namespace
 
+class Hwc3BufferHandle : public PrimeFdsSharedBase {
+ public:
+  static auto Create(buffer_handle_t handle)
+      -> std::shared_ptr<Hwc3BufferHandle> {
+    auto hwc3 = std::shared_ptr<Hwc3BufferHandle>(new Hwc3BufferHandle());
+
+    ::android::GraphicBufferMapper::get()
+        .importBufferNoValidate(handle, &hwc3->imported_handle_);
+
+    return hwc3;
+  }
+
+  auto GetHandle() const -> buffer_handle_t {
+    return imported_handle_;
+  }
+
+  ~Hwc3BufferHandle() override {
+    ::android::GraphicBufferMapper::get().freeBuffer(imported_handle_);
+  }
+
+ private:
+  Hwc3BufferHandle() = default;
+  buffer_handle_t imported_handle_{};
+};
+
+class Hwc3Layer : public ::android::FrontendLayerBase {
+ public:
+  auto HandleNextBuffer(std::optional<buffer_handle_t> raw_handle,
+                        ::android::SharedFd fence_fd, int32_t slot_id)
+      -> std::optional<HwcLayer::LayerProperties> {
+    HwcLayer::LayerProperties lp;
+    if (!raw_handle && slots_.count(slot_id) != 0) {
+      lp.active_slot = {
+          .slot_id = slot_id,
+          .fence = std::move(fence_fd),
+      };
+
+      return lp;
+    }
+
+    if (!raw_handle) {
+      ALOGE("Buffer handle is nullopt but slot was not cached.");
+      return std::nullopt;
+    }
+
+    auto hwc3 = Hwc3BufferHandle::Create(*raw_handle);
+    if (!hwc3) {
+      return std::nullopt;
+    }
+
+    auto bi = ::android::BufferInfoGetter::GetInstance()->GetBoInfo(
+        hwc3->GetHandle());
+    if (!bi) {
+      return std::nullopt;
+    }
+
+    bi->fds_shared = hwc3;
+
+    lp.slot_buffer = {
+        .slot_id = slot_id,
+        .bi = bi,
+    };
+
+    lp.active_slot = {
+        .slot_id = slot_id,
+        .fence = std::move(fence_fd),
+    };
+
+    slots_[slot_id] = hwc3;
+
+    return lp;
+  }
+
+  [[maybe_unused]]
+  auto HandleClearSlot(int32_t slot_id)
+      -> std::optional<HwcLayer::LayerProperties> {
+    if (slots_.count(slot_id) == 0) {
+      return std::nullopt;
+    }
+
+    slots_.erase(slot_id);
+
+    auto lp = HwcLayer::LayerProperties{};
+    lp.slot_buffer = {
+        .slot_id = slot_id,
+        .bi = std::nullopt,
+    };
+
+    return lp;
+  }
+
+  void ClearSlots() {
+    slots_.clear();
+  }
+
+ private:
+  std::map<int32_t /*slot*/, std::shared_ptr<Hwc3BufferHandle>> slots_;
+};
+
+static auto GetHwc3Layer(HwcLayer& layer) -> std::shared_ptr<Hwc3Layer> {
+  auto frontend_private_data = layer.GetFrontendPrivateData();
+  if (!frontend_private_data) {
+    frontend_private_data = std::make_shared<Hwc3Layer>();
+    layer.SetFrontendPrivateData(frontend_private_data);
+  }
+  return std::static_pointer_cast<Hwc3Layer>(frontend_private_data);
+}
+
 ComposerClient::ComposerClient() {
   DEBUG_FUNC();
 }
 
-bool ComposerClient::Init() {
+void ComposerClient::Init() {
   DEBUG_FUNC();
-  composer_resources_ = ComposerResources::Create();
-  if (composer_resources_) {
-    hwc_ = std::make_unique<DrmHwcThree>(composer_resources_.get());
-  }
-  return composer_resources_ != nullptr;
+  hwc_ = std::make_unique<DrmHwcThree>();
 }
 
 ComposerClient::~ComposerClient() {
@@ -362,7 +480,7 @@ ComposerClient::~ComposerClient() {
 }
 
 ndk::ScopedAStatus ComposerClient::createLayer(int64_t display_id,
-                                               int32_t buffer_slot_count,
+                                               int32_t /*buffer_slot_count*/,
                                                int64_t* layer_id) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
@@ -378,21 +496,13 @@ ndk::ScopedAStatus ComposerClient::createLayer(int64_t display_id,
     return ToBinderStatus(err);
   }
 
-  const int64_t created_layer_id = Hwc2LayerToHwc3(hwc2_layer_id);
-  err = composer_resources_->AddLayer(display_id, created_layer_id,
-                                      buffer_slot_count);
-  if (err != hwc3::Error::kNone) {
-    destroyLayer(display_id, created_layer_id);
-    return ToBinderStatus(err);
-  }
-
-  *layer_id = created_layer_id;
+  *layer_id = Hwc2LayerToHwc3(hwc2_layer_id);
   return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::createVirtualDisplay(
     int32_t width, int32_t height, AidlPixelFormat format_hint,
-    int32_t output_buffer_slot_count, VirtualDisplay* out_display) {
+    int32_t /*output_buffer_slot_count*/, VirtualDisplay* out_display) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
 
@@ -406,15 +516,7 @@ ndk::ScopedAStatus ComposerClient::createVirtualDisplay(
     return ToBinderStatus(err);
   }
 
-  const int64_t created_display_id = Hwc2DisplayToHwc3(hwc2_display_id);
-  err = composer_resources_->AddVirtualDisplay(hwc2_display_id,
-                                               output_buffer_slot_count);
-  if (err != hwc3::Error::kNone) {
-    hwc_->DestroyVirtualDisplay(hwc2_display_id);
-    return ToBinderStatus(err);
-  }
-
-  out_display->display = created_display_id;
+  out_display->display = Hwc2DisplayToHwc3(hwc2_display_id);
   out_display->format = format_hint;
   return ndk::ScopedAStatus::ok();
 }
@@ -433,7 +535,6 @@ ndk::ScopedAStatus ComposerClient::destroyLayer(int64_t display_id,
     return ToBinderStatus(err);
   }
 
-  err = composer_resources_->RemoveLayer(display_id, layer_id);
   return ToBinderStatus(err);
 }
 
@@ -476,16 +577,44 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
     return;
   }
 
+#if __ANDROID_API__ >= 34
+  /* https://source.android.com/docs/core/graphics/reduce-consumption */
+  if (command.bufferSlotsToClear) {
+    auto hwc3_layer = GetHwc3Layer(*layer);
+    for (const auto& slot : *command.bufferSlotsToClear) {
+      auto lp = hwc3_layer->HandleClearSlot(slot);
+      if (!lp) {
+        cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
+        return;
+      }
+
+      layer->SetLayerProperties(lp.value());
+    }
+  }
+#endif
+
   HwcLayer::LayerProperties properties;
   if (command.buffer) {
-    HwcLayer::Buffer buffer;
-    auto err = ImportLayerBuffer(display_id, command.layer, *command.buffer,
-                                 &buffer);
-    if (err != hwc3::Error::kNone) {
-      cmd_result_writer_->AddError(err);
+    auto hwc3_layer = GetHwc3Layer(*layer);
+    std::optional<buffer_handle_t> buffer_handle = std::nullopt;
+    if (command.buffer->handle) {
+      buffer_handle = ::android::makeFromAidl(*command.buffer->handle);
+    }
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+    auto fence = const_cast<::ndk::ScopedFileDescriptor&>(command.buffer->fence)
+                     .release();
+
+    auto lp = hwc3_layer->HandleNextBuffer(buffer_handle,
+                                           ::android::MakeSharedFd(fence),
+                                           command.buffer->slot);
+
+    if (!lp) {
+      cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
       return;
     }
-    properties.buffer.emplace(buffer);
+
+    properties = lp.value();
   }
 
   properties.blend_mode = AidlToBlendMode(command.blendMode);
@@ -571,7 +700,8 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
                                             composition_type));
     }
     cmd_result_writer_->AddChanges(changes);
-    composer_resources_->SetDisplayMustValidateState(display_id, false);
+    auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
+    hwc3_display->must_validate = false;
 
     // TODO: DisplayRequests are not implemented.
 
@@ -589,7 +719,8 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
   }
 
   if (command.presentDisplay) {
-    if (composer_resources_->MustValidateDisplay(display_id)) {
+    auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
+    if (hwc3_display->must_validate) {
       cmd_result_writer_->AddError(hwc3::Error::kNotValidated);
       return;
     }
@@ -1089,6 +1220,20 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
                                  next_config != nullptr &&
                                  current_config->group_id ==
                                      next_config->group_id;
+  const bool same_resolution = current_config != nullptr &&
+                               next_config != nullptr &&
+                               current_config->mode.SameSize(next_config->mode);
+
+  /* Client framebuffer management:
+   * https://source.android.com/docs/core/graphics/framebuffer-mgmt
+   */
+  if (!same_resolution && !future_config) {
+    auto& client_layer = display->GetClientLayer();
+    auto hwc3_layer = GetHwc3Layer(client_layer);
+    hwc3_layer->ClearSlots();
+    client_layer.ClearSlots();
+  }
+
   // If the contraints dictate that this is to be applied in the future, it
   // must be queued. If the new config is in the same config group as the
   // current one, then queue it to reduce jank.
@@ -1151,11 +1296,10 @@ ndk::ScopedAStatus ComposerClient::setAutoLowLatencyMode(int64_t display_id,
   return ToBinderStatus(error);
 }
 
-ndk::ScopedAStatus ComposerClient::setClientTargetSlotCount(int64_t display_id,
-                                                            int32_t count) {
+ndk::ScopedAStatus ComposerClient::setClientTargetSlotCount(
+    int64_t /*display_id*/, int32_t /*count*/) {
   DEBUG_FUNC();
-  return ToBinderStatus(
-      composer_resources_->SetDisplayClientTargetCacheSize(display_id, count));
+  return ToBinderStatus(hwc3::Error::kNone);
 }
 
 ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_id,
@@ -1284,7 +1428,8 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
 }
 
 ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
-    int64_t /*display*/, const ClockMonotonicTimestamp& /*expected_present_time*/,
+    int64_t /*display*/,
+    const ClockMonotonicTimestamp& /*expected_present_time*/,
     int32_t /*frame_interval_ns*/) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
@@ -1306,19 +1451,6 @@ std::string ComposerClient::Dump() {
   return binder;
 }
 
-hwc3::Error ComposerClient::ImportLayerBuffer(int64_t display_id,
-                                              int64_t layer_id,
-                                              const Buffer& buffer,
-                                              HwcLayer::Buffer* out_buffer) {
-  auto releaser = ComposerResources::CreateResourceReleaser(true);
-  auto err = composer_resources_->GetLayerBuffer(display_id, layer_id, buffer,
-                                                 &out_buffer->buffer_handle,
-                                                 releaser.get());
-  out_buffer->acquire_fence = ::android::MakeSharedFd(
-      buffer.fence.dup().release());
-  return err;
-}
-
 void ComposerClient::ExecuteSetDisplayClientTarget(
     uint64_t display_id, const ClientTarget& command) {
   auto* display = GetDisplay(display_id);
@@ -1327,37 +1459,35 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
     return;
   }
 
-  hwc_region_t damage_regions;
-  damage_regions.numRects = command.damage.size();
+  auto& client_layer = display->GetClientLayer();
+  auto hwc3layer = GetHwc3Layer(client_layer);
 
-  std::vector<hwc_rect_t> regions(command.damage.size());
-  for (const auto& region : command.damage) {
-    regions.push_back({region.left, region.top, region.right, region.bottom});
-  }
-  damage_regions.rects = regions.data();
-
-  buffer_handle_t imported_buffer = nullptr;
-  auto buf_releaser = ComposerResources::CreateResourceReleaser(true);
-
-  auto error = composer_resources_->GetDisplayClientTarget(display_id,
-                                                           command.buffer,
-                                                           &imported_buffer,
-                                                           buf_releaser.get());
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
-    return;
+  std::optional<buffer_handle_t> raw_buffer = std::nullopt;
+  if (command.buffer.handle) {
+    raw_buffer = ::android::makeFromAidl(*command.buffer.handle);
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   auto fence = const_cast<::ndk::ScopedFileDescriptor&>(command.buffer.fence)
                    .release();
-  error = Hwc2toHwc3Error(
-      display->SetClientTarget(imported_buffer, fence,
-                               Hwc3DataspaceToHwc2(command.dataspace),
-                               damage_regions));
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
+
+  auto properties = hwc3layer->HandleNextBuffer(raw_buffer,
+                                                ::android::MakeSharedFd(fence),
+                                                command.buffer.slot);
+
+  if (!properties) {
+    ALOGE("Failed to import client target buffer.");
+    /* Here, sending an error would be the natural way to do the thing.
+     * But VTS checks for no error. Is it the VTS issue?
+     * https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/graphics/composer/aidl/vts/VtsHalGraphicsComposer3_TargetTest.cpp;l=1892;drc=2647200f4c535ca6567b452695b7d13f2aaf3f2a
+     */
+    return;
   }
+
+  properties->color_space = AidlToColorSpace(command.dataspace);
+  properties->sample_range = AidlToSampleRange(command.dataspace);
+
+  client_layer.SetLayerProperties(properties.value());
 }
 
 void ComposerClient::ExecuteSetDisplayOutputBuffer(uint64_t display_id,
@@ -1368,24 +1498,32 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(uint64_t display_id,
     return;
   }
 
-  buffer_handle_t imported_buffer = nullptr;
-  auto buf_releaser = ComposerResources::CreateResourceReleaser(true);
-
-  auto error = composer_resources_->GetDisplayOutputBuffer(display_id, buffer,
-                                                           &imported_buffer,
-                                                           buf_releaser.get());
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
+  auto& writeback_layer = display->GetWritebackLayer();
+  if (!writeback_layer) {
+    cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
     return;
+  }
+
+  auto hwc3layer = GetHwc3Layer(*writeback_layer);
+
+  std::optional<buffer_handle_t> raw_buffer = std::nullopt;
+  if (buffer.handle) {
+    raw_buffer = ::android::makeFromAidl(*buffer.handle);
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   auto fence = const_cast<::ndk::ScopedFileDescriptor&>(buffer.fence).release();
-  error = Hwc2toHwc3Error(display->SetOutputBuffer(imported_buffer, fence));
-  if (error != hwc3::Error::kNone) {
-    cmd_result_writer_->AddError(error);
+
+  auto properties = hwc3layer->HandleNextBuffer(raw_buffer,
+                                                ::android::MakeSharedFd(fence),
+                                                buffer.slot);
+
+  if (!properties) {
+    cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
     return;
   }
+
+  writeback_layer->SetLayerProperties(properties.value());
 }
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl
