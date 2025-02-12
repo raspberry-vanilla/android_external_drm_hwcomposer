@@ -379,12 +379,32 @@ auto HwcDisplay::AcceptValidatedComposition() -> void {
 auto HwcDisplay::PresentStagedComposition(
     SharedFd &out_present_fence, std::vector<ReleaseFence> &out_release_fences)
     -> bool {
-  int out_fd = -1;
-  auto error = PresentDisplay(&out_fd);
-  out_present_fence = MakeSharedFd(out_fd);
-  if (error != HWC2::Error::None) {
-    return false;
+  if (IsInHeadlessMode()) {
+    return true;
   }
+  HWC2::Error ret{};
+
+  ++total_stats_.total_frames_;
+
+  AtomicCommitArgs a_args{};
+  ret = CreateComposition(a_args);
+
+  if (ret != HWC2::Error::None)
+    ++total_stats_.failed_kms_present_;
+
+  if (ret == HWC2::Error::BadLayer) {
+    // Can we really have no client or device layers?
+    return true;
+  }
+  if (ret != HWC2::Error::None)
+    return false;
+
+  out_present_fence = a_args.out_fence;
+
+  // Reset the color matrix so we don't apply it over and over again.
+  color_matrix_ = {};
+
+  ++frame_no_;
 
   if (!out_present_fence) {
     return true;
@@ -501,12 +521,6 @@ HWC2::Error HwcDisplay::ChosePreferredConfig() {
   return SetActiveConfig(configs_.preferred_config_id);
 }
 
-HWC2::Error HwcDisplay::AcceptDisplayChanges() {
-  for (std::pair<const hwc2_layer_t, HwcLayer> &l : layers_)
-    l.second.AcceptTypeChange();
-  return HWC2::Error::None;
-}
-
 HWC2::Error HwcDisplay::CreateLayer(hwc2_layer_t *layer) {
   layers_.emplace(static_cast<hwc2_layer_t>(layer_idx_), HwcLayer(this));
   *layer = static_cast<hwc2_layer_t>(layer_idx_);
@@ -533,53 +547,14 @@ HWC2::Error HwcDisplay::GetActiveConfig(hwc2_config_t *config) const {
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::GetChangedCompositionTypes(uint32_t *num_elements,
-                                                   hwc2_layer_t *layers,
-                                                   int32_t *types) {
-  if (IsInHeadlessMode()) {
-    *num_elements = 0;
-    return HWC2::Error::None;
-  }
-
-  uint32_t num_changes = 0;
-  for (auto &l : layers_) {
-    if (l.second.IsTypeChanged()) {
-      if (layers && num_changes < *num_elements)
-        layers[num_changes] = l.first;
-      if (types && num_changes < *num_elements)
-        types[num_changes] = static_cast<int32_t>(l.second.GetValidatedType());
-      ++num_changes;
-    }
-  }
-  if (!layers && !types)
-    *num_elements = num_changes;
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::GetClientTargetSupport(uint32_t width, uint32_t height,
-                                               int32_t /*format*/,
-                                               int32_t dataspace) {
-  if (IsInHeadlessMode()) {
-    return HWC2::Error::None;
-  }
-
-  auto min = pipeline_->device->GetMinResolution();
-  auto max = pipeline_->device->GetMaxResolution();
-
-  if (width < min.first || height < min.second)
-    return HWC2::Error::Unsupported;
-
-  if (width > max.first || height > max.second)
-    return HWC2::Error::Unsupported;
-
-  if (dataspace != HAL_DATASPACE_UNKNOWN)
-    return HWC2::Error::Unsupported;
-
-  // TODO(nobody): Validate format can be handled by either GL or planes
-  return HWC2::Error::None;
-}
-
 HWC2::Error HwcDisplay::GetColorModes(uint32_t *num_modes, int32_t *modes) {
+  if (IsInHeadlessMode()) {
+    *num_modes = 1;
+    if (modes)
+      modes[0] = HAL_COLOR_MODE_NATIVE;
+    return HWC2::Error::None;
+  }
+
   if (!modes) {
     std::vector<Colormode> temp_modes;
     GetEdid()->GetColorModes(temp_modes);
@@ -692,23 +667,8 @@ HWC2::Error HwcDisplay::GetDisplayName(uint32_t *size, char *name) {
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::GetDisplayRequests(int32_t * /*display_requests*/,
-                                           uint32_t *num_elements,
-                                           hwc2_layer_t * /*layers*/,
-                                           int32_t * /*layer_requests*/) {
-  // TODO(nobody): I think virtual display should request
-  //      HWC2_DISPLAY_REQUEST_WRITE_CLIENT_TARGET_TO_OUTPUT here
-  *num_elements = 0;
-  return HWC2::Error::None;
-}
-
 HWC2::Error HwcDisplay::GetDisplayType(int32_t *type) {
   *type = static_cast<int32_t>(type_);
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::GetDozeSupport(int32_t *support) {
-  *support = 0;
   return HWC2::Error::None;
 }
 
@@ -716,6 +676,11 @@ HWC2::Error HwcDisplay::GetHdrCapabilities(uint32_t *num_types, int32_t *types,
                                            float *max_luminance,
                                            float *max_average_luminance,
                                            float *min_luminance) {
+  if (IsInHeadlessMode()) {
+    *num_types = 0;
+    return HWC2::Error::None;
+  }
+
   if (!types) {
     std::vector<ui::Hdr> temp_types;
     float lums[3] = {0.F};
@@ -741,45 +706,6 @@ HWC2::Error HwcDisplay::GetHdrCapabilities(uint32_t *num_types, int32_t *types,
         break;
     }
   }
-  return HWC2::Error::None;
-}
-
-/* Find API details at:
- * https://cs.android.com/android/platform/superproject/+/android-11.0.0_r3:hardware/libhardware/include/hardware/hwcomposer2.h;l=1767
- *
- * Called after PresentDisplay(), CLIENT is expecting release fence for the
- * prior buffer (not the one assigned to the layer at the moment).
- */
-HWC2::Error HwcDisplay::GetReleaseFences(uint32_t *num_elements,
-                                         hwc2_layer_t *layers,
-                                         int32_t *fences) {
-  if (IsInHeadlessMode()) {
-    *num_elements = 0;
-    return HWC2::Error::None;
-  }
-
-  uint32_t num_layers = 0;
-
-  for (auto &l : layers_) {
-    if (!l.second.GetPriorBufferScanOutFlag() || !present_fence_) {
-      continue;
-    }
-
-    ++num_layers;
-
-    if (layers == nullptr || fences == nullptr)
-      continue;
-
-    if (num_layers > *num_elements) {
-      ALOGW("Overflow num_elements %d/%d", num_layers, *num_elements);
-      return HWC2::Error::None;
-    }
-
-    layers[num_layers - 1] = l.first;
-    fences[num_layers - 1] = DupFd(present_fence_);
-  }
-  *num_elements = num_layers;
-
   return HWC2::Error::None;
 }
 
@@ -940,43 +866,6 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                                                           prev_vperiod_ns);
     }
   }
-
-  return HWC2::Error::None;
-}
-
-/* Find API details at:
- * https://cs.android.com/android/platform/superproject/+/android-11.0.0_r3:hardware/libhardware/include/hardware/hwcomposer2.h;l=1805
- */
-HWC2::Error HwcDisplay::PresentDisplay(int32_t *out_present_fence) {
-  if (IsInHeadlessMode()) {
-    *out_present_fence = -1;
-    return HWC2::Error::None;
-  }
-  HWC2::Error ret{};
-
-  ++total_stats_.total_frames_;
-
-  AtomicCommitArgs a_args{};
-  ret = CreateComposition(a_args);
-
-  if (ret != HWC2::Error::None)
-    ++total_stats_.failed_kms_present_;
-
-  if (ret == HWC2::Error::BadLayer) {
-    // Can we really have no client or device layers?
-    *out_present_fence = -1;
-    return HWC2::Error::None;
-  }
-  if (ret != HWC2::Error::None)
-    return ret;
-
-  this->present_fence_ = a_args.out_fence;
-  *out_present_fence = DupFd(a_args.out_fence);
-
-  // Reset the color matrix so we don't apply it over and over again.
-  color_matrix_ = {};
-
-  ++frame_no_;
 
   return HWC2::Error::None;
 }
@@ -1169,25 +1058,6 @@ HWC2::Error HwcDisplay::SetVsyncEnabled(int32_t enabled) {
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::ValidateDisplay(uint32_t *num_types,
-                                        uint32_t *num_requests) {
-  if (IsInHeadlessMode()) {
-    *num_types = *num_requests = 0;
-    return HWC2::Error::None;
-  }
-
-  /* In current drm_hwc design in case previous frame layer was not validated as
-   * a CLIENT, it is used by display controller (Front buffer). We have to store
-   * this state to provide the CLIENT with the release fences for such buffers.
-   */
-  for (auto &l : layers_) {
-    l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
-                                       HWC2::Composition::Client);
-  }
-
-  return backend_->ValidateDisplay(this, num_types, num_requests);
-}
-
 std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
   std::vector<HwcLayer *> ordered_layers;
   ordered_layers.reserve(layers_.size());
@@ -1321,19 +1191,6 @@ HWC2::Error HwcDisplay::SetActiveConfigWithConstraints(
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::SetAutoLowLatencyMode(bool /*on*/) {
-  return HWC2::Error::Unsupported;
-}
-
-HWC2::Error HwcDisplay::GetSupportedContentTypes(
-    uint32_t *outNumSupportedContentTypes,
-    const uint32_t *outSupportedContentTypes) {
-  if (outSupportedContentTypes == nullptr)
-    *outNumSupportedContentTypes = 0;
-
-  return HWC2::Error::None;
-}
-
 HWC2::Error HwcDisplay::SetContentType(int32_t contentType) {
   /* Maps exactly to the content_type DRM connector property:
    * https://elixir.bootlin.com/linux/v6.11/source/include/uapi/drm/drm_mode.h#L107
@@ -1400,15 +1257,6 @@ HWC2::Error HwcDisplay::GetDisplayCapabilities(uint32_t *outNumCapabilities,
   }
 
   return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::GetDisplayBrightnessSupport(bool *supported) {
-  *supported = false;
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetDisplayBrightness(float /* brightness */) {
-  return HWC2::Error::Unsupported;
 }
 
 #endif /* __ANDROID_API__ > 28 */
