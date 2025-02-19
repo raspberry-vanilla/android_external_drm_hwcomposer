@@ -271,7 +271,7 @@ class DisplayConfiguration {
 #endif
 
 DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
-    const HwcDisplayConfigs& configs, const HwcDisplayConfig& config) {
+    int32_t width, int32_t height, const HwcDisplayConfig& config) {
   DisplayConfiguration aidl_configuration =
       {.configId = static_cast<int32_t>(config.id),
        .width = config.mode.GetRawMode().hdisplay,
@@ -279,15 +279,14 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
        .configGroup = static_cast<int32_t>(config.group_id),
        .vsyncPeriod = config.mode.GetVSyncPeriodNs()};
 
-  if (configs.mm_width != 0) {
-    // ideally this should be vdisplay/mm_heigth, however mm_height
-    // comes from edid parsing and is highly unreliable. Viewing the
-    // rarity of anisotropic displays, falling back to a single value
-    // for dpi yield more correct output.
+  if (width > 0) {
     static const float kMmPerInch = 25.4;
-    float dpi = float(config.mode.GetRawMode().hdisplay) * kMmPerInch /
-                float(configs.mm_width);
-    aidl_configuration.dpi = {.x = dpi, .y = dpi};
+    float dpi_x = float(config.mode.GetRawMode().hdisplay) * kMmPerInch /
+                float(width);
+    float dpi_y = height <= 0 ? dpi_x :
+                  float(config.mode.GetRawMode().vdisplay) * kMmPerInch /
+                    float(height);
+    aidl_configuration.dpi = {.x = dpi_x, .y = dpi_y};
   }
   // TODO: Populate vrrConfig.
   return aidl_configuration;
@@ -358,8 +357,13 @@ class Hwc3BufferHandle : public PrimeFdsSharedBase {
       -> std::shared_ptr<Hwc3BufferHandle> {
     auto hwc3 = std::shared_ptr<Hwc3BufferHandle>(new Hwc3BufferHandle());
 
-    ::android::GraphicBufferMapper::get()
+    auto result = ::android::GraphicBufferMapper::get()
         .importBufferNoValidate(handle, &hwc3->imported_handle_);
+
+    if (result != ::android::NO_ERROR) {
+      ALOGE("Failed to import buffer handle: %d", result);
+      return nullptr;
+    }
 
     return hwc3;
   }
@@ -490,13 +494,16 @@ ndk::ScopedAStatus ComposerClient::createLayer(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  hwc2_layer_t hwc2_layer_id = 0;
-  auto err = Hwc2toHwc3Error(display->CreateLayer(&hwc2_layer_id));
-  if (err != hwc3::Error::kNone) {
-    return ToBinderStatus(err);
+  auto hwc3display = DrmHwcThree::GetHwc3Display(*display);
+
+  if (!display->CreateLayer(hwc3display->next_layer_id)) {
+    return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  *layer_id = Hwc2LayerToHwc3(hwc2_layer_id);
+  *layer_id = hwc3display->next_layer_id;
+
+  hwc3display->next_layer_id++;
+
   return ndk::ScopedAStatus::ok();
 }
 
@@ -530,12 +537,11 @@ ndk::ScopedAStatus ComposerClient::destroyLayer(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  auto err = Hwc2toHwc3Error(display->DestroyLayer(Hwc3LayerToHwc2(layer_id)));
-  if (err != hwc3::Error::kNone) {
-    return ToBinderStatus(err);
+  if (!display->DestroyLayer(layer_id)) {
+    return ToBinderStatus(hwc3::Error::kBadLayer);
   }
 
-  return ToBinderStatus(err);
+  return ToBinderStatus(hwc3::Error::kNone);
 }
 
 ndk::ScopedAStatus ComposerClient::destroyVirtualDisplay(int64_t display_id) {
@@ -556,6 +562,24 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
     cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);
     return;
   }
+
+#if __ANDROID_API__ >= 35
+  auto batch_command = command.layerLifecycleBatchCommandType;
+  if (batch_command == LayerLifecycleBatchCommandType::CREATE) {
+    if (!display->CreateLayer(command.layer)) {
+      cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
+      return;
+    }
+  }
+
+  if (batch_command == LayerLifecycleBatchCommandType::DESTROY) {
+    if (!display->DestroyLayer(command.layer)) {
+      cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
+    }
+
+    return;
+  }
+#endif
 
   auto* layer = display->get_layer(command.layer);
   if (layer == nullptr) {
@@ -689,13 +713,14 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     display->SetColorTransformMatrix(ctm.value());
   }
 
+  bool shall_present_now = false;
+
+  DisplayChanges changes{};
   if (command.validateDisplay || command.presentOrValidateDisplay) {
     std::vector<HwcDisplay::ChangedLayer>
         changed_layers = display->ValidateStagedComposition();
-    DisplayChanges changes{};
     for (auto [layer_id, composition_type] : changed_layers) {
-      changes.AddLayerCompositionChange(command.display,
-                                        Hwc2LayerToHwc3(layer_id),
+      changes.AddLayerCompositionChange(command.display, layer_id,
                                         static_cast<Composition>(
                                             composition_type));
     }
@@ -704,21 +729,23 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     hwc3_display->must_validate = false;
 
     // TODO: DisplayRequests are not implemented.
+  }
 
-    /* TODO: Add check if it's possible to skip display validation for
-     * presentOrValidateDisplay */
-    if (command.presentOrValidateDisplay) {
-      cmd_result_writer_
-          ->AddPresentOrValidateResult(display_id,
-                                       PresentOrValidate::Result::Validated);
+  if (command.presentOrValidateDisplay) {
+    auto result = PresentOrValidate::Result::Validated;
+    if (!display->NeedsClientLayerUpdate() && !changes.HasAnyChanges()) {
+      ALOGV("Skipping SF roundtrip for display %" PRId64, display_id);
+      result = PresentOrValidate::Result::Presented;
+      shall_present_now = true;
     }
+    cmd_result_writer_->AddPresentOrValidateResult(display_id, result);
   }
 
   if (command.acceptDisplayChanges) {
     display->AcceptValidatedComposition();
   }
 
-  if (command.presentDisplay) {
+  if (command.presentDisplay || shall_present_now) {
     auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
     if (hwc3_display->must_validate) {
       cmd_result_writer_->AddError(hwc3::Error::kNotValidated);
@@ -739,8 +766,7 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
 
     std::unordered_map<int64_t, unique_fd> hal_release_fences;
     for (const auto& [layer_id, release_fence] : release_fences) {
-      hal_release_fences[Hwc2LayerToHwc3(layer_id)] =  //
-          unique_fd(::android::DupFd(release_fence));
+      hal_release_fences[layer_id] = unique_fd(::android::DupFd(release_fence));
     }
     cmd_result_writer_->AddReleaseFence(display_id, hal_release_fences);
   }
@@ -838,9 +864,11 @@ ndk::ScopedAStatus ComposerClient::getDisplayAttribute(
     return ToBinderStatus(hwc3::Error::kBadConfig);
   }
 
-  DisplayConfiguration
-      aidl_configuration = HwcDisplayConfigToAidlConfiguration(configs,
-                                                               config->second);
+  const auto bounds = display->GetDisplayBoundsMm();
+  DisplayConfiguration aidl_configuration =
+      HwcDisplayConfigToAidlConfiguration(/*width =*/ bounds.first,
+                                          /*height =*/bounds.second,
+                                          config->second);
   // Legacy API for querying DPI uses units of dots per 1000 inches.
   static const int kLegacyDpiUnit = 1000;
   switch (attribute) {
@@ -1419,9 +1447,12 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
   }
 
   const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
+  const auto bounds = display->GetDisplayBoundsMm();
   for (const auto& [id, config] : configs.hwc_configs) {
     configurations->push_back(
-        HwcDisplayConfigToAidlConfiguration(configs, config));
+        HwcDisplayConfigToAidlConfiguration(/*width =*/ bounds.first, 
+                                            /*height =*/ bounds.second,
+                                            config));
   }
   return ndk::ScopedAStatus::ok();
 }
