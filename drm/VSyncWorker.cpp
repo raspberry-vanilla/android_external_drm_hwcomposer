@@ -55,7 +55,6 @@ void VSyncWorker::UpdateVSyncControl() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     enabled_ = ShouldEnable();
-    last_timestamp_ = -1;
   }
 
   cv_.notify_all();
@@ -64,6 +63,7 @@ void VSyncWorker::UpdateVSyncControl() {
 void VSyncWorker::SetVsyncPeriodNs(uint32_t vsync_period_ns) {
   const std::lock_guard<std::mutex> lock(mutex_);
   vsync_period_ns_ = vsync_period_ns;
+  last_timestamp_ = std::nullopt;
 }
 
 void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
@@ -71,9 +71,9 @@ void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
     const std::lock_guard<std::mutex> lock(mutex_);
     enable_vsync_timestamps_ = enabled;
     if (enabled) {
-      // Reset the last timestamp so the caller knows if a vsync timestamp is
-      // fresh or not.
-      last_vsync_timestamp_ = 0;
+      // Reset the freshness flag to ensure that only a fresh timestamp is
+      // returned from GetLastVsyncTimestamp.
+      last_timestamp_is_fresh_ = false;
     }
   }
   UpdateVSyncControl();
@@ -81,7 +81,7 @@ void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
 
 uint32_t VSyncWorker::GetLastVsyncTimestamp() {
   const std::lock_guard<std::mutex> lock(mutex_);
-  return last_vsync_timestamp_;
+  return last_timestamp_is_fresh_ ? last_timestamp_.value_or(0) : 0;
 }
 
 void VSyncWorker::SetTimestampCallback(
@@ -121,19 +121,23 @@ bool VSyncWorker::ShouldEnable() const {
  *  timestamp.
  */
 int64_t VSyncWorker::GetPhasedVSync(int64_t frame_ns, int64_t current) const {
-  if (last_timestamp_ < 0)
+  if (!last_timestamp_.has_value())
     return current + frame_ns;
 
-  return (frame_ns * ((current - last_timestamp_) / frame_ns + 1)) +
-         last_timestamp_;
+  return (frame_ns * ((current - *last_timestamp_) / frame_ns + 1)) +
+         *last_timestamp_;
 }
 
 static const int64_t kOneSecondNs = 1LL * 1000 * 1000 * 1000;
 
 int VSyncWorker::SyntheticWaitVBlank(int64_t *timestamp) {
-  auto time_now = ResourceManager::GetTimeMonotonicNs();
+  int64_t phased_timestamp = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    int64_t time_now = ResourceManager::GetTimeMonotonicNs();
+    phased_timestamp = GetPhasedVSync(vsync_period_ns_, time_now);
+  }
 
-  auto phased_timestamp = GetPhasedVSync(vsync_period_ns_, time_now);
   struct timespec vsync {};
   vsync.tv_sec = int(phased_timestamp / kOneSecondNs);
   vsync.tv_nsec = int(phased_timestamp - (vsync.tv_sec * kOneSecondNs));
@@ -155,6 +159,9 @@ void VSyncWorker::ThreadFn() {
   for (;;) {
     {
       std::unique_lock<std::mutex> lock(mutex_);
+      // Thread safety analysis doesn't understand std::unique_lock.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wthread-safety-analysis"
       if (thread_exit_)
         break;
 
@@ -163,6 +170,7 @@ void VSyncWorker::ThreadFn() {
 
       if (!enabled_)
         continue;
+#pragma clang diagnostic pop
     }
 
     ret = -EAGAIN;
@@ -191,21 +199,23 @@ void VSyncWorker::ThreadFn() {
     }
 
     std::optional<VsyncTimestampCallback> vsync_callback;
+    int64_t vsync_period_ns = 0;
 
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (!enabled_)
         continue;
       if (enable_vsync_timestamps_) {
-        last_vsync_timestamp_ = timestamp;
+        last_timestamp_is_fresh_ = true;
       }
       vsync_callback = callback_;
+      vsync_period_ns = vsync_period_ns_;
+      last_timestamp_ = timestamp;
     }
 
     if (vsync_callback) {
-      vsync_callback.value()(timestamp, vsync_period_ns_);
+      vsync_callback.value()(timestamp, vsync_period_ns);
     }
-    last_timestamp_ = timestamp;
   }
 
   ALOGI("VSyncWorker thread exit");
