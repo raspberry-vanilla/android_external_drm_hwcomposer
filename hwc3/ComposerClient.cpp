@@ -154,7 +154,9 @@ bool IsSupportedCompositionType(
     // DisplayCommand and return.
     case Composition::DISPLAY_DECORATION:
     case Composition::SIDEBAND:
+#if __ANDROID_API__ >= 34
     case Composition::REFRESH_RATE_INDICATOR:
+#endif
       return false;
   }
 }
@@ -188,7 +190,9 @@ std::optional<HWC2::Composition> AidlToCompositionType(
     // Unsupported composition types.
     case Composition::DISPLAY_DECORATION:
     case Composition::SIDEBAND:
+#if __ANDROID_API__ >= 34
     case Composition::REFRESH_RATE_INDICATOR:
+#endif
       ALOGE("Unsupported composition type: %s",
             toString(composition->composition).c_str());
       return std::nullopt;
@@ -316,17 +320,8 @@ bool ComposerClient::Init() {
 ComposerClient::~ComposerClient() {
   DEBUG_FUNC();
   {
-    // First Deinit the displays to start shutting down the Display's dependent
-    // threads such as VSyncWorker.
     const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
     hwc_->DeinitDisplays();
-  }
-  // Sleep to wait for threads to complete and exit.
-  const int time_for_threads_to_exit_us = 200000;
-  usleep(time_for_threads_to_exit_us);
-  {
-    // Hold the lock while destructing the hwc_ and the objects that it owns.
-    const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
     hwc_.reset();
   }
   LOG(DEBUG) << "removed composer client";
@@ -1242,6 +1237,8 @@ ndk::ScopedAStatus ComposerClient::setIdleTimerEnabled(int64_t /*display_id*/,
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
+#if __ANDROID_API__ >= 34
+
 ndk::ScopedAStatus ComposerClient::getOverlaySupport(
     OverlayProperties* /*out_overlay_properties*/) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
@@ -1262,6 +1259,8 @@ ndk::ScopedAStatus ComposerClient::setRefreshRateChangedCallbackDebugEnabled(
     int64_t /*display*/, bool /*enabled*/) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
+
+#endif
 
 #if __ANDROID_API__ >= 35
 

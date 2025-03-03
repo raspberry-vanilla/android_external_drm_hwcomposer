@@ -30,12 +30,9 @@
 
 namespace android {
 
-auto VSyncWorker::CreateInstance(std::shared_ptr<DrmDisplayPipeline> &pipe,
-                                 VSyncWorkerCallbacks &callbacks)
-    -> std::shared_ptr<VSyncWorker> {
-  auto vsw = std::shared_ptr<VSyncWorker>(new VSyncWorker());
-
-  vsw->callbacks_ = callbacks;
+auto VSyncWorker::CreateInstance(std::shared_ptr<DrmDisplayPipeline> &pipe)
+    -> std::unique_ptr<VSyncWorker> {
+  auto vsw = std::unique_ptr<VSyncWorker>(new VSyncWorker());
 
   if (pipe) {
     vsw->high_crtc_ = pipe->crtc->Get()->GetIndexInResArray()
@@ -43,19 +40,57 @@ auto VSyncWorker::CreateInstance(std::shared_ptr<DrmDisplayPipeline> &pipe,
     vsw->drm_fd_ = pipe->device->GetFd();
   }
 
-  std::thread(&VSyncWorker::ThreadFn, vsw.get(), vsw).detach();
+  vsw->vswt_ = std::thread(&VSyncWorker::ThreadFn, vsw.get());
 
   return vsw;
 }
 
-void VSyncWorker::VSyncControl(bool enabled) {
+VSyncWorker::~VSyncWorker() {
+  StopThread();
+
+  vswt_.join();
+}
+
+void VSyncWorker::UpdateVSyncControl() {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
-    enabled_ = enabled;
+    enabled_ = ShouldEnable();
     last_timestamp_ = -1;
   }
 
   cv_.notify_all();
+}
+
+void VSyncWorker::SetVsyncPeriodNs(uint32_t vsync_period_ns) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  vsync_period_ns_ = vsync_period_ns;
+}
+
+void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    enable_vsync_timestamps_ = enabled;
+    if (enabled) {
+      // Reset the last timestamp so the caller knows if a vsync timestamp is
+      // fresh or not.
+      last_vsync_timestamp_ = 0;
+    }
+  }
+  UpdateVSyncControl();
+}
+
+uint32_t VSyncWorker::GetLastVsyncTimestamp() {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return last_vsync_timestamp_;
+}
+
+void VSyncWorker::SetTimestampCallback(
+    std::optional<VsyncTimestampCallback> &&callback) {
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    callback_ = std::move(callback);
+  }
+  UpdateVSyncControl();
 }
 
 void VSyncWorker::StopThread() {
@@ -63,11 +98,14 @@ void VSyncWorker::StopThread() {
     const std::lock_guard<std::mutex> lock(mutex_);
     thread_exit_ = true;
     enabled_ = false;
-    callbacks_ = {};
   }
 
   cv_.notify_all();
 }
+
+bool VSyncWorker::ShouldEnable() const {
+  return enable_vsync_timestamps_ || callback_.has_value();
+};
 
 /*
  * Returns the timestamp of the next vsync in phase with last_timestamp_.
@@ -95,13 +133,7 @@ static const int64_t kOneSecondNs = 1LL * 1000 * 1000 * 1000;
 int VSyncWorker::SyntheticWaitVBlank(int64_t *timestamp) {
   auto time_now = ResourceManager::GetTimeMonotonicNs();
 
-  // Default to 60Hz refresh rate
-  constexpr uint32_t kDefaultVSPeriodNs = 16666666;
-  auto period_ns = kDefaultVSPeriodNs;
-  if (callbacks_.get_vperiod_ns && callbacks_.get_vperiod_ns() != 0)
-    period_ns = callbacks_.get_vperiod_ns();
-
-  auto phased_timestamp = GetPhasedVSync(period_ns, time_now);
+  auto phased_timestamp = GetPhasedVSync(vsync_period_ns_, time_now);
   struct timespec vsync {};
   vsync.tv_sec = int(phased_timestamp / kOneSecondNs);
   vsync.tv_nsec = int(phased_timestamp - (vsync.tv_sec * kOneSecondNs));
@@ -117,17 +149,17 @@ int VSyncWorker::SyntheticWaitVBlank(int64_t *timestamp) {
   return 0;
 }
 
-void VSyncWorker::ThreadFn(const std::shared_ptr<VSyncWorker> &vsw) {
+void VSyncWorker::ThreadFn() {
   int ret = 0;
 
   for (;;) {
     {
-      std::unique_lock<std::mutex> lock(vsw->mutex_);
+      std::unique_lock<std::mutex> lock(mutex_);
       if (thread_exit_)
         break;
 
       if (!enabled_)
-        vsw->cv_.wait(lock);
+        cv_.wait(lock);
 
       if (!enabled_)
         continue;
@@ -158,18 +190,21 @@ void VSyncWorker::ThreadFn(const std::shared_ptr<VSyncWorker> &vsw) {
                   (int64_t)vblank.reply.tval_usec * kUsToNsMul;
     }
 
-    decltype(callbacks_.out_event) callback;
+    std::optional<VsyncTimestampCallback> vsync_callback;
 
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       if (!enabled_)
         continue;
-      callback = callbacks_.out_event;
+      if (enable_vsync_timestamps_) {
+        last_vsync_timestamp_ = timestamp;
+      }
+      vsync_callback = callback_;
     }
 
-    if (callback)
-      callback(timestamp);
-
+    if (vsync_callback) {
+      vsync_callback.value()(timestamp, vsync_period_ns_);
+    }
     last_timestamp_ = timestamp;
   }
 
