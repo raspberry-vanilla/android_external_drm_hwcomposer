@@ -132,6 +132,12 @@ int DrmPlane::Init() {
     }
   }
 
+  if (type_ == DRM_PLANE_TYPE_CURSOR &&
+      GetPlaneProperty("SIZE_HINTS", size_hints_property_,
+                       Presence::kOptional)) {
+    size_hints_property_.GetBlobData(size_hints_);
+  }
+
   return 0;
 }
 
@@ -205,6 +211,13 @@ bool DrmPlane::IsValidForLayer(LayerData *layer) {
   if (!IsFormatSupported(format)) {
     ALOGV("Plane %d does not supports %c%c%c%c format", GetId(), format,
           format >> 8, format >> 16, format >> 24);
+    return false;
+  }
+
+  if (type_ == DRM_PLANE_TYPE_CURSOR &&
+      !IsBufferValidForCursorPlane(layer->bi.value())) {
+    ALOGV("Buffer size %dx%d is not supported by cursor plane %d",
+          layer->bi->width, layer->bi->height, GetId());
     return false;
   }
 
@@ -340,6 +353,23 @@ auto DrmPlane::GetPlaneProperty(const char *prop_name, DrmProperty &property,
   }
 
   return true;
+}
+
+bool DrmPlane::HasCursorSizeConstraints() const {
+  return drm_->GetCapCursorSize().has_value() || !size_hints_.empty();
+}
+
+bool DrmPlane::IsBufferValidForCursorPlane(const BufferInfo &bi) const {
+  if (std::find_if(size_hints_.begin(), size_hints_.end(),
+                   [&](const auto &hint) -> bool {
+                     return bi.width == hint.width && bi.height == hint.height;
+                   }) != size_hints_.end()) {
+    return true;
+  }
+
+  const auto &cap_size = drm_->GetCapCursorSize();
+  return cap_size.has_value() && bi.width == cap_size->first &&
+         bi.height == cap_size->second;
 }
 
 }  // namespace android
