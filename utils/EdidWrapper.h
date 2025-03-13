@@ -41,9 +41,9 @@ class EdidWrapper {
     types.clear();
   };
   virtual void GetHdrCapabilities(std::vector<ui::Hdr> &types,
-                                  const float * /*max_luminance*/,
-                                  const float * /*max_average_luminance*/,
-                                  const float * /*min_luminance*/) {
+                                  float * /*max_luminance*/,
+                                  float * /*max_average_luminance*/,
+                                  float * /*min_luminance*/) {
     GetSupportedHdrTypes(types);
   };
   virtual void GetColorModes(std::vector<Colormode> &color_modes) {
@@ -75,9 +75,9 @@ class LibdisplayEdidWrapper final : public EdidWrapper {
   void GetSupportedHdrTypes(std::vector<ui::Hdr> &types) override;
 
   void GetHdrCapabilities(std::vector<ui::Hdr> &types,
-                          const float *max_luminance,
-                          const float *max_average_luminance,
-                          const float *min_luminance) override;
+                          float *max_luminance,
+                          float *max_average_luminance,
+                          float *min_luminance) override;
 
   void GetColorModes(std::vector<Colormode> &color_modes) override;
 

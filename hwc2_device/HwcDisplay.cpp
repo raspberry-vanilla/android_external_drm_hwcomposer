@@ -863,25 +863,25 @@ HWC2::Error HwcDisplay::SetColorMode(int32_t mode) {
 
   switch (mode) {
     case HAL_COLOR_MODE_NATIVE:
-      hdr_metadata_.reset();
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kDefault;
       break;
     case HAL_COLOR_MODE_STANDARD_BT601_625:
     case HAL_COLOR_MODE_STANDARD_BT601_625_UNADJUSTED:
     case HAL_COLOR_MODE_STANDARD_BT601_525:
     case HAL_COLOR_MODE_STANDARD_BT601_525_UNADJUSTED:
-      hdr_metadata_.reset();
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       // The DP spec does not say whether this is the 525 or the 625 line version.
       colorspace_ = Colorspace::kBt601Ycc;
       break;
     case HAL_COLOR_MODE_STANDARD_BT709:
     case HAL_COLOR_MODE_SRGB:
-      hdr_metadata_.reset();
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kBt709Ycc;
       break;
     case HAL_COLOR_MODE_DCI_P3:
     case HAL_COLOR_MODE_DISPLAY_P3:
-      hdr_metadata_.reset();
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kDciP3RgbD65;
       break;
     case HAL_COLOR_MODE_DISPLAY_BT2020: {
