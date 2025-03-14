@@ -284,6 +284,13 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
   auto disp = opt_disp.value();
   auto src = opt_src.value();
 
+  if (type_ == DRM_PLANE_TYPE_CURSOR) {
+    disp.right = disp.left + static_cast<int>(layer.bi->width);
+    disp.bottom = disp.top + static_cast<int>(layer.bi->height);
+    src = {0, 0, static_cast<float>(layer.bi->width),
+           static_cast<float>(layer.bi->height)};
+  }
+
   if (!crtc_property_.AtomicSet(pset, crtc_id) ||
       !fb_property_.AtomicSet(pset, layer.fb->GetFbId()) ||
       !crtc_x_property_.AtomicSet(pset, disp.left) ||

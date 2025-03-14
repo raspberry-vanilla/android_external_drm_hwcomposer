@@ -50,6 +50,10 @@ class VSyncWorker {
   void SetVsyncTimestampTracking(bool enabled);
   uint32_t GetLastVsyncTimestamp();
 
+  // Get the next predicted vsync timestamp after |time|, based on the last
+  // recorded vsync timestamp and the current vsync period.
+  int64_t GetNextVsyncTimestamp(int64_t time);
+
   void StopThread();
 
  private:

@@ -336,14 +336,25 @@ auto HwcDisplay::AcceptValidatedComposition() -> void {
 }
 
 auto HwcDisplay::PresentStagedComposition(
-    SharedFd &out_present_fence, std::vector<ReleaseFence> &out_release_fences)
-    -> bool {
+    std::optional<int64_t> desired_present_time, SharedFd &out_present_fence,
+    std::vector<ReleaseFence> &out_release_fences) -> bool {
   if (IsInHeadlessMode()) {
     return true;
   }
   HWC2::Error ret{};
 
   ++total_stats_.total_frames_;
+
+  uint32_t vperiod_ns = 0;
+  GetDisplayVsyncPeriod(&vperiod_ns);
+
+  if (desired_present_time && vperiod_ns != 0) {
+    // DRM atomic uAPI does not support specifying that a commit should be
+    // applied to some future vsync. Until such uAPI is available, sleep in
+    // userspace until the next expected vsync time is consistent with the
+    // desired present time.
+    WaitForPresentTime(desired_present_time.value(), vperiod_ns);
+  }
 
   AtomicCommitArgs a_args{};
   ret = CreateComposition(a_args);
@@ -705,6 +716,39 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   return args;
 }
 
+void HwcDisplay::WaitForPresentTime(int64_t present_time,
+                                    uint32_t vsync_period_ns) {
+  const int64_t current_time = ResourceManager::GetTimeMonotonicNs();
+  int64_t next_vsync_time = vsync_worker_->GetNextVsyncTimestamp(current_time);
+
+  int64_t vsync_after_present_time = vsync_worker_->GetNextVsyncTimestamp(
+      present_time);
+  int64_t vsync_before_present_time = vsync_after_present_time -
+                                      vsync_period_ns;
+
+  // Check if |present_time| is closer to the expected vsync before or after.
+  int64_t desired_vsync = (vsync_after_present_time - present_time) <
+                                  (present_time - vsync_before_present_time)
+                              ? vsync_after_present_time
+                              : vsync_before_present_time;
+
+  // Don't sleep if desired_vsync is before or nearly equal to vsync_period of
+  // the next expected vsync.
+  const int64_t quarter_vsync_period = vsync_period_ns / 4;
+  if ((desired_vsync - next_vsync_time) < quarter_vsync_period) {
+    return;
+  }
+
+  // Sleep until 75% vsync_period before the desired_vsync.
+  int64_t sleep_until = desired_vsync - (quarter_vsync_period * 3);
+  struct timespec sleep_until_ts{};
+  constexpr int64_t kOneSecondNs = 1LL * 1000 * 1000 * 1000;
+  sleep_until_ts.tv_sec = int(sleep_until / kOneSecondNs);
+  sleep_until_ts.tv_nsec = int(sleep_until -
+                               (sleep_until_ts.tv_sec * kOneSecondNs));
+  clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep_until_ts, nullptr);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   if (IsInHeadlessMode()) {
@@ -740,10 +784,20 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   bool use_client_layer = false;
   uint32_t client_z_order = UINT32_MAX;
   std::map<uint32_t, HwcLayer *> z_map;
+  std::optional<LayerData> cursor_layer = std::nullopt;
   for (auto &[_, layer] : layers_) {
     switch (layer.GetValidatedType()) {
       case HWC2::Composition::Device:
         z_map.emplace(layer.GetZOrder(), &layer);
+        break;
+      case HWC2::Composition::Cursor:
+        if (!cursor_layer.has_value()) {
+          layer.PopulateLayerData();
+          cursor_layer = layer.GetLayerData();
+        } else {
+          ALOGW("Detected multiple cursor layers");
+          z_map.emplace(layer.GetZOrder(), &layer);
+        }
         break;
       case HWC2::Composition::Client:
         // Place it at the z_order of the lowest client layer
@@ -794,7 +848,8 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
    * in between of ValidateDisplay() and PresentDisplay() calls
    */
   current_plan_ = DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
-                                               std::move(composition_layers));
+                                               std::move(composition_layers),
+                                               cursor_layer);
 
   if (type_ == HWC2::DisplayType::Virtual) {
     writeback_layer_->PopulateLayerData();
@@ -1035,6 +1090,12 @@ std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
 
   std::sort(std::begin(ordered_layers), std::end(ordered_layers),
             [](const HwcLayer *lhs, const HwcLayer *rhs) {
+              // Cursor layers should always have highest zpos.
+              if ((lhs->GetSfType() == HWC2::Composition::Cursor) !=
+                  (rhs->GetSfType() == HWC2::Composition::Cursor)) {
+                return rhs->GetSfType() == HWC2::Composition::Cursor;
+              }
+
               return lhs->GetZOrder() < rhs->GetZOrder();
             });
 

@@ -20,8 +20,19 @@
 
 #include "BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
+#include "hardware/hwcomposer2.h"
 
 namespace android {
+
+namespace {
+
+bool HasCursorLayer(const std::vector<HwcLayer *> &layers) {
+  return std::find_if(layers.begin(), layers.end(), [&](auto *layer) -> bool {
+           return layer->GetSfType() == HWC2::Composition::Cursor;
+         }) != layers.end();
+}
+
+}  // namespace
 
 HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
                                      uint32_t *num_requests) {
@@ -62,7 +73,27 @@ HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
     ++display->total_stats().failed_kms_validate_;
     client_start = 0;
     client_size = layers.size();
-    MarkValidated(layers, 0, client_size);
+
+    // Expand the client range to include all layers except the cursor layer (if
+    // there is one) and retry.
+    auto [_, cursor_plane] = display->GetPipe().GetUsablePlanes();
+    if (cursor_plane && HasCursorLayer(layers)) {
+      --client_size;
+      MarkValidated(layers, 0, client_size);
+
+      testing_needed = display->CreateComposition(a_args) != HWC2::Error::None;
+
+      // If testing is still needed, expand the client range to include the
+      // cursor layer for the next retry.
+      if (testing_needed) {
+        ++client_size;
+        ++display->total_stats().failed_kms_validate_;
+      }
+    }
+
+    if (testing_needed) {
+      MarkValidated(layers, 0, client_size);
+    }
   }
 
   *num_types = client_size;
@@ -120,10 +151,13 @@ uint32_t Backend::CalcPixOps(const std::vector<HwcLayer *> &layers,
 void Backend::MarkValidated(std::vector<HwcLayer *> &layers,
                             size_t client_first_z, size_t client_size) {
   for (size_t z_order = 0; z_order < layers.size(); ++z_order) {
-    if (z_order >= client_first_z && z_order < client_first_z + client_size)
+    if (z_order >= client_first_z && z_order < client_first_z + client_size) {
       layers[z_order]->SetValidatedType(HWC2::Composition::Client);
-    else
+    } else if (layers[z_order]->GetSfType() == HWC2::Composition::Cursor) {
+      layers[z_order]->SetValidatedType(HWC2::Composition::Cursor);
+    } else {
       layers[z_order]->SetValidatedType(HWC2::Composition::Device);
+    }
   }
 }
 
@@ -132,31 +166,39 @@ std::tuple<int, int> Backend::GetExtraClientRange(
     int client_start, size_t client_size) {
   auto [planes, cursor_plane] = display->GetPipe().GetUsablePlanes();
   size_t avail_planes = planes.size();
+  size_t layers_size = layers.size();
+
+  // |cursor_plane| is not counted among |avail_planes|, so the cursor layer
+  // shouldn't be counted in |layers_size|.
+  if (cursor_plane && HasCursorLayer(layers)) {
+    --layers_size;
+  }
 
   /*
-   * If more layers then planes, save one plane
+   * If more layers than planes, save one plane
    * for client composited layers
    */
-  if (avail_planes < display->layers().size())
+  if (avail_planes < layers_size) {
     avail_planes--;
+  }
 
-  const int extra_client = int(layers.size() - client_size) - int(avail_planes);
+  const int extra_client = int(layers_size - client_size) - int(avail_planes);
 
   if (extra_client > 0) {
     int start = 0;
     size_t steps = 0;
     if (client_size != 0) {
       const int prepend = std::min(client_start, extra_client);
-      const int append = std::min(int(layers.size()) -
+      const int append = std::min(int(layers_size) -
                                       int(client_start + client_size),
                                   extra_client);
       start = client_start - (int)prepend;
       client_size += extra_client;
       steps = 1 + std::min(std::min(append, prepend),
-                           int(layers.size()) - int(start + client_size));
+                           int(layers_size) - int(start + client_size));
     } else {
       client_size = extra_client;
-      steps = 1 + layers.size() - extra_client;
+      steps = 1 + layers_size - extra_client;
     }
 
     uint32_t gpu_pixops = UINT32_MAX;

@@ -501,7 +501,7 @@ static int32_t PresentDisplay(hwc2_device_t *device, hwc2_display_t display,
 
   hwc2display->release_fences.clear();
 
-  if (!idisplay->PresentStagedComposition(out_fence,
+  if (!idisplay->PresentStagedComposition(std::nullopt, out_fence,
                                           hwc2display->release_fences)) {
     ALOGE("Failed to present display");
     return static_cast<int32_t>(HWC2::Error::BadDisplay);

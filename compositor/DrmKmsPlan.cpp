@@ -23,17 +23,30 @@
 #include "utils/log.h"
 
 namespace android {
-auto DrmKmsPlan::CreateDrmKmsPlan(DrmDisplayPipeline &pipe,
-                                  std::vector<LayerData> composition)
-    -> std::unique_ptr<DrmKmsPlan> {
+auto DrmKmsPlan::CreateDrmKmsPlan(
+    DrmDisplayPipeline &pipe, std::vector<LayerData> composition,
+    std::optional<LayerData> cursor_layer) -> std::unique_ptr<DrmKmsPlan> {
   auto plan = std::make_unique<DrmKmsPlan>();
 
   auto [avail_planes, cursor_plane] = pipe.GetUsablePlanes();
 
   int z_pos = 0;
+  if (cursor_layer.has_value()) {
+    if (cursor_plane &&
+        cursor_plane->Get()->IsValidForLayer(&cursor_layer.value())) {
+      plan->plan.emplace_back(
+          LayerToPlaneJoining{.layer = std::move(cursor_layer.value()),
+                              .plane = cursor_plane,
+                              .z_pos = z_pos++});
+    } else {
+      // Cursor layer can't use cursor plane, so let it match normally with
+      // others.
+      composition.push_back(std::move(cursor_layer.value()));
+    }
+  }
+
   for (auto &dhl : composition) {
     std::shared_ptr<BindingOwner<DrmPlane>> plane;
-
     /* Skip unsupported planes */
     do {
       if (avail_planes.empty()) {

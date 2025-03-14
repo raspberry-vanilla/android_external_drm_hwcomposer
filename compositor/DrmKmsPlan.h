@@ -35,8 +35,9 @@ struct DrmKmsPlan {
   std::vector<LayerToPlaneJoining> plan;
 
   static auto CreateDrmKmsPlan(DrmDisplayPipeline &pipe,
-                               std::vector<LayerData> composition)
-      -> std::unique_ptr<DrmKmsPlan>;
+                               std::vector<LayerData> composition,
+                               std::optional<LayerData> cursor_layer =
+                                   std::nullopt) -> std::unique_ptr<DrmKmsPlan>;
 };
 
 }  // namespace android

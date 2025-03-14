@@ -26,6 +26,9 @@ namespace aidl::android::hardware::graphics::composer3::impl {
 class Hwc3Display : public ::android::FrontendDisplayBase {
  public:
   bool must_validate = false;
+  // Desired present time for a composition that has been validated but not
+  // yet presented. nullopt means it should be presented at the next vsync.
+  std::optional<int64_t> desired_present_time = std::nullopt;
 
   int64_t next_layer_id = 1;
 };

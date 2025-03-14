@@ -31,6 +31,23 @@
 
 namespace android {
 
+namespace {
+
+std::optional<std::pair<uint32_t, uint32_t>> GetAlignedDimensions(
+    const ui::PlaneLayout &layout) {
+  if (layout.sampleIncrementInBits == 0 || layout.strideInBytes == 0) {
+    ALOGW("Invalid plane layout");
+    return std::nullopt;
+  }
+
+  constexpr uint32_t kBitsPerByte = 8;
+  return std::pair{layout.strideInBytes * kBitsPerByte /
+                       layout.sampleIncrementInBits,
+                   layout.totalSizeInBytes / layout.strideInBytes};
+}
+
+}  // namespace
+
 BufferInfoGetter *BufferInfoMapperMetadata::CreateInstance() {
   if (GraphicBufferMapper::getInstance().getMapperVersion() <
       GraphicBufferMapper::GRALLOC_4)
@@ -134,6 +151,25 @@ auto BufferInfoMapperMetadata::GetBoInfo(buffer_handle_t handle)
     bi.pitches[i] = layouts[i].strideInBytes;
     bi.offsets[i] = layouts[i].offsetInBytes;
     bi.sizes[i] = layouts[i].totalSizeInBytes;
+  }
+
+  uint64_t usage = 0;
+  err = mapper.getUsage(handle, &usage);
+  if (err != 0) {
+    ALOGE("Failed to get Usage err=%d", err);
+    return {};
+  }
+
+  if ((usage & GRALLOC_USAGE_CURSOR) != 0) {
+    if (layouts.size() > 1) {
+      ALOGW("Multiplanar format buffer alignment not supported");
+    } else {
+      auto aligned = GetAlignedDimensions(layouts[0]);
+      if (aligned.has_value()) {
+        bi.width = aligned->first;
+        bi.height = aligned->second;
+      }
+    }
   }
 
   err = GetFds(handle, &bi);

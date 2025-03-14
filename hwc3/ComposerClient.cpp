@@ -152,6 +152,14 @@ std::optional<BufferSampleRange> AidlToSampleRange(
   return AidlToSampleRange(dataspace->dataspace);
 }
 
+std::optional<int64_t> AidlToPresentTimeNs(
+    const std::optional<ClockMonotonicTimestamp>& expected_present_time) {
+  if (!expected_present_time || expected_present_time->timestampNanos == 0) {
+    return std::nullopt;
+  }
+  return expected_present_time->timestampNanos;
+}
+
 bool IsSupportedCompositionType(
     const std::optional<ParcelableComposition> composition) {
   if (!composition) {
@@ -725,6 +733,8 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     cmd_result_writer_->AddChanges(changes);
     auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
     hwc3_display->must_validate = false;
+    hwc3_display->desired_present_time = AidlToPresentTimeNs(
+        command.expectedPresentTime);
 
     // TODO: DisplayRequests are not implemented.
   }
@@ -749,9 +759,12 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
       cmd_result_writer_->AddError(hwc3::Error::kNotValidated);
       return;
     }
+
     ::android::SharedFd present_fence;
     std::vector<HwcDisplay::ReleaseFence> release_fences;
-    bool ret = display->PresentStagedComposition(present_fence, release_fences);
+    bool ret = display->PresentStagedComposition(hwc3_display
+                                                     ->desired_present_time,
+                                                 present_fence, release_fences);
 
     if (!ret) {
       cmd_result_writer_->AddError(hwc3::Error::kBadDisplay);

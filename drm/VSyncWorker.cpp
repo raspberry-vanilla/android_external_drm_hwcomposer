@@ -84,6 +84,11 @@ uint32_t VSyncWorker::GetLastVsyncTimestamp() {
   return last_timestamp_is_fresh_ ? last_timestamp_.value_or(0) : 0;
 }
 
+int64_t VSyncWorker::GetNextVsyncTimestamp(int64_t time) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return GetPhasedVSync(vsync_period_ns_, time);
+}
+
 void VSyncWorker::SetTimestampCallback(
     std::optional<VsyncTimestampCallback> &&callback) {
   {

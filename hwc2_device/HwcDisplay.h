@@ -97,7 +97,7 @@ class HwcDisplay {
   auto GetConfig(hwc2_config_t config_id) const -> const HwcDisplayConfig *;
 
   auto GetDisplayBoundsMm() -> std::pair<int32_t, int32_t>;
-  
+
   // To be called after SetDisplayProperties. Returns an empty vector if the
   // requested layers have been validated, otherwise the vector describes
   // the requested composition type changes.
@@ -107,11 +107,14 @@ class HwcDisplay {
   // Mark previously validated properties as ready to present.
   auto AcceptValidatedComposition() -> void;
 
+  using ReleaseFence = std::pair<ILayerId, SharedFd>;
   // Present previously staged properties, and return fences to indicate when
   // the new content has been presented, and when the previous buffers have
-  // been released.
-  using ReleaseFence = std::pair<ILayerId, SharedFd>;
-  auto PresentStagedComposition(SharedFd &out_present_fence,
+  // been released. If |desired_present_time| is set, ensure that the
+  // composition is presented at the closest vsync to that requested time.
+  // Otherwise, present immediately.
+  auto PresentStagedComposition(std::optional<int64_t> desired_present_time,
+                                SharedFd &out_present_fence,
                                 std::vector<ReleaseFence> &out_release_fences)
       -> bool;
 
@@ -253,6 +256,10 @@ class HwcDisplay {
   AtomicCommitArgs CreateModesetCommit(
       const HwcDisplayConfig *config,
       const std::optional<LayerData> &modeset_layer);
+
+  // Sleep the current thread until |present_time| is closest to the next
+  // expected vsync time.
+  void WaitForPresentTime(int64_t present_time, uint32_t vsync_period_ns);
 
   HwcDisplayConfigs configs_;
 
