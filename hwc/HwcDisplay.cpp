@@ -531,6 +531,7 @@ auto HwcDisplay::GetPort() const -> uint8_t {
     return 0;
   }
 
+  /*
   auto *connector = GetPipe().connector->Get();
 
   constexpr uint8_t kDrmDeviceBitShift = 5U;
@@ -542,6 +543,8 @@ auto HwcDisplay::GetPort() const -> uint8_t {
       connector->GetIndexInResArray());
   return (((kDrmIdx << kDrmDeviceBitShift) & kDrmDeviceBitMask) |
           (kConnectorIdx & kConnectorBitMask));
+  */
+  return handle_; /* TODO: What should be here? */
 }
 
 auto HwcDisplay::GetDisplayType() -> DisplayType {
