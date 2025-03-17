@@ -1263,21 +1263,12 @@ HWC2::Error HwcDisplay::GetDisplayIdentificationData(uint8_t *outPort,
     return HWC2::Error::Unsupported;
   }
 
-  auto *connector = GetPipe().connector->Get();
-  auto blob = connector->GetEdidBlob();
+  auto blob = GetPipe().connector->Get()->GetEdidBlob();
   if (!blob) {
     return HWC2::Error::Unsupported;
   }
 
-  constexpr uint8_t kDrmDeviceBitShift = 5U;
-  constexpr uint8_t kDrmDeviceBitMask = 0xE0;
-  constexpr uint8_t kConnectorBitMask = 0x1F;
-  const auto kDrmIdx = static_cast<uint8_t>(
-      connector->GetDev().GetIndexInDevArray());
-  const auto kConnectorIdx = static_cast<uint8_t>(
-      connector->GetIndexInResArray());
-  *outPort = (((kDrmIdx << kDrmDeviceBitShift) & kDrmDeviceBitMask) |
-              (kConnectorIdx & kConnectorBitMask));
+  *outPort = handle_; /* TDOD(nobody): What should be here? */
 
   if (outData) {
     *outDataSize = std::min(*outDataSize, blob->length);
