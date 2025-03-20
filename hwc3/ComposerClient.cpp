@@ -196,12 +196,6 @@ hwc3::Error ValidateColorTransformMatrix(
     return hwc3::Error::kBadParameter;
   }
 
-  // Without HW support, we cannot correctly process matrices with an offset.
-  constexpr int kOffsetIndex = kCtmColumns * 3;
-  for (int i = kOffsetIndex; i < kOffsetIndex + 3; i++) {
-    if (color_transform_matrix.value()[i] != 0.F)
-      return hwc3::Error::kUnsupported;
-  }
   return hwc3::Error::kNone;
 }
 

@@ -48,6 +48,11 @@ constexpr std::array<float, 16> kIdentityMatrix = {
     0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
 };
 
+bool float_equals(float a, float b) {
+  const float epsilon = 0.001F;
+  return std::abs(a - b) < epsilon;
+}
+
 uint64_t To3132FixPt(float in) {
   constexpr uint64_t kSignMask = (1ULL << 63);
   constexpr uint64_t kValueMask = ~(1ULL << 63);
@@ -55,6 +60,16 @@ uint64_t To3132FixPt(float in) {
   if (in < 0)
     return (static_cast<uint64_t>(-in * kValueScale) & kValueMask) | kSignMask;
   return static_cast<uint64_t>(in * kValueScale) & kValueMask;
+}
+
+bool TransformHasOffsetValue(const float *matrix) {
+  for (int i = 12; i < 14; i++) {
+    if (!float_equals(matrix[i], 0.F)) {
+      ALOGW("DRM API does not support CTM with offsets.");
+      return true;
+    }
+  }
+  return false;
 }
 
 auto ToColorTransform(const std::array<float, 16> &color_transform_matrix) {
@@ -134,35 +149,31 @@ HwcDisplay::HwcDisplay(hwc2_display_t handle, HWC2::DisplayType type,
   if (type_ == HWC2::DisplayType::Virtual) {
     writeback_layer_ = std::make_unique<HwcLayer>(this);
   }
+
+  identity_color_matrix_ = ToColorTransform(kIdentityMatrix);
 }
 
 void HwcDisplay::SetColorTransformMatrix(
     const std::array<float, 16> &color_transform_matrix) {
-  auto almost_equal = [](auto a, auto b) {
-    const float epsilon = 0.001F;
-    return std::abs(a - b) < epsilon;
-  };
   const bool is_identity = std::equal(color_transform_matrix.begin(),
                                       color_transform_matrix.end(),
-                                      kIdentityMatrix.begin(), almost_equal);
+                                      kIdentityMatrix.begin(), float_equals);
   color_transform_hint_ = is_identity ? HAL_COLOR_TRANSFORM_IDENTITY
                                       : HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX;
+  ctm_has_offset_ = false;
+
   if (color_transform_hint_ == is_identity) {
     SetColorMatrixToIdentity();
   } else {
+    if (TransformHasOffsetValue(color_transform_matrix.data()))
+      ctm_has_offset_ = true;
+
     color_matrix_ = ToColorTransform(color_transform_matrix);
   }
 }
 
 void HwcDisplay::SetColorMatrixToIdentity() {
-  color_matrix_ = std::make_shared<drm_color_ctm>();
-  for (int i = 0; i < kCtmCols; i++) {
-    for (int j = 0; j < kCtmRows; j++) {
-      constexpr uint64_t kOne = (1ULL << 32); /* 1.0 in s31.32 format */
-      color_matrix_->matrix[(i * kCtmRows) + j] = (i == j) ? kOne : 0;
-    }
-  }
-
+  color_matrix_ = identity_color_matrix_;
   color_transform_hint_ = HAL_COLOR_TRANSFORM_IDENTITY;
 }
 
@@ -781,6 +792,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   }
 
   // order the layers by z-order
+  size_t client_layer_count = 0;
   bool use_client_layer = false;
   uint32_t client_z_order = UINT32_MAX;
   std::map<uint32_t, HwcLayer *> z_map;
@@ -802,12 +814,20 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
       case HWC2::Composition::Client:
         // Place it at the z_order of the lowest client layer
         use_client_layer = true;
+        client_layer_count++;
         client_z_order = std::min(client_z_order, layer.GetZOrder());
         break;
       default:
         continue;
     }
   }
+
+  // CTM will be applied by the client, don't apply DRM CTM
+  if (client_layer_count == layers_.size())
+   a_args.color_matrix = identity_color_matrix_;
+  else
+    a_args.color_matrix = color_matrix_;
+
   if (use_client_layer) {
     z_map.emplace(client_z_order, &client_layer_);
 
@@ -971,6 +991,7 @@ HWC2::Error HwcDisplay::SetColorTransform(const float *matrix, int32_t hint) {
     return HWC2::Error::BadParameter;
 
   color_transform_hint_ = static_cast<android_color_transform_t>(hint);
+  ctm_has_offset_ = false;
 
   if (IsInHeadlessMode())
     return HWC2::Error::None;
@@ -985,10 +1006,9 @@ HWC2::Error HwcDisplay::SetColorTransform(const float *matrix, int32_t hint) {
     case HAL_COLOR_TRANSFORM_ARBITRARY_MATRIX:
       // Without HW support, we cannot correctly process matrices with an offset.
       {
-        for (int i = 12; i < 14; i++) {
-          if (matrix[i] != 0.F)
-            return HWC2::Error::Unsupported;
-        }
+        if (TransformHasOffsetValue(matrix))
+          ctm_has_offset_ = true;
+
         std::array<float, 16> aidl_matrix = kIdentityMatrix;
         memcpy(aidl_matrix.data(), matrix, aidl_matrix.size() * sizeof(float));
         color_matrix_ = ToColorTransform(aidl_matrix);
@@ -1005,7 +1025,7 @@ bool HwcDisplay::CtmByGpu() {
   if (color_transform_hint_ == HAL_COLOR_TRANSFORM_IDENTITY)
     return false;
 
-  if (GetPipe().crtc->Get()->GetCtmProperty())
+  if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
     return false;
 
   if (GetHwc()->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
@@ -1276,11 +1296,6 @@ HWC2::Error HwcDisplay::GetDisplayCapabilities(uint32_t *outNumCapabilities,
 
   // Skip client CTM if user requested DRM_OR_IGNORE
   if (GetHwc()->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
-    skip_ctm = true;
-
-  // Skip client CTM if DRM can handle it
-  if (!skip_ctm && !IsInHeadlessMode() &&
-      GetPipe().crtc->Get()->GetCtmProperty())
     skip_ctm = true;
 
   if (!skip_ctm) {
