@@ -1196,7 +1196,21 @@ HWC2::Error HwcDisplay::GetDisplayConnectionType(uint32_t *outType) {
   /* Primary display should be always internal,
    * otherwise SF will be unhappy and will crash
    */
-  if (GetPipe().connector->Get()->IsInternal() || handle_ == kPrimaryDisplay)
+  auto displays = GetHwc()->GetResMan().GetInternalDisplayNames();
+  if (handle_ == kPrimaryDisplay) {
+    *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
+    return HWC2::Error::None;
+  }
+  if (!displays.empty()) {
+    std::string name = GetPipe().connector->Get()->GetName();
+    const bool is_internal = (displays.find(name) != displays.end());
+    if (is_internal)
+      *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
+    else
+      *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::External);
+    return HWC2::Error::None;
+  }
+  if (GetPipe().connector->Get()->IsInternal())
     *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
   else if (GetPipe().connector->Get()->IsExternal())
     *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::External);

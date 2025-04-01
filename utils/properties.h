@@ -74,10 +74,13 @@ auto inline property_get_bool(const char *key, int8_t default_value) -> int8_t {
 
 #endif
 
+#include <string>
+
 class Properties {
  public:
   static auto IsPresentFenceNotReliable() -> bool;
   static auto UseConfigGroups() -> bool;
+  static auto InternalDisplayNames() -> std::string;
   static auto UseOverlayPlanes() -> bool;
   static auto ScaleWithGpu() -> bool;
   static auto EnableVirtualDisplay() -> bool;

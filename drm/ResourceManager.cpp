@@ -18,6 +18,7 @@
 
 #include "ResourceManager.h"
 
+#include <android-base/strings.h>
 #include <sys/stat.h>
 
 #include <ctime>
@@ -76,6 +77,10 @@ void ResourceManager::Init() {
     }
   }
 
+  auto display_str = Properties::InternalDisplayNames();
+  auto display_names = base::Tokenize(display_str, ",");
+  displays_.insert(display_names.begin(), display_names.end());
+
   scale_with_gpu_ = Properties::ScaleWithGpu();
 
   char proptext[PROPERTY_VALUE_MAX];
@@ -118,6 +123,10 @@ void ResourceManager::DeInit() {
   drms_.clear();
 
   initialized_ = false;
+}
+
+const std::set<std::string>& ResourceManager::GetInternalDisplayNames() {
+  return displays_;
 }
 
 auto ResourceManager::GetTimeMonotonicNs() -> int64_t {

@@ -18,6 +18,7 @@
 
 #include <cstring>
 #include <mutex>
+#include <set>
 
 #include "DrmDevice.h"
 #include "DrmDisplayPipeline.h"
@@ -70,6 +71,7 @@ class ResourceManager {
 
   auto GetVirtualDisplayPipeline() -> std::shared_ptr<DrmDisplayPipeline>;
   auto GetWritebackConnectorsCount() -> uint32_t;
+  auto GetInternalDisplayNames() -> const std::set<std::string>&;
 
   static auto GetTimeMonotonicNs() -> int64_t;
 
@@ -79,6 +81,7 @@ class ResourceManager {
   void DetachAllFrontendDisplays();
 
   std::vector<std::unique_ptr<DrmDevice>> drms_;
+  std::set<std::string> displays_;
 
   // Android properties:
   bool scale_with_gpu_{};
