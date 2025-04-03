@@ -30,6 +30,16 @@
 
 namespace android {
 
+namespace {
+// Ensure that |src| does not exceed the bounds of the buffer.
+void ClipSourceCrop(SrcRectInfo::FRect &src, const BufferInfo &buffer_info) {
+  src.left = std::max(src.left, 0.F);
+  src.top = std::max(src.top, 0.F);
+  src.right = std::min(src.right, static_cast<float>(buffer_info.width));
+  src.bottom = std::min(src.bottom, static_cast<float>(buffer_info.height));
+}
+}  // namespace
+
 auto DrmPlane::CreateInstance(DrmDevice &dev, uint32_t plane_id)
     -> std::unique_ptr<DrmPlane> {
   auto p = MakeDrmModePlaneUnique(*dev.GetFd(), plane_id);
@@ -290,6 +300,10 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
     src = {0, 0, static_cast<float>(layer.bi->width),
            static_cast<float>(layer.bi->height)};
   }
+
+  // Clip the source crop rect to ensure it does not exceed the bounds of the
+  // framebuffer.
+  ClipSourceCrop(src, *layer.bi);
 
   if (!crtc_property_.AtomicSet(pset, crtc_id) ||
       !fb_property_.AtomicSet(pset, layer.fb->GetFbId()) ||
