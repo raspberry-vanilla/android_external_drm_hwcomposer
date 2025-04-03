@@ -34,7 +34,7 @@ void DrmHwc::FinalizeDisplayBinding() {
     /* Primary display MUST always exist */
     ALOGI("No pipelines available. Creating null-display for headless mode");
     displays_[kPrimaryDisplay] = std::make_unique<
-        HwcDisplay>(kPrimaryDisplay, HWC2::DisplayType::Physical, this);
+        HwcDisplay>(kPrimaryDisplay, /* is_virtual */ false, this);
     /* Initializes null-display */
     displays_[kPrimaryDisplay]->SetPipeline({});
   }
@@ -83,7 +83,7 @@ bool DrmHwc::BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
 
   if (displays_.count(disp_handle) == 0) {
     auto disp = std::make_unique<HwcDisplay>(disp_handle,
-                                             HWC2::DisplayType::Physical, this);
+                                             /* is_virtual */ false, this);
     displays_[disp_handle] = std::move(disp);
   }
 
@@ -146,7 +146,7 @@ HWC2::Error DrmHwc::CreateVirtualDisplay(
     return HWC2::Error::Unsupported;
 
   *display = ++last_display_handle_;
-  auto disp = std::make_unique<HwcDisplay>(*display, HWC2::DisplayType::Virtual,
+  auto disp = std::make_unique<HwcDisplay>(*display, /* is_virtual */ true,
                                            this);
 
   disp->SetVirtualDisplayResolution(width, height);

@@ -73,18 +73,6 @@ inline hwc2_config_t Hwc3ConfigIdToHwc2(int32_t config_id) {
   return static_cast<hwc2_config_t>(config_id);
 }
 
-// Values match up to HWC2_COMPOSITION_SIDEBAND, with HWC2 not supporting
-// newer values. static_cast in between shared values.
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/Composition.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/libhardware/include_all/hardware/hwcomposer2.h;drc=d783cabd4d9bddb4b83f2dd38300b7598bb58b24;l=826
-inline Composition Hwc2CompositionTypeToHwc3(int32_t composition_type) {
-  if (composition_type < HWC2_COMPOSITION_INVALID ||
-      composition_type > HWC2_COMPOSITION_SIDEBAND) {
-    return Composition::INVALID;
-  }
-  return static_cast<Composition>(composition_type);
-}
-
 // Values for color modes match across HWC versions, so static cast is safe:
 // https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/ColorMode.aidl
 // https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.0.h;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2;l=118
@@ -95,31 +83,6 @@ inline ColorMode Hwc2ColorModeToHwc3(int32_t color_mode) {
 
 inline int32_t Hwc3ColorModeToHwc2(ColorMode color_mode) {
   return static_cast<int32_t>(color_mode);
-}
-
-// Capabilities match up to DisplayCapability::AUTO_LOW_LATENCY_MODE, with hwc2
-// not defining capabilities beyond that.
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/DisplayCapability.aidl#28
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/libhardware/include_all/hardware/hwcomposer2.h;drc=1a0e4a1698c7b080d6763cef9e16592bce75967e;l=418
-inline DisplayCapability Hwc2DisplayCapabilityToHwc3(
-    uint32_t display_capability) {
-  if (display_capability > HWC2_DISPLAY_CAPABILITY_AUTO_LOW_LATENCY_MODE) {
-    return DisplayCapability::INVALID;
-  }
-  return static_cast<DisplayCapability>(display_capability);
-}
-
-// Values match between hwc versions, so static cast is safe.
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/DisplayConnectionType.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/libhardware/include_all/hardware/hwcomposer2.h;l=216;drc=d783cabd4d9bddb4b83f2dd38300b7598bb58b24;bpv=0;bpt=1
-inline DisplayConnectionType Hwc2DisplayConnectionTypeToHwc3(uint32_t type) {
-  if (type > HWC2_DISPLAY_CONNECTION_TYPE_EXTERNAL) {
-    // Arbitrarily return EXTERNAL in this case, which shouldn't happen.
-    // TODO: This will be cleaned up once hwc2<->hwc3 conversion is removed.
-    ALOGE("Unknown HWC2 connection type. Could not translate: %d", type);
-    return DisplayConnectionType::EXTERNAL;
-  }
-  return static_cast<DisplayConnectionType>(type);
 }
 
 // Values match, so static_cast is safe.
@@ -135,17 +98,6 @@ inline RenderIntent Hwc2RenderIntentToHwc3(int32_t intent) {
 }
 inline int32_t Hwc3RenderIntentToHwc2(RenderIntent render_intent) {
   return static_cast<int32_t>(render_intent);
-}
-
-// Values match up to DOZE_SUSPEND.
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/PowerMode.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/libhardware/include_all/hardware/hwcomposer2.h;l=348;drc=d783cabd4d9bddb4b83f2dd38300b7598bb58b24
-inline int32_t Hwc3PowerModeToHwc2(PowerMode power_mode) {
-  if (power_mode > PowerMode::DOZE_SUSPEND) {
-    ALOGE("Unsupported HWC2 power mode. Could not translate: %d", power_mode);
-    return HWC2_POWER_MODE_ON;
-  }
-  return static_cast<int32_t>(power_mode);
 }
 
 // Values appear to match.

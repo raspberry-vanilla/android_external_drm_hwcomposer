@@ -911,28 +911,14 @@ ndk::ScopedAStatus ComposerClient::getDisplayCapabilities(
     int64_t display_id, std::vector<DisplayCapability>* caps) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
-  HwcDisplay* display = GetDisplay(display_id);
-  if (display == nullptr) {
+  if (GetDisplay(display_id) == nullptr) {
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint32_t num_capabilities = 0;
-  hwc3::Error error = Hwc2toHwc3Error(
-      display->GetDisplayCapabilities(&num_capabilities, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  std::vector<uint32_t> out_caps(num_capabilities);
-  error = Hwc2toHwc3Error(
-      display->GetDisplayCapabilities(&num_capabilities, out_caps.data()));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  caps->reserve(num_capabilities);
-  for (const auto cap : out_caps) {
-    caps->emplace_back(Hwc2DisplayCapabilityToHwc3(cap));
+  // Skip color transform altogether if device/drm cannot support it.
+  if (hwc_->GetResMan().GetCtmHandling() ==
+      ::android::CtmHandling::kDrmOrIgnore) {
+    caps->emplace_back(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
   }
   return ndk::ScopedAStatus::ok();
 }
@@ -962,14 +948,16 @@ ndk::ScopedAStatus ComposerClient::getDisplayConnectionType(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint32_t out_type = 0;
-  const hwc3::Error error = Hwc2toHwc3Error(
-      display->GetDisplayConnectionType(&out_type));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
+  switch (display->GetDisplayType()) {
+    case HwcDisplay::DisplayType::kVirtual:
+      return ToBinderStatus(hwc3::Error::kBadDisplay);
+    case HwcDisplay::DisplayType::kInternal:
+      *type = DisplayConnectionType::INTERNAL;
+      break;
+    case HwcDisplay::DisplayType::kExternal:
+      *type = DisplayConnectionType::EXTERNAL;
+      break;
   }
-
-  *type = Hwc2DisplayConnectionTypeToHwc3(out_type);
   return ndk::ScopedAStatus::ok();
 }
 
@@ -982,23 +970,11 @@ ndk::ScopedAStatus ComposerClient::getDisplayIdentificationData(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint8_t port = 0;
-  uint32_t data_size = 0;
-  hwc3::Error error = Hwc2toHwc3Error(
-      display->GetDisplayIdentificationData(&port, &data_size, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
+  id->port = static_cast<int8_t>(display->GetPort());
+  id->data = display->GetRawEdid();
+  if (id->data.empty()) {
+    return ToBinderStatus(hwc3::Error::kUnsupported);
   }
-
-  id->data.resize(data_size);
-  error = Hwc2toHwc3Error(
-      display->GetDisplayIdentificationData(&port, &data_size,
-                                            id->data.data()));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  id->port = static_cast<int8_t>(port);
   return ndk::ScopedAStatus::ok();
 }
 
@@ -1380,12 +1356,24 @@ ndk::ScopedAStatus ComposerClient::setPowerMode(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  if (mode == PowerMode::ON_SUSPEND) {
-    return ToBinderStatus(hwc3::Error::kUnsupported);
+  // Only OFF and ON are supported. VTS requires checking for invalid enum
+  // values.
+  switch (static_cast<int32_t>(mode)) {
+    case static_cast<int32_t>(PowerMode::OFF):
+    case static_cast<int32_t>(PowerMode::ON):
+      break;
+    case static_cast<int32_t>(PowerMode::DOZE):
+    case static_cast<int32_t>(PowerMode::DOZE_SUSPEND):
+    case static_cast<int32_t>(PowerMode::ON_SUSPEND):
+      return ToBinderStatus(hwc3::Error::kUnsupported);
+    default:
+      return ToBinderStatus(hwc3::Error::kBadParameter);
   }
 
-  auto error = display->SetPowerMode(Hwc3PowerModeToHwc2(mode));
-  return ToBinderStatus(Hwc2toHwc3Error(error));
+  if (!display->SetDisplayEnabled(mode == PowerMode::ON)) {
+    return ToBinderStatus(hwc3::Error::kBadParameter);
+  }
+  return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
@@ -1404,8 +1392,8 @@ ndk::ScopedAStatus ComposerClient::setVsyncEnabled(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  auto error = display->SetVsyncEnabled(static_cast<int32_t>(enabled));
-  return ToBinderStatus(Hwc2toHwc3Error(error));
+  display->SetVsyncCallbacksEnabled(enabled);
+  return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::setIdleTimerEnabled(int64_t /*display_id*/,

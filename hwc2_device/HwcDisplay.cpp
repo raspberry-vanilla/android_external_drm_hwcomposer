@@ -143,10 +143,9 @@ std::string HwcDisplay::Dump() {
   return ss.str();
 }
 
-HwcDisplay::HwcDisplay(hwc2_display_t handle, HWC2::DisplayType type,
-                       DrmHwc *hwc)
-    : hwc_(hwc), handle_(handle), type_(type), client_layer_(this) {
-  if (type_ == HWC2::DisplayType::Virtual) {
+HwcDisplay::HwcDisplay(hwc2_display_t handle, bool is_virtual, DrmHwc *hwc)
+    : hwc_(hwc), handle_(handle), is_virtual_(is_virtual), client_layer_(this) {
+  if (is_virtual_) {
     writeback_layer_ = std::make_unique<HwcLayer>(this);
   }
 
@@ -359,9 +358,7 @@ auto HwcDisplay::PresentStagedComposition(
 
   ++total_stats_.total_frames_;
 
-  uint32_t vperiod_ns = 0;
-  GetDisplayVsyncPeriod(&vperiod_ns);
-
+  uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
     // DRM atomic uAPI does not support specifying that a commit should be
     // applied to some future vsync. Until such uAPI is available, sleep in
@@ -401,6 +398,112 @@ auto HwcDisplay::PresentStagedComposition(
   }
 
   return true;
+}
+
+auto HwcDisplay::GetRawEdid() -> std::vector<uint8_t> {
+  if (IsInHeadlessMode()) {
+    return {};
+  }
+
+  auto *connector = GetPipe().connector->Get();
+  auto blob = connector->GetEdidBlob();
+  if (!blob || blob->length == 0) {
+    return {};
+  }
+  const uint8_t *edid_data = static_cast<uint8_t *>(blob->data);
+  return {edid_data, edid_data + blob->length};
+}
+
+auto HwcDisplay::GetPort() -> uint8_t {
+  if (IsInHeadlessMode()) {
+    return 0;
+  }
+
+  auto *connector = GetPipe().connector->Get();
+
+  constexpr uint8_t kDrmDeviceBitShift = 5U;
+  constexpr uint8_t kDrmDeviceBitMask = 0xE0;
+  constexpr uint8_t kConnectorBitMask = 0x1F;
+  const auto kDrmIdx = static_cast<uint8_t>(
+      connector->GetDev().GetIndexInDevArray());
+  const auto kConnectorIdx = static_cast<uint8_t>(
+      connector->GetIndexInResArray());
+  return (((kDrmIdx << kDrmDeviceBitShift) & kDrmDeviceBitMask) |
+          (kConnectorIdx & kConnectorBitMask));
+}
+
+auto HwcDisplay::GetDisplayType() -> DisplayType {
+  if (is_virtual_) {
+    return kVirtual;
+  }
+
+  if (IsInHeadlessMode()) {
+    return kInternal;
+  }
+
+  /* Primary display should be always internal,
+   * otherwise SF will be unhappy and will crash
+   */
+  if (handle_ == kPrimaryDisplay) {
+    return kInternal;
+  }
+
+  auto displays = GetHwc()->GetResMan().GetInternalDisplayNames();
+  if (!displays.empty()) {
+    std::string name = GetPipe().connector->Get()->GetName();
+    const bool is_internal = (displays.find(name) != displays.end());
+    return is_internal ? kInternal : kExternal;
+  }
+
+  if (GetPipe().connector->Get()->IsInternal())
+    return kInternal;
+
+  ALOGW_IF(!GetPipe().connector->Get()->IsExternal(),
+           "Connector type is neither internal nor external.");
+  return kExternal;
+}
+
+void HwcDisplay::SetVsyncCallbacksEnabled(bool enabled) {
+  // Enabling vsync callbacks for a virtual display succeeds with no effect.
+  if (!vsync_worker_) {
+    ALOGE_IF(!is_virtual_, "Invalid VSyncWorker. Did HwcDisplay::Init fail?");
+    return;
+  }
+
+  vsync_event_en_ = enabled;
+  std::optional<VSyncWorker::VsyncTimestampCallback> callback = std::nullopt;
+  if (vsync_event_en_) {
+    DrmHwc *hwc = hwc_;
+    hwc2_display_t id = handle_;
+    // Callback will be called from the vsync thread.
+    callback = [hwc, id](int64_t timestamp, uint32_t period_ns) {
+      hwc->SendVsyncEventToClient(id, timestamp, period_ns);
+    };
+  }
+  vsync_worker_->SetTimestampCallback(std::move(callback));
+}
+
+bool HwcDisplay::SetDisplayEnabled(bool enabled) {
+  if (IsInHeadlessMode()) {
+    return true;
+  }
+  if (enabled) {
+    /*
+     * Setting the display to active before we have a composition
+     * can break some drivers, so skip setting a_args.active to
+     * true, as the next composition frame will implicitly activate
+     * the display
+     */
+    return GetPipe().atomic_state_manager->ActivateDisplayUsingDPMS() == 0;
+  };
+
+  // Disable the display.
+  AtomicCommitArgs a_args{};
+  a_args.active = false;
+
+  auto err = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
+  ALOGE_IF(err != 0, "Failed to apply the dpms composition err=%d", err);
+  return err == 0;
 }
 
 void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -444,7 +547,7 @@ void HwcDisplay::Deinit() {
 HWC2::Error HwcDisplay::Init() {
   ChosePreferredConfig();
 
-  if (type_ != HWC2::DisplayType::Virtual) {
+  if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
     if (!vsync_worker_) {
       ALOGE("Failed to create event worker for d=%d\n", int(handle_));
@@ -491,7 +594,7 @@ std::optional<PanelOrientation> HwcDisplay::getDisplayPhysicalOrientation() {
 
 HWC2::Error HwcDisplay::ChosePreferredConfig() {
   HWC2::Error err{};
-  if (type_ == HWC2::DisplayType::Virtual) {
+  if (is_virtual_) {
     configs_.GenFakeMode(virtual_disp_width_, virtual_disp_height_);
   } else if (!IsInHeadlessMode()) {
     err = configs_.Update(*pipeline_->connector->Get());
@@ -517,16 +620,6 @@ auto HwcDisplay::CreateLayer(ILayerId new_layer_id) -> bool {
 auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
   auto count = layers_.erase(layer_id);
   return count != 0;
-}
-
-HWC2::Error HwcDisplay::GetActiveConfig(hwc2_config_t *config) const {
-  // If a config has been queued, it is considered the "active" config.
-  const HwcDisplayConfig *hwc_config = GetLastRequestedConfig();
-  if (hwc_config == nullptr)
-    return HWC2::Error::BadConfig;
-
-  *config = hwc_config->id;
-  return HWC2::Error::None;
 }
 
 HWC2::Error HwcDisplay::GetColorModes(uint32_t *num_modes, int32_t *modes) {
@@ -659,11 +752,6 @@ HWC2::Error HwcDisplay::GetDisplayName(uint32_t *size, char *name) {
   return HWC2::Error::None;
 }
 
-HWC2::Error HwcDisplay::GetDisplayType(int32_t *type) {
-  *type = static_cast<int32_t>(type_);
-  return HWC2::Error::None;
-}
-
 HWC2::Error HwcDisplay::GetHdrCapabilities(uint32_t *num_types, int32_t *types,
                                            float *max_luminance,
                                            float *max_average_luminance,
@@ -763,6 +851,14 @@ void HwcDisplay::WaitForPresentTime(int64_t present_time,
   clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep_until_ts, nullptr);
 }
 
+uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
+  const HwcDisplayConfig *config = GetCurrentConfig();
+  if (config == nullptr) {
+    return 0;
+  }
+  return config->mode.GetVSyncPeriodNs();
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   if (IsInHeadlessMode()) {
@@ -775,9 +871,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   a_args.colorspace = colorspace_;
   a_args.hdr_metadata = hdr_metadata_;
 
-  uint32_t prev_vperiod_ns = 0;
-  GetDisplayVsyncPeriod(&prev_vperiod_ns);
-
+  uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
   std::optional<uint32_t> new_vsync_period_ns;
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
@@ -874,7 +968,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                                                std::move(composition_layers),
                                                cursor_layer);
 
-  if (type_ == HWC2::DisplayType::Virtual) {
+  if (is_virtual_) {
     writeback_layer_->PopulateLayerData();
     if (!writeback_layer_->IsLayerUsableAsDevice()) {
       ALOGE("Output layer must be always usable by DRM/KMS");
@@ -1037,72 +1131,6 @@ bool HwcDisplay::CtmByGpu() {
   return true;
 }
 
-HWC2::Error HwcDisplay::SetPowerMode(int32_t mode_in) {
-  auto mode = static_cast<HWC2::PowerMode>(mode_in);
-
-  AtomicCommitArgs a_args{};
-
-  switch (mode) {
-    case HWC2::PowerMode::Off:
-      a_args.active = false;
-      break;
-    case HWC2::PowerMode::On:
-      a_args.active = true;
-      break;
-    case HWC2::PowerMode::Doze:
-    case HWC2::PowerMode::DozeSuspend:
-      return HWC2::Error::Unsupported;
-    default:
-      ALOGE("Incorrect power mode value (%d)\n", mode_in);
-      return HWC2::Error::BadParameter;
-  }
-
-  if (IsInHeadlessMode()) {
-    return HWC2::Error::None;
-  }
-
-  if (a_args.active && *a_args.active) {
-    /*
-     * Setting the display to active before we have a composition
-     * can break some drivers, so skip setting a_args.active to
-     * true, as the next composition frame will implicitly activate
-     * the display
-     */
-    return GetPipe().atomic_state_manager->ActivateDisplayUsingDPMS() == 0
-               ? HWC2::Error::None
-               : HWC2::Error::BadParameter;
-  };
-
-  auto err = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-  if (err) {
-    ALOGE("Failed to apply the dpms composition err=%d", err);
-    return HWC2::Error::BadParameter;
-  }
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetVsyncEnabled(int32_t enabled) {
-  if (type_ == HWC2::DisplayType::Virtual) {
-    return HWC2::Error::None;
-  }
-  if (!vsync_worker_) {
-    return HWC2::Error::NoResources;
-  }
-
-  vsync_event_en_ = HWC2_VSYNC_ENABLE == enabled;
-  std::optional<VSyncWorker::VsyncTimestampCallback> callback = std::nullopt;
-  if (vsync_event_en_) {
-    DrmHwc *hwc = hwc_;
-    hwc2_display_t id = handle_;
-    // Callback will be called from the vsync thread.
-    callback = [hwc, id](int64_t timestamp, uint32_t period_ns) {
-      hwc->SendVsyncEventToClient(id, timestamp, period_ns);
-    };
-  }
-  vsync_worker_->SetTimestampCallback(std::move(callback));
-  return HWC2::Error::None;
-}
-
 std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
   std::vector<HwcLayer *> ordered_layers;
   ordered_layers.reserve(layers_.size());
@@ -1123,13 +1151,6 @@ std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
             });
 
   return ordered_layers;
-}
-
-HWC2::Error HwcDisplay::GetDisplayVsyncPeriod(
-    uint32_t *outVsyncPeriod /* ns */) {
-  return GetDisplayAttribute(configs_.active_config_id,
-                             HWC2_ATTRIBUTE_VSYNC_PERIOD,
-                             (int32_t *)(outVsyncPeriod));
 }
 
 // Display primary values are coded as unsigned 16-bit values in units of
@@ -1186,149 +1207,6 @@ HWC2::Error HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
 
   return HWC2::Error::None;
 }
-
-#if __ANDROID_API__ > 29
-HWC2::Error HwcDisplay::GetDisplayConnectionType(uint32_t *outType) {
-  if (IsInHeadlessMode()) {
-    *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
-    return HWC2::Error::None;
-  }
-  /* Primary display should be always internal,
-   * otherwise SF will be unhappy and will crash
-   */
-  auto displays = GetHwc()->GetResMan().GetInternalDisplayNames();
-  if (handle_ == kPrimaryDisplay) {
-    *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
-    return HWC2::Error::None;
-  }
-  if (!displays.empty()) {
-    std::string name = GetPipe().connector->Get()->GetName();
-    const bool is_internal = (displays.find(name) != displays.end());
-    if (is_internal)
-      *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
-    else
-      *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::External);
-    return HWC2::Error::None;
-  }
-  if (GetPipe().connector->Get()->IsInternal())
-    *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::Internal);
-  else if (GetPipe().connector->Get()->IsExternal())
-    *outType = static_cast<uint32_t>(HWC2::DisplayConnectionType::External);
-  else
-    return HWC2::Error::BadConfig;
-
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetActiveConfigWithConstraints(
-    hwc2_config_t config,
-    hwc_vsync_period_change_constraints_t *vsyncPeriodChangeConstraints,
-    hwc_vsync_period_change_timeline_t *outTimeline) {
-  if (type_ == HWC2::DisplayType::Virtual) {
-    return HWC2::Error::None;
-  }
-
-  if (vsyncPeriodChangeConstraints == nullptr || outTimeline == nullptr) {
-    return HWC2::Error::BadParameter;
-  }
-
-  uint32_t current_vsync_period{};
-  GetDisplayVsyncPeriod(&current_vsync_period);
-
-  if (vsyncPeriodChangeConstraints->seamlessRequired) {
-    return HWC2::Error::SeamlessNotAllowed;
-  }
-
-  outTimeline->refreshTimeNanos = vsyncPeriodChangeConstraints
-                                      ->desiredTimeNanos -
-                                  current_vsync_period;
-  auto ret = SetActiveConfigInternal(config, outTimeline->refreshTimeNanos);
-  if (ret != HWC2::Error::None) {
-    return ret;
-  }
-
-  outTimeline->refreshRequired = true;
-  outTimeline->newVsyncAppliedTimeNanos = vsyncPeriodChangeConstraints
-                                              ->desiredTimeNanos;
-
-  vsync_worker_->SetVsyncTimestampTracking(true);
-
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetContentType(int32_t contentType) {
-  /* Maps exactly to the content_type DRM connector property:
-   * https://elixir.bootlin.com/linux/v6.11/source/include/uapi/drm/drm_mode.h#L107
-   */
-  if (contentType < HWC2_CONTENT_TYPE_NONE || contentType > HWC2_CONTENT_TYPE_GAME)
-    return HWC2::Error::BadParameter;
-
-  content_type_ = contentType;
-
-  return HWC2::Error::None;
-}
-#endif
-
-#if __ANDROID_API__ > 28
-HWC2::Error HwcDisplay::GetDisplayIdentificationData(uint8_t *outPort,
-                                                     uint32_t *outDataSize,
-                                                     uint8_t *outData) {
-  if (IsInHeadlessMode()) {
-    return HWC2::Error::Unsupported;
-  }
-
-  auto *connector = GetPipe().connector->Get();
-  auto blob = connector->GetEdidBlob();
-  if (!blob) {
-    return HWC2::Error::Unsupported;
-  }
-
-  constexpr uint8_t kDrmDeviceBitShift = 5U;
-  constexpr uint8_t kDrmDeviceBitMask = 0xE0;
-  constexpr uint8_t kConnectorBitMask = 0x1F;
-  const auto kDrmIdx = static_cast<uint8_t>(
-      connector->GetDev().GetIndexInDevArray());
-  const auto kConnectorIdx = static_cast<uint8_t>(
-      connector->GetIndexInResArray());
-  *outPort = (((kDrmIdx << kDrmDeviceBitShift) & kDrmDeviceBitMask) |
-              (kConnectorIdx & kConnectorBitMask));
-
-  if (outData) {
-    *outDataSize = std::min(*outDataSize, blob->length);
-    memcpy(outData, blob->data, *outDataSize);
-  } else {
-    *outDataSize = blob->length;
-  }
-
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::GetDisplayCapabilities(uint32_t *outNumCapabilities,
-                                               uint32_t *outCapabilities) {
-  if (outNumCapabilities == nullptr) {
-    return HWC2::Error::BadParameter;
-  }
-
-  bool skip_ctm = false;
-
-  // Skip client CTM if user requested DRM_OR_IGNORE
-  if (GetHwc()->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
-    skip_ctm = true;
-
-  if (!skip_ctm) {
-    *outNumCapabilities = 0;
-    return HWC2::Error::None;
-  }
-
-  *outNumCapabilities = 1;
-  if (outCapabilities) {
-    outCapabilities[0] = HWC2_DISPLAY_CAPABILITY_SKIP_CLIENT_COLOR_TRANSFORM;
-  }
-
-  return HWC2::Error::None;
-}
-
-#endif /* __ANDROID_API__ > 28 */
 
 #if __ANDROID_API__ > 27
 

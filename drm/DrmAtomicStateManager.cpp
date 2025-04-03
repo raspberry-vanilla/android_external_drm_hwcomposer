@@ -151,7 +151,8 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
 
   if (args.content_type && connector->GetContentTypeProperty()) {
     if (!connector->GetContentTypeProperty().AtomicSet(*pset,
-                                                       *args.content_type))
+                                                       static_cast<uint64_t>(
+                                                           *args.content_type)))
       return -EINVAL;
   }
 

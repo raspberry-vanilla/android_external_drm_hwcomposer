@@ -72,6 +72,11 @@ enum PanelOrientation {
   kModePanelOrientationRightUp
 };
 
+/*
+ * Content type to be used for HDMI infoframes.
+ */
+enum class ContentType { kNoData, kGraphics, kPhoto, kCinema, kGame };
+
 struct QueuedConfigTiming {
   // In order for the new config to be applied, the client must send a new frame
   // at this time.

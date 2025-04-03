@@ -55,7 +55,9 @@ class HwcDisplay {
     kSeamlessNotPossible
   };
 
-  HwcDisplay(hwc2_display_t handle, HWC2::DisplayType type, DrmHwc *hwc);
+  enum DisplayType { kInternal, kExternal, kVirtual };
+
+  HwcDisplay(hwc2_display_t handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay();
 
@@ -118,6 +120,25 @@ class HwcDisplay {
                                 std::vector<ReleaseFence> &out_release_fences)
       -> bool;
 
+  // Get the edid bytes for this display. Return an empty vector on error.
+  auto GetRawEdid() -> std::vector<uint8_t>;
+
+  // Get the port id that this display is plugged into.
+  auto GetPort() -> uint8_t;
+
+  auto SetContentType(ContentType content_type) {
+    content_type_ = content_type;
+  }
+
+  // Physical displays are either internal or external.
+  auto GetDisplayType() -> DisplayType;
+
+  // Enable or disable vsync callbacks.
+  void SetVsyncCallbacksEnabled(bool enabled);
+
+  // Enable or disable the display.
+  bool SetDisplayEnabled(bool enabled);
+
   auto GetFrontendPrivateData() -> std::shared_ptr<FrontendDisplayBase> {
     return frontend_private_data_;
   }
@@ -130,38 +151,17 @@ class HwcDisplay {
   auto DestroyLayer(ILayerId layer_id) -> bool;
 
   // HWC2 Hooks - these should not be used outside of the hwc2 device.
-  HWC2::Error GetActiveConfig(hwc2_config_t *config) const;
   HWC2::Error GetColorModes(uint32_t *num_modes, int32_t *modes);
   HWC2::Error GetDisplayAttribute(hwc2_config_t config, int32_t attribute,
                                   int32_t *value);
   HWC2::Error LegacyGetDisplayConfigs(uint32_t *num_configs,
                                       hwc2_config_t *configs);
   HWC2::Error GetDisplayName(uint32_t *size, char *name);
-  HWC2::Error GetDisplayType(int32_t *type);
 #if __ANDROID_API__ > 27
   HWC2::Error GetRenderIntents(int32_t mode, uint32_t *outNumIntents,
                                int32_t *outIntents);
   HWC2::Error SetColorModeWithIntent(int32_t mode, int32_t intent);
 #endif
-#if __ANDROID_API__ > 28
-  HWC2::Error GetDisplayIdentificationData(uint8_t *outPort,
-                                           uint32_t *outDataSize,
-                                           uint8_t *outData);
-  HWC2::Error GetDisplayCapabilities(uint32_t *outNumCapabilities,
-                                     uint32_t *outCapabilities);
-#endif
-#if __ANDROID_API__ > 29
-  HWC2::Error GetDisplayConnectionType(uint32_t *outType);
-
-  HWC2::Error SetActiveConfigWithConstraints(
-      hwc2_config_t config,
-      hwc_vsync_period_change_constraints_t *vsyncPeriodChangeConstraints,
-      hwc_vsync_period_change_timeline_t *outTimeline);
-
-  HWC2::Error SetContentType(int32_t contentType);
-#endif
-  HWC2::Error GetDisplayVsyncPeriod(uint32_t *outVsyncPeriod);
-
   HWC2::Error GetHdrCapabilities(uint32_t *num_types, int32_t *types,
                                  float *max_luminance,
                                  float *max_average_luminance,
@@ -170,8 +170,6 @@ class HwcDisplay {
   HWC2::Error ChosePreferredConfig();
   HWC2::Error SetColorMode(int32_t mode);
   HWC2::Error SetColorTransform(const float *matrix, int32_t hint);
-  HWC2::Error SetPowerMode(int32_t mode);
-  HWC2::Error SetVsyncEnabled(int32_t enabled);
   HwcLayer *get_layer(ILayerId layer) {
     auto it = layers_.find(layer);
     if (it == layers_.end())
@@ -261,6 +259,8 @@ class HwcDisplay {
   // expected vsync time.
   void WaitForPresentTime(int64_t present_time, uint32_t vsync_period_ns);
 
+  uint32_t GetCurrentVsyncPeriodNs() const;
+
   HwcDisplayConfigs configs_;
 
   DrmHwc *const hwc_;
@@ -277,7 +277,7 @@ class HwcDisplay {
   bool vsync_event_en_{};
 
   const hwc2_display_t handle_;
-  HWC2::DisplayType type_;
+  bool is_virtual_;
 
   std::map<ILayerId, HwcLayer> layers_;
   HwcLayer client_layer_;
@@ -289,7 +289,7 @@ class HwcDisplay {
   std::shared_ptr<drm_color_ctm> identity_color_matrix_;
   android_color_transform_t color_transform_hint_{};
   bool ctm_has_offset_ = false;
-  int32_t content_type_{};
+  ContentType content_type_ = ContentType::kNoData;
   Colorspace colorspace_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
 

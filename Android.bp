@@ -25,6 +25,7 @@ cc_defaults {
     name: "hwcomposer.drm_defaults",
 
     shared_libs: [
+        "libbase",
         "libcutils",
         "libdrm",
         "libhardware",
