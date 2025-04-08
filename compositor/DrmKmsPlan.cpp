@@ -39,9 +39,9 @@ auto DrmKmsPlan::CreateDrmKmsPlan(
                               .plane = cursor_plane,
                               .z_pos = z_pos++});
     } else {
-      // Cursor layer can't use cursor plane, so let it match normally with
-      // others.
-      composition.push_back(std::move(cursor_layer.value()));
+      // Cursor plane can't be used. The cursor layer may need to fallback to
+      // device or client composition.
+      return {};
     }
   }
 

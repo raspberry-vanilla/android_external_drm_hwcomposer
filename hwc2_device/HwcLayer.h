@@ -122,7 +122,6 @@ class HwcLayer {
   BufferColorSpace color_space_{};
   BufferSampleRange sample_range_{};
   BufferBlendMode blend_mode_{};
-  bool buffer_updated_{};
 
   bool prior_buffer_scanout_flag_{};
 
@@ -137,17 +136,12 @@ class HwcLayer {
   };
   std::map<int32_t /*slot*/, BufferSlot> slots_;
 
-  void ImportFb();
-  bool fb_import_failed_{};
+  bool ImportFb(BufferSlot &slot) const;
 
  public:
   void PopulateLayerData();
   void ClearSlots();
-
-  bool IsLayerUsableAsDevice() const {
-    return !fb_import_failed_ && active_slot_id_.has_value() &&
-           slots_.count(*active_slot_id_) > 0;
-  }
+  bool IsLayerUsableAsDevice() const;
 };
 
 }  // namespace android

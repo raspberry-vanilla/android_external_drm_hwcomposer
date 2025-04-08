@@ -27,10 +27,16 @@ namespace android {
 
 namespace {
 
-bool HasCursorLayer(const std::vector<HwcLayer *> &layers) {
-  return std::find_if(layers.begin(), layers.end(), [&](auto *layer) -> bool {
-           return layer->GetSfType() == HWC2::Composition::Cursor;
-         }) != layers.end();
+HwcLayer *GetCursorLayer(const std::vector<HwcLayer *> &layers) {
+  auto it = std::find_if(layers.begin(), layers.end(),
+                         [&](auto *layer) -> bool {
+                           return layer->GetSfType() ==
+                                  HWC2::Composition::Cursor;
+                         });
+  if (it == layers.end()) {
+    return nullptr;
+  }
+  return *it;
 }
 
 }  // namespace
@@ -42,9 +48,6 @@ HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
 
   auto layers = display->GetOrderLayersByZPos();
 
-  int client_start = -1;
-  size_t client_size = 0;
-
   auto flatcon = display->GetFlatCon();
   if (flatcon) {
     bool should_flatten = false;
@@ -55,59 +58,69 @@ HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
 
     if (should_flatten) {
       display->total_stats().frames_flattened_++;
-      MarkValidated(layers, 0, layers.size());
+      MarkValidated(layers, 0, layers.size(), /*use_cursor_plane=*/false);
       *num_types = layers.size();
       return HWC2::Error::HasChanges;
     }
   }
 
-  std::tie(client_start, client_size) = GetClientLayers(display, layers);
+  int client_start = -1;
+  size_t client_size = 0;
+  auto *cursor_layer = GetCursorLayer(layers);
+  auto cursor_plane = display->GetPipe().GetUsablePlanes().second;
+  bool use_cursor_plane = cursor_layer != nullptr && cursor_plane != nullptr &&
+                          !IsClientLayer(display, cursor_layer) &&
+                          cursor_plane->Get()->IsValidForLayer(
+                              &cursor_layer->GetLayerData());
 
-  MarkValidated(layers, client_start, client_size);
+  // Validates layers and creates a test composition, returning whether it
+  // succeeded.
+  auto validate_and_test = [&]() -> bool {
+    std::tie(client_start, client_size) = GetClientLayers(display, layers,
+                                                          use_cursor_plane);
+    MarkValidated(layers, client_start, client_size, use_cursor_plane);
 
-  auto testing_needed = client_start != 0 || client_size != layers.size();
+    bool testing_needed = client_start != 0 || client_size != layers.size();
+    AtomicCommitArgs a_args = {.test_only = true};
 
-  AtomicCommitArgs a_args = {.test_only = true};
+    if (testing_needed) {
+      return display->CreateComposition(a_args) == HWC2::Error::None;
+    }
 
-  if (testing_needed &&
-      display->CreateComposition(a_args) != HWC2::Error::None) {
+    return true;
+  };
+
+  // Initial composition attempt.
+  bool success = validate_and_test();
+
+  // First fallback: convert cursor layer to device composition and reattempt.
+  if (!success && use_cursor_plane) {
+    ++display->total_stats().failed_kms_cursor_validate_;
+    use_cursor_plane = false;
+    success = validate_and_test();
+  }
+
+  // Final fallback: convert all layers to client composition.
+  if (!success) {
     ++display->total_stats().failed_kms_validate_;
     client_start = 0;
     client_size = layers.size();
-
-    // Expand the client range to include all layers except the cursor layer (if
-    // there is one) and retry.
-    auto [_, cursor_plane] = display->GetPipe().GetUsablePlanes();
-    if (cursor_plane && HasCursorLayer(layers)) {
-      --client_size;
-      MarkValidated(layers, 0, client_size);
-
-      testing_needed = display->CreateComposition(a_args) != HWC2::Error::None;
-
-      // If testing is still needed, expand the client range to include the
-      // cursor layer for the next retry.
-      if (testing_needed) {
-        ++client_size;
-        ++display->total_stats().failed_kms_validate_;
-      }
-    }
-
-    if (testing_needed) {
-      MarkValidated(layers, 0, client_size);
-    }
+    MarkValidated(layers, client_start, client_size, use_cursor_plane);
   }
 
   *num_types = client_size;
-
   display->total_stats().gpu_pixops_ += CalcPixOps(layers, client_start,
                                                    client_size);
   display->total_stats().total_pixops_ += CalcPixOps(layers, 0, layers.size());
-
+  if (use_cursor_plane) {
+    ++display->total_stats().cursor_plane_frames_;
+  }
   return *num_types != 0 ? HWC2::Error::HasChanges : HWC2::Error::None;
 }
 
 std::tuple<int, size_t> Backend::GetClientLayers(
-    HwcDisplay *display, const std::vector<HwcLayer *> &layers) {
+    HwcDisplay *display, const std::vector<HwcLayer *> &layers,
+    bool use_cursor_plane) {
   int client_start = -1;
   size_t client_size = 0;
 
@@ -119,7 +132,8 @@ std::tuple<int, size_t> Backend::GetClientLayers(
     }
   }
 
-  return GetExtraClientRange(display, layers, client_start, client_size);
+  return GetExtraClientRange(display, layers, client_start, client_size,
+                             use_cursor_plane);
 }
 
 bool Backend::IsClientLayer(HwcDisplay *display, HwcLayer *layer) {
@@ -150,11 +164,13 @@ uint32_t Backend::CalcPixOps(const std::vector<HwcLayer *> &layers,
 }
 
 void Backend::MarkValidated(std::vector<HwcLayer *> &layers,
-                            size_t client_first_z, size_t client_size) {
+                            size_t client_first_z, size_t client_size,
+                            bool use_cursor_plane) {
   for (size_t z_order = 0; z_order < layers.size(); ++z_order) {
     if (z_order >= client_first_z && z_order < client_first_z + client_size) {
       layers[z_order]->SetValidatedType(HWC2::Composition::Client);
-    } else if (layers[z_order]->GetSfType() == HWC2::Composition::Cursor) {
+    } else if (use_cursor_plane &&
+               layers[z_order]->GetSfType() == HWC2::Composition::Cursor) {
       layers[z_order]->SetValidatedType(HWC2::Composition::Cursor);
     } else {
       layers[z_order]->SetValidatedType(HWC2::Composition::Device);
@@ -164,14 +180,13 @@ void Backend::MarkValidated(std::vector<HwcLayer *> &layers,
 
 std::tuple<int, int> Backend::GetExtraClientRange(
     HwcDisplay *display, const std::vector<HwcLayer *> &layers,
-    int client_start, size_t client_size) {
-  auto [planes, cursor_plane] = display->GetPipe().GetUsablePlanes();
-  size_t avail_planes = planes.size();
+    int client_start, size_t client_size, bool use_cursor_plane) {
+  size_t avail_planes = display->GetPipe().GetUsablePlanes().first.size();
   size_t layers_size = layers.size();
 
-  // |cursor_plane| is not counted among |avail_planes|, so the cursor layer
+  // Cursor plane is not counted among |avail_planes|, so the cursor layer
   // shouldn't be counted in |layers_size|.
-  if (cursor_plane && HasCursorLayer(layers)) {
+  if (use_cursor_plane) {
     --layers_size;
   }
 

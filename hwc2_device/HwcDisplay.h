@@ -185,7 +185,9 @@ class HwcDisplay {
               gpu_pixops_ - b.gpu_pixops_,
               failed_kms_validate_ - b.failed_kms_validate_,
               failed_kms_present_ - b.failed_kms_present_,
-              frames_flattened_ - b.frames_flattened_};
+              frames_flattened_ - b.frames_flattened_,
+              cursor_plane_frames_ - b.cursor_plane_frames_,
+              failed_kms_cursor_validate_ - b.failed_kms_cursor_validate_};
     }
 
     uint32_t total_frames_ = 0;
@@ -194,6 +196,8 @@ class HwcDisplay {
     uint32_t failed_kms_validate_ = 0;
     uint32_t failed_kms_present_ = 0;
     uint32_t frames_flattened_ = 0;
+    uint32_t cursor_plane_frames_ = 0;
+    uint32_t failed_kms_cursor_validate_ = 0;
   };
 
   const Backend *backend() const;

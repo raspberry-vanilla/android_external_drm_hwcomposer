@@ -113,15 +113,17 @@ std::string HwcDisplay::DumpDelta(HwcDisplay::Stats delta) {
 
   std::stringstream ss;
   ss << " Total frames count: " << delta.total_frames_ << "\n"
+     << " Failed cursor test commit frames: "
+     << delta.failed_kms_cursor_validate_ << "\n"
      << " Failed to test commit frames: " << delta.failed_kms_validate_ << "\n"
      << " Failed to commit frames: " << delta.failed_kms_present_ << "\n"
      << ((delta.failed_kms_present_ > 0)
              ? " !!! Internal failure, FIX it please\n"
              : "")
      << " Flattened frames: " << delta.frames_flattened_ << "\n"
-     << " Pixel operations (free units)"
-     << " : [TOTAL: " << delta.total_pixops_ << " / GPU: " << delta.gpu_pixops_
-     << "]\n"
+     << " Cursor plane frames: " << delta.cursor_plane_frames_ << "\n"
+     << " Pixel operations (free units) : [TOTAL: " << delta.total_pixops_
+     << " / GPU: " << delta.gpu_pixops_ << "]\n"
      << " Composition efficiency: " << ratio;
 
   return ss.str();
@@ -298,6 +300,11 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     return {};
   }
 
+  if (layers_.empty()) {
+    ALOGI("No layers to validate.");
+    return {};
+  }
+
   /* In current drm_hwc design in case previous frame layer was not validated as
    * a CLIENT, it is used by display controller (Front buffer). We have to store
    * this state to provide the CLIENT with the release fences for such buffers.
@@ -305,6 +312,12 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
   for (auto &l : layers_) {
     l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
                                        HWC2::Composition::Client);
+
+    /* Populate layer data for layers that might be mapped to a drm plane. */
+    if (l.second.GetSfType() == HWC2::Composition::Device ||
+        l.second.GetSfType() == HWC2::Composition::Cursor) {
+      l.second.PopulateLayerData();
+    }
   }
 
   // ValidateDisplay returns the number of layers that may be changed.
@@ -354,6 +367,12 @@ auto HwcDisplay::PresentStagedComposition(
   if (IsInHeadlessMode()) {
     return true;
   }
+
+  if (layers_.empty()) {
+    ALOGI("No layers to present.");
+    return true;
+  }
+
   HWC2::Error ret{};
 
   ++total_stats_.total_frames_;
@@ -904,7 +923,6 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
         break;
       case HWC2::Composition::Cursor:
         if (!cursor_layer.has_value()) {
-          layer.PopulateLayerData();
           cursor_layer = layer.GetLayerData();
         } else {
           ALOGW("Detected multiple cursor layers");
@@ -946,15 +964,9 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
     }
   }
 
-  if (z_map.empty())
-    return HWC2::Error::BadLayer;
+  ALOGW_IF(z_map.empty() && !cursor_layer.has_value(), "Empty composition");
 
   std::vector<LayerData> composition_layers;
-
-  /* Import & populate */
-  for (std::pair<const uint32_t, HwcLayer *> &l : z_map) {
-    l.second->PopulateLayerData();
-  }
 
   // now that they're ordered by z, add them to the composition
   for (std::pair<const uint32_t, HwcLayer *> &l : z_map) {

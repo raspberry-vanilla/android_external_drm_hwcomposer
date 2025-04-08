@@ -34,12 +34,15 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
           .bi = layer_properties.slot_buffer->bi.value(),
           .fb = {},
       };
+      bool success = ImportFb(slots_[slot_id]);
+      ALOGE_IF(!success,
+               "Unable to create framebuffer object for layer %p slot %d", this,
+               slot_id);
     }
   }
   if (layer_properties.active_slot) {
     active_slot_id_ = layer_properties.active_slot->slot_id;
     layer_data_.acquire_fence = layer_properties.active_slot->fence;
-    buffer_updated_ = true;
   }
   if (layer_properties.blend_mode) {
     blend_mode_ = layer_properties.blend_mode.value();
@@ -70,38 +73,22 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   }
 }
 
-void HwcLayer::ImportFb() {
-  if (!IsLayerUsableAsDevice() || !buffer_updated_ ||
-      !active_slot_id_.has_value()) {
-    return;
+bool HwcLayer::ImportFb(BufferSlot& slot) const {
+  if (slot.fb == nullptr) {
+    auto& fb_importer = parent_->GetPipe().device->GetDrmFbImporter();
+    slot.fb = fb_importer.GetOrCreateFbId(&slot.bi);
   }
-  buffer_updated_ = false;
-
-  if (slots_[*active_slot_id_].fb) {
-    return;
-  }
-
-  auto& fb_importer = parent_->GetPipe().device->GetDrmFbImporter();
-  auto fb = fb_importer.GetOrCreateFbId(&slots_[*active_slot_id_].bi);
-
-  if (!fb) {
-    ALOGE("Unable to create framebuffer object for layer %p", this);
-    fb_import_failed_ = true;
-    return;
-  }
-
-  slots_[*active_slot_id_].fb = fb;
+  return slot.fb != nullptr;
 }
 
 void HwcLayer::PopulateLayerData() {
-  ImportFb();
-
   if (!active_slot_id_.has_value()) {
     ALOGE("Internal error: populate layer data called without active slot");
     return;
   }
 
   if (slots_.count(*active_slot_id_) == 0) {
+    ALOGE("Internal error: active cache slot is not populated.");
     return;
   }
 
@@ -122,6 +109,20 @@ void HwcLayer::PopulateLayerData() {
 void HwcLayer::ClearSlots() {
   slots_.clear();
   active_slot_id_.reset();
+}
+
+/* Check that the layer has an active slot set, and there is a valid
+   * framebuffer in the active slot.
+ */
+bool HwcLayer::IsLayerUsableAsDevice() const {
+  if (!active_slot_id_.has_value()) {
+    return false;
+  }
+  auto it = slots_.find(*active_slot_id_);
+  if (it == slots_.end()) {
+    return false;
+  }
+  return it->second.fb != nullptr;
 }
 
 }  // namespace android
