@@ -873,11 +873,10 @@ static int32_t SetLayerDisplayFrame(hwc2_device_t *device,
   GET_LAYER(layer);
 
   HwcLayer::LayerProperties layer_properties;
-  layer_properties.display_frame = {
-      .i_rect = DstRectInfo::IRect{.left = frame.left,
-                                   .top = frame.top,
-                                   .right = frame.right,
-                                   .bottom = frame.bottom}};
+  layer_properties.display_frame = {.i_rect = IRect{.left = frame.left,
+                                                    .top = frame.top,
+                                                    .right = frame.right,
+                                                    .bottom = frame.bottom}};
   ilayer->SetLayerProperties(layer_properties);
 
   return 0;
@@ -923,11 +922,26 @@ static int32_t SetLayerSourceCrop(hwc2_device_t *device, hwc2_display_t display,
   return 0;
 }
 
-static int32_t SetLayerSurfaceDamage(hwc2_device_t * /*device*/,
-                                     hwc2_display_t /*display*/,
-                                     hwc2_layer_t /*layer*/,
-                                     hwc_region_t /*damage*/) {
+static int32_t SetLayerSurfaceDamage(hwc2_device_t *device,
+                                     hwc2_display_t display, hwc2_layer_t layer,
+                                     hwc_region_t damage) {
   ALOGV("SetLayerSurfaceDamage");
+  LOCK_COMPOSER(device);
+  GET_DISPLAY(display);
+  GET_LAYER(layer);
+
+  HwcLayer::LayerProperties layer_properties{.damage = DamageInfo{}};
+  for (size_t i = 0; i < damage.numRects; ++i) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    const auto rect = damage.rects[i];
+    layer_properties.damage->dmg_rects.emplace_back(
+        IRect{.left = rect.left,
+              .top = rect.top,
+              .right = rect.right,
+              .bottom = rect.bottom});
+  }
+  ilayer->SetLayerProperties(layer_properties);
+
   return 0;
 }
 

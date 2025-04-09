@@ -187,10 +187,12 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
       auto &v = unused_planes;
       v.erase(std::remove(v.begin(), v.end(), joining.plane), v.end());
 
+      DrmModeUserPropertyBlobUnique damage_blob;
       if (plane->AtomicSetState(*pset, layer, joining.z_pos, crtc->GetId(),
-                                whole_display_rect_) != 0) {
+                                whole_display_rect_, damage_blob) != 0) {
         return -EINVAL;
       }
+      new_frame_state.damage_blobs.push_back(std::move(damage_blob));
     }
   }
 

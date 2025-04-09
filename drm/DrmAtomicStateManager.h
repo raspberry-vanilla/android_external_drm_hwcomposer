@@ -86,6 +86,7 @@ class DrmAtomicStateManager {
     DrmModeUserPropertyBlobUnique mode_blob;
     DrmModeUserPropertyBlobUnique ctm_blob;
     DrmModeUserPropertyBlobUnique hdr_metadata_blob;
+    std::vector<DrmModeUserPropertyBlobUnique> damage_blobs;
 
     int release_fence_pt_index{};
 

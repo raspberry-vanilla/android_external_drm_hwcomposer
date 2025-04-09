@@ -51,15 +51,21 @@ struct SrcRectInfo {
   std::optional<FRect> f_rect;
 };
 
+struct IRect {
+  int32_t left;
+  int32_t top;
+  int32_t right;
+  int32_t bottom;
+};
+
 struct DstRectInfo {
-  struct IRect {
-    int32_t left;
-    int32_t top;
-    int32_t right;
-    int32_t bottom;
-  };
   /* nullopt means the whole display */
   std::optional<IRect> i_rect;
+};
+
+struct DamageInfo {
+  /* Empty vector means the whole source buffer may have been modified. */
+  std::vector<IRect> dmg_rects;
 };
 
 constexpr float kAlphaOpaque = 1.0F;
@@ -69,6 +75,7 @@ struct PresentInfo {
   float alpha = kAlphaOpaque;
   SrcRectInfo source_crop{};
   DstRectInfo display_frame{};
+  DamageInfo damage{};
 
   bool RequireScalingOrPhasing() const {
     if (!source_crop.f_rect || !display_frame.i_rect) {

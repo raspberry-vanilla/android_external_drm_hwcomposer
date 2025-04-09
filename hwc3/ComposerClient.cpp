@@ -50,15 +50,15 @@
 #include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
 
+using ::android::DamageInfo;
 using ::android::DstRectInfo;
 using ::android::HwcDisplay;
 using ::android::HwcDisplayConfig;
 using ::android::HwcDisplayConfigs;
 using ::android::HwcLayer;
+using ::android::IRect;
 using ::android::LayerTransform;
 using ::android::SrcRectInfo;
-
-#include "utils/log.h"
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 namespace {
@@ -294,19 +294,26 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
   return aidl_configuration;
 }
 
-std::optional<DstRectInfo> AidlToRect(const std::optional<common::Rect>& rect) {
+std::optional<IRect> AidlToIRect(const std::optional<common::Rect>& rect) {
   if (!rect) {
     return std::nullopt;
   }
-  DstRectInfo dst_rec;
-  dst_rec.i_rect = {.left = rect->left,
-                    .top = rect->top,
-                    .right = rect->right,
-                    .bottom = rect->bottom};
-  return dst_rec;
+  return IRect{.left = rect->left,
+               .top = rect->top,
+               .right = rect->right,
+               .bottom = rect->bottom};
 }
 
-std::optional<SrcRectInfo> AidlToFRect(
+std::optional<DstRectInfo> AidlToDstRect(
+    const std::optional<common::Rect>& rect) {
+  auto i_rect = AidlToIRect(rect);
+  if (!i_rect) {
+    return std::nullopt;
+  }
+  return DstRectInfo{.i_rect = i_rect};
+}
+
+std::optional<SrcRectInfo> AidlToSrcRect(
     const std::optional<common::FRect>& rect) {
   if (!rect) {
     return std::nullopt;
@@ -349,6 +356,26 @@ std::optional<LayerTransform> AidlToLayerTransform(
       .rotate90 = (int32_t(aidl_transform->transform) &
                    int32_t(Transform::ROT_90)) != 0,
   };
+}
+
+std::optional<DamageInfo> AidlToDamage(
+    const std::optional<std::vector<std::optional<common::Rect>>>& damage) {
+  if (!damage.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<DamageInfo> damage_info = std::nullopt;
+  for (const auto& r : damage.value()) {
+    auto i_rect = AidlToIRect(r);
+    if (i_rect.has_value()) {
+      if (!damage_info.has_value()) {
+        damage_info = DamageInfo{};
+      }
+      damage_info->dmg_rects.push_back(i_rect.value());
+    }
+  }
+
+  return damage_info;
 }
 
 }  // namespace
@@ -645,11 +672,12 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
   properties.color_space = AidlToColorSpace(command.dataspace);
   properties.sample_range = AidlToSampleRange(command.dataspace);
   properties.composition_type = AidlToCompositionType(command.composition);
-  properties.display_frame = AidlToRect(command.displayFrame);
+  properties.display_frame = AidlToDstRect(command.displayFrame);
   properties.alpha = AidlToAlpha(command.planeAlpha);
-  properties.source_crop = AidlToFRect(command.sourceCrop);
+  properties.source_crop = AidlToSrcRect(command.sourceCrop);
   properties.transform = AidlToLayerTransform(command.transform);
   properties.z_order = AidlToZOrder(command.z);
+  properties.damage = AidlToDamage(command.damage);
 
   layer->SetLayerProperties(properties);
 
@@ -661,7 +689,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_id,
     cmd_result_writer_->AddError(hwc3::Error::kUnsupported);
   }
   // TODO: Blocking region handling missing.
-  // TODO: Layer surface damage.
   // TODO: Layer visible region.
   // TODO: Per-frame metadata.
   // TODO: Layer color transform.
@@ -1243,7 +1270,7 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
     client_layer.ClearSlots();
   }
 
-  // If the contraints dictate that this is to be applied in the future, it
+  // If the constraints dictate that this is to be applied in the future, it
   // must be queued. If the new config is in the same config group as the
   // current one, then queue it to reduce jank.
   HwcDisplay::ConfigError result{};

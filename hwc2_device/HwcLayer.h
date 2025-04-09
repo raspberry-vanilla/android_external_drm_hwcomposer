@@ -57,6 +57,7 @@ class HwcLayer {
     std::optional<SrcRectInfo> source_crop;
     std::optional<LayerTransform> transform;
     std::optional<uint32_t> z_order;
+    std::optional<DamageInfo> damage;
   };
 
   explicit HwcLayer(HwcDisplay *parent_display) : parent_(parent_display){};
