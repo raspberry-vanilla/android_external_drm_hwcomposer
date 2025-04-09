@@ -77,6 +77,10 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
 }
 
 bool HwcLayer::ImportFb(BufferSlot& slot) const {
+  if (parent_->IsInHeadlessMode()) {
+    return true;
+  }
+
   if (slot.fb == nullptr) {
     auto& fb_importer = parent_->GetPipe().device->GetDrmFbImporter();
     slot.fb = fb_importer.GetOrCreateFbId(&slot.bi);
