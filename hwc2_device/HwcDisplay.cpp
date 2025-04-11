@@ -205,6 +205,10 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
     ALOGE("Could not find active mode for %u", config);
     return ConfigError::kBadConfig;
   }
+  if (IsInHeadlessMode()) {
+    configs_.active_config_id = config;
+    return ConfigError::kNone;
+  }
 
   const HwcDisplayConfig *current_config = GetCurrentConfig();
 
@@ -534,7 +538,8 @@ void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   pipeline_ = std::move(pipeline);
 
   if (pipeline_ != nullptr || handle_ == kPrimaryDisplay) {
-    Init();
+    bool success = Init();
+    ALOGE_IF(!success, "Failed to init HwcDisplay after setting pipeline.");
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
   } else {
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
@@ -566,14 +571,12 @@ void HwcDisplay::Deinit() {
   client_layer_.ClearSlots();
 }
 
-HWC2::Error HwcDisplay::Init() {
-  ChosePreferredConfig();
-
+bool HwcDisplay::Init() {
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
     if (!vsync_worker_) {
       ALOGE("Failed to create event worker for d=%d\n", int(handle_));
-      return HWC2::Error::BadDisplay;
+      return false;
     }
   }
 
@@ -581,7 +584,7 @@ HWC2::Error HwcDisplay::Init() {
     auto ret = BackendManager::GetInstance().SetBackendForDisplay(this);
     if (ret) {
       ALOGE("Failed to set backend for d=%d %d\n", int(handle_), ret);
-      return HWC2::Error::BadDisplay;
+      return false;
     }
     auto flatcbk = (struct FlatConCallbacks){
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
@@ -594,7 +597,16 @@ HWC2::Error HwcDisplay::Init() {
 
   SetColorMatrixToIdentity();
 
-  return HWC2::Error::None;
+  if (is_virtual_) {
+    configs_.GenFakeMode(virtual_disp_width_, virtual_disp_height_);
+  } else if (IsInHeadlessMode()) {
+    configs_.GenFakeMode(0, 0);
+  } else if (configs_.Update(*pipeline_->connector->Get()) !=
+             HWC2::Error::None) {
+    return false;
+  }
+  return SetConfig(configs_.preferred_config_id) ==
+         HwcDisplay::ConfigError::kNone;
 }
 
 std::optional<PanelOrientation> HwcDisplay::getDisplayPhysicalOrientation() {
@@ -612,22 +624,6 @@ std::optional<PanelOrientation> HwcDisplay::getDisplayPhysicalOrientation() {
   }
 
   return pipeline.connector->Get()->GetPanelOrientation();
-}
-
-HWC2::Error HwcDisplay::ChosePreferredConfig() {
-  HWC2::Error err{};
-  if (is_virtual_) {
-    configs_.GenFakeMode(virtual_disp_width_, virtual_disp_height_);
-  } else if (!IsInHeadlessMode()) {
-    err = configs_.Update(*pipeline_->connector->Get());
-  } else {
-    configs_.GenFakeMode(0, 0);
-  }
-  if (!IsInHeadlessMode() && err != HWC2::Error::None) {
-    return HWC2::Error::BadDisplay;
-  }
-
-  return SetActiveConfig(configs_.preferred_config_id);
 }
 
 auto HwcDisplay::CreateLayer(ILayerId new_layer_id) -> bool {
@@ -1022,23 +1018,6 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   }
 
   return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetActiveConfigInternal(uint32_t config,
-                                                int64_t change_time) {
-  if (configs_.hwc_configs.count(config) == 0) {
-    ALOGE("Could not find active mode for %u", config);
-    return HWC2::Error::BadConfig;
-  }
-
-  staged_mode_change_time_ = change_time;
-  staged_mode_config_id_ = config;
-
-  return HWC2::Error::None;
-}
-
-HWC2::Error HwcDisplay::SetActiveConfig(hwc2_config_t config) {
-  return SetActiveConfigInternal(config, ResourceManager::GetTimeMonotonicNs());
 }
 
 HWC2::Error HwcDisplay::SetColorMode(int32_t mode) {

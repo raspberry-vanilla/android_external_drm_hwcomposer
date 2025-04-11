@@ -1361,10 +1361,19 @@ ndk::ScopedAStatus ComposerClient::setContentType(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  if (type == ContentType::NONE) {
-    return ndk::ScopedAStatus::ok();
+  // ContentType.aidl and ::ContentType enum both match the HDMI 1.4 specification
+  // exactly. Static cast is safe.
+  switch (type) {
+    case ContentType::NONE:
+    case ContentType::GRAPHICS:
+    case ContentType::PHOTO:
+    case ContentType::CINEMA:
+    case ContentType::GAME:
+      display->SetContentType(static_cast<::ContentType>(type));
+      return ndk::ScopedAStatus::ok();
+    default:
+      return ToBinderStatus(hwc3::Error::kBadParameter);
   }
-  return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
 ndk::ScopedAStatus ComposerClient::setDisplayedContentSamplingEnabled(

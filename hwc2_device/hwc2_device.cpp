@@ -33,6 +33,19 @@
 
 namespace android {
 
+static int32_t ConfigErrorToHWC2(HwcDisplay::ConfigError result) {
+  switch (result) {
+    case HwcDisplay::ConfigError::kBadConfig:
+      return static_cast<int32_t>(HWC2::Error::BadConfig);
+    case HwcDisplay::ConfigError::kSeamlessNotAllowed:
+      return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
+    case HwcDisplay::ConfigError::kSeamlessNotPossible:
+      return static_cast<int32_t>(HWC2::Error::SeamlessNotPossible);
+    case HwcDisplay::ConfigError::kNone:
+      return static_cast<int32_t>(HWC2::Error::None);
+  }
+}
+
 /* Converts long __PRETTY_FUNCTION__ result, e.g.:
  * "int32_t android::LayerHook(hwc2_device_t *, hwc2_display_t, hwc2_layer_t,"
  * "Args...) [HookType = HWC2::Error (android::HwcLayer::*)(const native_handle"
@@ -582,6 +595,19 @@ static int32_t PresentDisplay(hwc2_device_t *device, hwc2_display_t display,
   return 0;
 }
 
+static int32_t SetActiveConfig(hwc2_device_t *device, hwc2_display_t display,
+                               hwc2_config_t config) {
+  ALOGV("SetActiveConfig");
+  LOCK_COMPOSER(device);
+  GET_DISPLAY(display);
+
+  QueuedConfigTiming out_timing{};
+  auto result = idisplay->QueueConfig(config,
+                                      ResourceManager::GetTimeMonotonicNs(),
+                                      false, &out_timing);
+  return ConfigErrorToHWC2(result);
+}
+
 #if __ANDROID_API__ >= 28
 
 static int32_t GetDisplayBrightnessSupport(hwc2_device_t * /*device*/,
@@ -714,16 +740,7 @@ static int32_t SetActiveConfigWithConstraints(
   out_timeline->refreshTimeNanos = out_timing.refresh_time_ns;
   out_timeline->refreshRequired = 1;
 
-  switch (result) {
-    case HwcDisplay::ConfigError::kBadConfig:
-      return static_cast<int32_t>(HWC2::Error::BadConfig);
-    case HwcDisplay::ConfigError::kSeamlessNotAllowed:
-      return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
-    case HwcDisplay::ConfigError::kSeamlessNotPossible:
-      return static_cast<int32_t>(HWC2::Error::SeamlessNotPossible);
-    case HwcDisplay::ConfigError::kNone:
-      return static_cast<int32_t>(HWC2::Error::None);
-  }
+  return ConfigErrorToHWC2(result);
 }
 
 static int32_t SetAutoLowLatencyMode(hwc2_device_t * /*device*/,
@@ -1063,9 +1080,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
     case HWC2::FunctionDescriptor::PresentDisplay:
       return (hwc2_function_pointer_t)PresentDisplay;
     case HWC2::FunctionDescriptor::SetActiveConfig:
-      return ToHook<HWC2_PFN_SET_ACTIVE_CONFIG>(
-          DisplayHook<decltype(&HwcDisplay::SetActiveConfig),
-                      &HwcDisplay::SetActiveConfig, hwc2_config_t>);
+      return (hwc2_function_pointer_t)SetActiveConfig;
     case HWC2::FunctionDescriptor::SetClientTarget:
       return (hwc2_function_pointer_t)SetClientTarget;
     case HWC2::FunctionDescriptor::SetColorMode:

@@ -166,8 +166,6 @@ class HwcDisplay {
                                  float *max_luminance,
                                  float *max_average_luminance,
                                  float *min_luminance);
-  HWC2::Error SetActiveConfig(hwc2_config_t config);
-  HWC2::Error ChosePreferredConfig();
   HWC2::Error SetColorMode(int32_t mode);
   HWC2::Error SetColorTransform(const float *matrix, int32_t hint);
   HwcLayer *get_layer(ILayerId layer) {
@@ -306,9 +304,8 @@ class HwcDisplay {
 
   void SetColorMatrixToIdentity();
 
-  HWC2::Error Init();
+  bool Init();
 
-  HWC2::Error SetActiveConfigInternal(uint32_t config, int64_t change_time);
   HWC2::Error SetHdrOutputMetadata(ui::Hdr hdrType);
   auto GetEdid() -> EdidWrapperUnique & {
     return GetPipe().connector->Get()->GetParsedEdid();

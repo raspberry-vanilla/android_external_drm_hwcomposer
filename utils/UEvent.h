@@ -87,7 +87,7 @@ class UEvent {
       }
     }
 
-    return std::string(buffer);
+    return std::string(buffer, ret);
   }
 
   void Stop() {
