@@ -68,8 +68,6 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
 
   auto new_frame_state = NewFrameState();
 
-  auto *drm = pipe_->device;
-  auto *connector = pipe_->connector->Get();
   auto *crtc = pipe_->crtc->Get();
 
   auto pset = MakeDrmModeAtomicReqUnique();
@@ -78,31 +76,46 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     return -ENOMEM;
   }
 
-  int out_fence = -1;
-  if (!args.writeback_fb) {
-    if (!crtc->GetOutFencePtrProperty().  //
-         AtomicSet(*pset, uint64_t(&out_fence))) {
-      return -EINVAL;
-    }
-  } else {
-    if (!connector->GetWritebackOutFenceProperty().  //
-         AtomicSet(*pset, uint64_t(&out_fence))) {
+  int wb_fence = -1;
+
+  if (pipe_->writeback_connector && args.writeback_fb) {
+    if (!pipe_->writeback_connector->Get()
+             ->GetCrtcIdProperty()
+             .AtomicSet(*pset, crtc->GetId())) {
+      ALOGE("DrmAtomicStateManager: Failed to set writeback CRTC_ID property");
       return -EINVAL;
     }
 
-    if (!connector->GetWritebackFbIdProperty().  //
-         AtomicSet(*pset, args.writeback_fb->GetFbId())) {
+    if (!pipe_->writeback_connector->Get()
+             ->GetWritebackFbIdProperty()
+             .AtomicSet(*pset, args.writeback_fb->GetFbId())) {
+      ALOGE("DrmAtomicStateManager: Failed to set writeback FB_ID property");
       return -EINVAL;
     }
 
+    if (!pipe_->writeback_connector->Get()
+             ->GetWritebackOutFenceProperty()
+             .AtomicSet(*pset, uint64_t(&wb_fence))) {
+      ALOGE(
+          "DrmAtomicStateManager: Failed to set writeback OUT_FENCE_PTR "
+          "property");
+      return -EINVAL;
+    }
+
+    // Wait on input fence if provided
     if (args.writeback_release_fence) {
       sync_wait(*args.writeback_release_fence, -1);
       args.writeback_release_fence.reset();
     }
   }
 
-  bool nonblock = !args.blocking;
+  int out_fence = -1;
+  if (!crtc->GetOutFencePtrProperty().AtomicSet(*pset, uint64_t(&out_fence))) {
+    return -EINVAL;
+  }
 
+  bool nonblock = !args.blocking;
+  auto *connector = pipe_->connector->Get();
   if (args.active) {
     nonblock = false;
     new_frame_state.crtc_active_state = *args.active;
@@ -112,6 +125,7 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     }
   }
 
+  auto *drm = pipe_->device;
   if (args.display_mode) {
     new_frame_state.mode_blob = args.display_mode.value().CreateModeBlob(*drm);
 
@@ -205,10 +219,16 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
   }
 
   uint32_t flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
+  const int error_buf_max_size = 64;
+  char err_buf[error_buf_max_size];
 
   if (args.test_only) {
-    return drmModeAtomicCommit(*drm->GetFd(), pset.get(),
-                               flags | DRM_MODE_ATOMIC_TEST_ONLY, drm);
+    auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
+                                   flags | DRM_MODE_ATOMIC_TEST_ONLY, drm);
+
+    ALOGE_IF(err != 0, "Test-only ret=%d errno=%d strerror=%s\n", err, errno,
+             strerror_r(errno, err_buf, error_buf_max_size));
+    return err;
   }
 
   if (last_present_fence_) {
@@ -230,13 +250,18 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
   }
 
   auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
-
   if (err != 0) {
-    ALOGE("Failed to commit pset ret=%d\n", err);
+    ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
+          strerror_r(errno, err_buf, error_buf_max_size));
     return err;
   }
 
   args.out_fence = MakeSharedFd(out_fence);
+
+  // Store the writeback fence if this operation used a writeback connector
+  if (pipe_->writeback_connector && args.writeback_fb) {
+    args.out_writeback_complete_fence = MakeSharedFd(wb_fence);
+  }
 
   if (nonblock) {
     {

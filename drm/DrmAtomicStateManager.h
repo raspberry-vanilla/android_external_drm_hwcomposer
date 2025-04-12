@@ -46,6 +46,7 @@ struct AtomicCommitArgs {
   SharedFd writeback_release_fence;
 
   /* out */
+  SharedFd out_writeback_complete_fence;
   SharedFd out_fence;
 
   /* helpers */

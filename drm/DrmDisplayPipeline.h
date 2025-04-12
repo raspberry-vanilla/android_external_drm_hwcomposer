@@ -77,11 +77,14 @@ struct DrmDisplayPipeline {
 
   auto GetUsablePlanes() -> UsablePlanes;
 
+  DrmConnector *FindWritebackConnectorForPipeline() const;
+
   ~DrmDisplayPipeline();
 
   DrmDevice *device;
 
   std::shared_ptr<BindingOwner<DrmConnector>> connector;
+  std::shared_ptr<BindingOwner<DrmConnector>> writeback_connector; 
   std::shared_ptr<BindingOwner<DrmEncoder>> encoder;
   std::shared_ptr<BindingOwner<DrmCrtc>> crtc;
   std::shared_ptr<BindingOwner<DrmPlane>> primary_plane;

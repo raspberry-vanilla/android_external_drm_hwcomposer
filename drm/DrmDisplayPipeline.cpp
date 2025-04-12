@@ -191,6 +191,18 @@ auto DrmDisplayPipeline::GetUsablePlanes() -> UsablePlanes {
   return pair;
 }
 
+DrmConnector *DrmDisplayPipeline::FindWritebackConnectorForPipeline() const {
+  for (const auto &wb_connector : device->GetWritebackConnectors()) {
+    for (const auto &encoder : device->GetEncoders()) {
+      if (wb_connector->SupportsEncoder(*encoder) &&
+          encoder->SupportsCrtc(*(crtc->Get()))) {
+        return wb_connector.get();
+      }
+    }
+  }
+  return nullptr;
+}
+
 DrmDisplayPipeline::~DrmDisplayPipeline() {
   if (atomic_state_manager)
     atomic_state_manager->StopThread();

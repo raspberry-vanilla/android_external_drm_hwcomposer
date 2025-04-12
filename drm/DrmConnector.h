@@ -120,11 +120,11 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   auto &GetWritebackFbIdProperty() const {
-    return writeback_fb_id_;
+    return writeback_fb_id_property_;
   }
 
   auto &GetWritebackOutFenceProperty() const {
-    return writeback_out_fence_;
+    return writeback_out_fence_property_;
   }
 
   auto &GetPanelOrientationProperty() const {
@@ -176,10 +176,11 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmProperty hdr_output_metadata_property_;
 
   DrmProperty link_status_property_;
-  DrmProperty writeback_pixel_formats_;
-  DrmProperty writeback_fb_id_;
-  DrmProperty writeback_out_fence_;
   DrmProperty panel_orientation_;
+
+  DrmProperty writeback_pixel_formats_property_;
+  DrmProperty writeback_fb_id_property_;
+  DrmProperty writeback_out_fence_property_;
 
   std::map<Colorspace, uint64_t> colorspace_enum_map_;
   std::map<uint64_t, PanelOrientation> panel_orientation_enum_map_;

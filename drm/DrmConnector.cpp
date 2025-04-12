@@ -98,13 +98,23 @@ auto DrmConnector::Init()-> bool {
   edid_wrapper_ = std::make_unique<EdidWrapper>();
 #endif
 
-  if (IsWriteback() &&
-      (!GetConnectorProperty("WRITEBACK_PIXEL_FORMATS",
-                             &writeback_pixel_formats_) ||
-       !GetConnectorProperty("WRITEBACK_FB_ID", &writeback_fb_id_) ||
-       !GetConnectorProperty("WRITEBACK_OUT_FENCE_PTR",
-                             &writeback_out_fence_))) {
-    return false;
+  if (IsWriteback()) {
+    if (!GetConnectorProperty("WRITEBACK_PIXEL_FORMATS",
+                              &writeback_pixel_formats_property_)) {
+      ALOGE("Could not get WRITEBACK_PIXEL_FORMATS property");
+      return false;
+    }
+
+    if (!GetConnectorProperty("WRITEBACK_FB_ID", &writeback_fb_id_property_)) {
+      ALOGE("Could not get WRITEBACK_FB_ID property");
+      return false;
+    }
+
+    if (!GetConnectorProperty("WRITEBACK_OUT_FENCE_PTR",
+                              &writeback_out_fence_property_)) {
+      ALOGE("Could not get WRITEBACK_OUT_FENCE_PTR property");
+      return false;
+    }
   }
 
   if (GetOptionalConnectorProperty("Colorspace", &colorspace_property_)) {

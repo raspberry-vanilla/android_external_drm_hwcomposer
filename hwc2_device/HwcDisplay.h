@@ -168,6 +168,11 @@ class HwcDisplay {
                                  float *min_luminance);
   HWC2::Error SetColorMode(int32_t mode);
   HWC2::Error SetColorTransform(const float *matrix, int32_t hint);
+
+  bool IsWritebackSupported();
+  bool SetWritebackEnabled(bool enabled);
+  SharedFd GetWritebackBufferFence();
+
   HwcLayer *get_layer(ILayerId layer) {
     auto it = layers_.find(layer);
     if (it == layers_.end())
@@ -296,6 +301,8 @@ class HwcDisplay {
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
 
   std::shared_ptr<DrmKmsPlan> current_plan_;
+
+  SharedFd writeback_complete_fence_;
 
   uint32_t frame_no_ = 0;
   Stats total_stats_;

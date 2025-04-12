@@ -20,12 +20,12 @@
 
 #include "drm/DrmHwc.h"
 #include "hwc2_device/HwcDisplay.h"
+#include "utils/thread_annotations.h"
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
 class Hwc3Display : public ::android::FrontendDisplayBase {
  public:
-  bool must_validate = false;
   // Desired present time for a composition that has been validated but not
   // yet presented. nullopt means it should be presented at the next vsync.
   std::optional<int64_t> desired_present_time = std::nullopt;
@@ -52,7 +52,13 @@ class DrmHwcThree : public ::android::DrmHwc {
   static auto GetHwc3Display(::android::HwcDisplay& display)
       -> std::shared_ptr<Hwc3Display>;
 
+  auto GetMustValidateDisplay(uint64_t display_id) -> bool;
+  void ClearMustValidateDisplay(uint64_t display_id);
+
  private:
   std::shared_ptr<IComposerCallback> composer_callback_;
+
+  std::mutex must_validate_lock_;
+  std::set<uint64_t> must_validate_ GUARDED_BY(must_validate_lock_);
 };
 }  // namespace aidl::android::hardware::graphics::composer3::impl

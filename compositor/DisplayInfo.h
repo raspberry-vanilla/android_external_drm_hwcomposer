@@ -73,10 +73,9 @@ enum PanelOrientation {
 };
 
 /*
- * Content type to be used for HDMI infoframes. Values match the HDMI 1.4
- * specification.
+ * Content type to be used for HDMI infoframes.
  */
-enum class ContentType : int32_t { kNoData, kGraphics, kPhoto, kCinema, kGame };
+enum class ContentType { kNoData, kGraphics, kPhoto, kCinema, kGame };
 
 struct QueuedConfigTiming {
   // In order for the new config to be applied, the client must send a new frame

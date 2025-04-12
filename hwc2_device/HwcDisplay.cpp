@@ -147,9 +147,9 @@ std::string HwcDisplay::Dump() {
 
 HwcDisplay::HwcDisplay(hwc2_display_t handle, bool is_virtual, DrmHwc *hwc)
     : hwc_(hwc), handle_(handle), is_virtual_(is_virtual), client_layer_(this) {
-  if (is_virtual_) {
-    writeback_layer_ = std::make_unique<HwcLayer>(this);
-  }
+  // Create writeback layer for both virtual displays and potential readback
+  // operations
+  writeback_layer_ = std::make_unique<HwcLayer>(this);
 
   identity_color_matrix_ = ToColorTransform(kIdentityMatrix);
 }
@@ -599,6 +599,7 @@ bool HwcDisplay::Init() {
 
   if (is_virtual_) {
     configs_.GenFakeMode(virtual_disp_width_, virtual_disp_height_);
+    pipeline_->writeback_connector = pipeline_->connector;
   } else if (IsInHeadlessMode()) {
     configs_.GenFakeMode(0, 0);
   } else if (configs_.Update(*pipeline_->connector->Get()) !=
@@ -978,11 +979,16 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   current_plan_ = DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
                                                std::move(composition_layers),
                                                cursor_layer);
+  if (!current_plan_) {
+    ALOGE_IF(!a_args.test_only, "Failed to create DrmKmsPlan");
+    return HWC2::Error::BadConfig;
+  }
+  a_args.composition = current_plan_;
 
-  if (is_virtual_) {
+  if (pipeline_->writeback_connector) {
     writeback_layer_->PopulateLayerData();
     if (!writeback_layer_->IsLayerUsableAsDevice()) {
-      ALOGE("Output layer must be always usable by DRM/KMS");
+      ALOGE("Writeback layer not usable by DRM/KMS - no valid buffer set");
       return HWC2::Error::BadLayer;
     }
     a_args.writeback_fb = writeback_layer_->GetLayerData().fb;
@@ -990,18 +996,14 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                                          .acquire_fence;
   }
 
-  if (!current_plan_) {
-    ALOGE_IF(!a_args.test_only, "Failed to create DrmKmsPlan");
-    return HWC2::Error::BadConfig;
-  }
-
-  a_args.composition = current_plan_;
-
   auto ret = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-
   if (ret) {
     ALOGE_IF(!a_args.test_only, "Failed to apply the frame composition ret=%d", ret);
     return HWC2::Error::BadParameter;
+  }
+
+  if (!a_args.test_only) {
+    writeback_complete_fence_ = a_args.out_writeback_complete_fence;
   }
 
   if (new_vsync_period_ns) {
@@ -1123,6 +1125,46 @@ bool HwcDisplay::CtmByGpu() {
     return false;
 
   return true;
+}
+
+bool HwcDisplay::IsWritebackSupported() {
+  return !is_virtual_ &&
+         pipeline_->FindWritebackConnectorForPipeline() != nullptr;
+}
+
+bool HwcDisplay::SetWritebackEnabled(bool enabled) {
+  // Handle Disable
+  if (!enabled) {
+    pipeline_->writeback_connector = nullptr;
+    return true;
+  }
+
+  // Handle Enable
+  if (pipeline_->writeback_connector != nullptr) {
+    return true;
+  }
+
+  auto *wb_connector = pipeline_->FindWritebackConnectorForPipeline();
+  if (!wb_connector) {
+    ALOGE("HwcDisplay: No writeback connector found");
+    return false;
+  }
+  auto bound_connector = wb_connector->BindPipeline(pipeline_.get());
+  if (!bound_connector) {
+    ALOGE("HwcDisplay: Failed to bind writeback connector");
+    return false;
+  }
+  pipeline_->writeback_connector = bound_connector;
+  return true;
+}
+
+SharedFd HwcDisplay::GetWritebackBufferFence() {
+  if (!writeback_complete_fence_) {
+    ALOGE("HwcDisplay: No readback fence available for display");
+    return nullptr;
+  }
+
+  return std::move(writeback_complete_fence_);
 }
 
 std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
