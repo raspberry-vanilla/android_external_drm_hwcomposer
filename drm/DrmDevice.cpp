@@ -27,6 +27,7 @@
 #include <string>
 
 #include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmConnector.h"
 #include "drm/DrmPlane.h"
 #include "drm/ResourceManager.h"
 #include "utils/log.h"
@@ -250,6 +251,52 @@ auto DrmDevice::IsKMSDev(const char *path) -> bool {
 auto DrmDevice::GetConnectors()
     -> const std::vector<std::unique_ptr<DrmConnector>> & {
   return connectors_;
+}
+
+auto DrmDevice::RefreshConnectors() -> void {
+  auto res = MakeDrmModeResUnique(*GetFd());
+  if (!res) {
+    ALOGE("Failed to get DrmDevice resources");
+    return;
+  }
+
+  // Remove the stale connectors present in connectors_ but not in DRM resources
+  std::set<uint32_t> conn_ids_present;
+  for (auto it = begin(connectors_); it != end(connectors_);) {
+    auto stale = true;
+    for (int i = 0; i < res->count_connectors; ++i) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      if (it->get()->GetId() == res->connectors[i]) {
+        stale = false;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        conn_ids_present.insert(res->connectors[i]);
+        break;
+      }
+    }
+    if (stale && it->get()->GetPipeline() == nullptr) {
+      it = connectors_.erase(it);
+    } else {
+      ALOGE_IF(stale, "Stale connector %d %s has pipeline attached",
+               it->get()->GetId(), it->get()->GetName().c_str());
+      ++it;
+    }
+  }
+
+  // Add new connectors in DRM resources that are not present in connectors_
+  for (int i = 0; i < res->count_connectors; ++i) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (conn_ids_present.count(res->connectors[i]) != 0) {
+      continue;
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    auto conn = DrmConnector::CreateInstance(*this, res->connectors[i], i);
+    if (!conn) {
+      continue;
+    }
+    if (!conn->IsWriteback()) {
+      connectors_.emplace_back(std::move(conn));
+    }
+  }
 }
 
 auto DrmDevice::GetPlanes() -> const std::vector<std::unique_ptr<DrmPlane>> & {
