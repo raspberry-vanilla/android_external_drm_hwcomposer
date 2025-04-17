@@ -41,11 +41,7 @@ HwcLayer *GetCursorLayer(const std::vector<HwcLayer *> &layers) {
 
 }  // namespace
 
-HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
-                                     uint32_t *num_requests) {
-  *num_types = 0;
-  *num_requests = 0;
-
+void Backend::ValidateDisplay(HwcDisplay *display) {
   auto layers = display->GetOrderLayersByZPos();
 
   auto flatcon = display->GetFlatCon();
@@ -59,8 +55,7 @@ HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
     if (should_flatten) {
       display->total_stats().frames_flattened_++;
       MarkValidated(layers, 0, layers.size(), /*use_cursor_plane=*/false);
-      *num_types = layers.size();
-      return HWC2::Error::HasChanges;
+      return;
     }
   }
 
@@ -108,14 +103,12 @@ HWC2::Error Backend::ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
     MarkValidated(layers, client_start, client_size, use_cursor_plane);
   }
 
-  *num_types = client_size;
   display->total_stats().gpu_pixops_ += CalcPixOps(layers, client_start,
                                                    client_size);
   display->total_stats().total_pixops_ += CalcPixOps(layers, 0, layers.size());
   if (use_cursor_plane) {
     ++display->total_stats().cursor_plane_frames_;
   }
-  return *num_types != 0 ? HWC2::Error::HasChanges : HWC2::Error::None;
 }
 
 std::tuple<int, size_t> Backend::GetClientLayers(

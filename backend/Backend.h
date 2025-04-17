@@ -23,8 +23,7 @@ namespace android {
 class Backend {
  public:
   virtual ~Backend() = default;
-  virtual HWC2::Error ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
-                                      uint32_t *num_requests);
+  virtual void ValidateDisplay(HwcDisplay *display);
   virtual std::tuple<int, size_t> GetClientLayers(
       HwcDisplay *display, const std::vector<HwcLayer *> &layers,
       bool use_cursor_plane);

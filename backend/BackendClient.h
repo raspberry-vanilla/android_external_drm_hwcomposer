@@ -22,7 +22,6 @@ namespace android {
 
 class BackendClient : public Backend {
  public:
-  HWC2::Error ValidateDisplay(HwcDisplay *display, uint32_t *num_types,
-                              uint32_t *num_requests) override;
+  void ValidateDisplay(HwcDisplay *display) override;
 };
 }  // namespace android

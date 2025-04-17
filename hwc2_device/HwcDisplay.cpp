@@ -334,14 +334,9 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     }
   }
 
-  // ValidateDisplay returns the number of layers that may be changed.
-  uint32_t num_types = 0;
-  uint32_t num_requests = 0;
-  backend_->ValidateDisplay(this, &num_types, &num_requests);
-
-  if (num_types == 0) {
-    return {};
-  }
+  // ValidateDisplay modifies the composition type in layers_ which can be
+  // checked to see which layers' composition strategies have changed.
+  backend_->ValidateDisplay(this);
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
