@@ -65,14 +65,6 @@ inline int32_t Hwc2ConfigIdToHwc3(hwc2_config_t config_id) {
   return static_cast<int32_t>(config_id);
 }
 
-inline hwc2_display_t Hwc3DisplayToHwc2(int64_t display) {
-  return static_cast<hwc2_display_t>(display);
-}
-
-inline hwc2_config_t Hwc3ConfigIdToHwc2(int32_t config_id) {
-  return static_cast<hwc2_config_t>(config_id);
-}
-
 // Values for color modes match across HWC versions, so static cast is safe:
 // https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/ColorMode.aidl
 // https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.0.h;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2;l=118
@@ -98,14 +90,6 @@ inline RenderIntent Hwc2RenderIntentToHwc3(int32_t intent) {
 }
 inline int32_t Hwc3RenderIntentToHwc2(RenderIntent render_intent) {
   return static_cast<int32_t>(render_intent);
-}
-
-// Values appear to match.
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/graphics/common/aidl/android/hardware/graphics/common/Dataspace.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.0.h;l=43
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.1.h;l=22;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2
-inline int32_t Hwc3DataspaceToHwc2(common::Dataspace dataspace) {
-  return static_cast<int32_t>(dataspace);
 }
 
 // Values appear to match.

@@ -1014,15 +1014,8 @@ ndk::ScopedAStatus ComposerClient::getDisplayName(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint32_t size = 0;
-  auto error = Hwc2toHwc3Error(display->GetDisplayName(&size, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  name->resize(size);
-  error = Hwc2toHwc3Error(display->GetDisplayName(&size, name->data()));
-  return ToBinderStatus(error);
+  *name = display->GetDisplayName();
+  return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::getDisplayVsyncPeriod(
