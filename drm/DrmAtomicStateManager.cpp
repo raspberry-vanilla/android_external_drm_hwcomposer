@@ -120,15 +120,8 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     nonblock = false;
     new_frame_state.crtc_active_state = *args.active;
     if (!crtc->GetActiveProperty().AtomicSet(*pset, *args.active ? 1 : 0) ||
-        !connector->GetCrtcIdProperty().AtomicSet(*pset, *args.active
-                                                             ? crtc->GetId()
-                                                             : 0)) {
+        !connector->GetCrtcIdProperty().AtomicSet(*pset, crtc->GetId())) {
       return -EINVAL;
-    }
-    if (!*args.active) {
-      if (!crtc->GetModeProperty().AtomicSet(*pset, 0)) {
-        return -EINVAL;
-      }
     }
   }
 

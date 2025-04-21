@@ -103,9 +103,6 @@ void ResourceManager::Init() {
 
   uevent_listener_->RegisterHotplugHandler([this] {
     const std::unique_lock lock(GetMainLock());
-    for (auto &drm : drms_) {
-      drm->RefreshConnectors();
-    }
     UpdateFrontendDisplays();
   });
 
