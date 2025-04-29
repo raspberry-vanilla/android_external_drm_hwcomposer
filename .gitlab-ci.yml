@@ -4,54 +4,109 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == 'push'
 
 variables:
+  ANDROID_BRANCH: android15-release
   DEBIAN_FRONTEND: noninteractive
-  CI_TEMPLATES_COMMIT: &ci-templates-commit e195d80f35b45cc73668be3767b923fd76c70ed5
+  CI_TEMPLATES_COMMIT: &ci-templates-commit ea3f77641d91765396beba192b8defd3085fa343
   FDO_UPSTREAM_REPO: "drm-hwcomposer/drm-hwcomposer"
-  UBUNTU_HWC_IMAGE: "ubuntu/x86_64_hwc"
-  UBUNTU_HWC_TAG: "20250218_hwc"
+  CUTTLEFISH_TARBALL: "cuttlefish.tar.xz"
 
 include:
   - project: 'freedesktop/ci-templates'
     ref: *ci-templates-commit
     file:
+      - '/templates/debian.yml'
       - '/templates/ubuntu.yml'
-  - local: '.ci/container/.gitlab-ci.yml'
+  - local: '.ci/.gitlab-ci.yml'
+  - local: '.ci/image-tags.yml'
 
 stages:
   - container
   - build
   - tidy
   - style
+  - android
 
-build:
+build_arm64:
   stage: build
   extends:
-    .use-ubuntu/x86_64_hwc
+    .use-ubuntu/x86_64_aospless
   script:
-    - ln -s "${CI_PROJECT_DIR}" "/aospless/src"
-    - make -C /aospless install
-    - mkdir -p "${CI_PROJECT_DIR}/install/arm64"
-    - cp -r /aospless/install/* "${CI_PROJECT_DIR}/install/arm64"
+    .ci/build-arm64.sh
   artifacts:
     paths:
       - "${CI_PROJECT_DIR}/install/arm64"
     expire_in: 1 week
 
+build_x86_64:
+  stage: build
+  extends:
+    .use-ubuntu/x86_64_aospless
+  script:
+    "${CI_PROJECT_DIR}/.ci/build-x86_64.sh"
+  artifacts:
+    paths:
+      - "${CI_PROJECT_DIR}/install/x86_64"
+    expire_in: 1 week
+
 tidy:
   stage: tidy
   extends:
-    .use-ubuntu/x86_64_hwc
+    .use-ubuntu/x86_64_aospless
   script:
-    - cp -r /aospless ../
+    - cp -r /aospless_arm64 ../aospless
     - make -j$(nproc) -k -f "${CI_PROJECT_DIR}/.ci/Makefile"
 
 checkstyle:
   stage: style
   extends:
-    .use-ubuntu/x86_64_hwc
+    .use-ubuntu/x86_64_aospless
   script: "./.ci/.gitlab-ci-checkcommit.sh"
   artifacts:
     when: on_failure
     untracked: true
   tags:
     - placeholder-job
+
+android-cts:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  variables:
+    RESULTS_DIR: "${CI_PROJECT_DIR}/results"
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/cts-runner.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+    - job: use-debian/x86_64_cuttlefish
+      artifacts: true
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+android-vts:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  variables:
+    RESULTS_DIR: "${CI_PROJECT_DIR}/results"
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/vts-runner.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+    - job: use-debian/x86_64_cuttlefish
+      artifacts: true
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm

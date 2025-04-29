@@ -1,0 +1,109 @@
+
+.incorporate-templates-commit:
+  variables:
+    FDO_DISTRIBUTION_TAG: "${HWC_TAG}--${CI_TEMPLATES_COMMIT}"
+
+.container:
+  stage: container
+  extends:
+    - .incorporate-templates-commit
+  variables:
+    FDO_REPO_SUFFIX: $CI_JOB_NAME
+    # no need to pull the whole repo to build the container image
+    GIT_STRATEGY: none
+
+debian/x86_64_cuttlefish:
+  extends:
+    - .fdo.container-build@debian
+    - .container
+  timeout: 6h
+  variables:
+    FDO_DISTRIBUTION_VERSION: "bookworm-slim"
+    FDO_DISTRIBUTION_EXEC: 'bash .ci/container/debian/x86_64_cuttlefish.sh'
+    HWC_TAG: $DEBIAN_CUTTLEFISH_TAG
+  after_script:
+    - cp "/cache/${CI_PROJECT_PATH}/cuttlefish.log.txt.gz" "${CI_PROJECT_DIR}/"
+    - cp "/cache/${CI_PROJECT_PATH}/${CUTTLEFISH_TARBALL}" "${CI_PROJECT_DIR}/"
+  artifacts:
+    when: on_failure
+    paths:
+      - "${CI_PROJECT_DIR}/cuttlefish.log.txt.gz"
+      - "${CI_PROJECT_DIR}/${CUTTLEFISH_TARBALL}"
+    expire_in: 1 week
+
+.ubuntu/x86_64_hwc:
+  extends:
+    - .fdo.container-build@ubuntu
+    - .container
+  variables:
+    FDO_DISTRIBUTION_VERSION: "24.10"
+
+ubuntu/x86_64_aospless:
+  extends:
+    - .ubuntu/x86_64_hwc
+  variables:
+    FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_aospless.sh'
+    HWC_TAG: $UBUNTU_AOSPLESS_TAG
+
+ubuntu/x86_64_android:
+  extends:
+    - .ubuntu/x86_64_hwc
+  timeout: 2h
+  variables:
+    ANDROID_VERSION: 15
+    ANDROID_SDK_VERSION: 35
+    ANDROID_CTS_DEVICE_ARCH: "x86"
+    ANDROID_CTS_MODULES: >-
+      CtsGraphicsTestCases
+      CtsDisplayTestCases
+    FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android.sh'
+    HWC_TAG: $UBUNTU_ANDROID_TAG
+  after_script:
+    - cp /vts.log.txt "${CI_PROJECT_DIR}/vts.log.txt"
+  artifacts:
+    when: always
+    paths:
+      - "${CI_PROJECT_DIR}/vts.log.txt"
+    expire_in: 1 week
+
+.set-image:
+  extends:
+    - .incorporate-templates-commit
+  image: "$CI_REGISTRY_IMAGE/${HWC_IMAGE}:${FDO_DISTRIBUTION_TAG}"
+
+.use-ubuntu/x86_64_aospless:
+  extends:
+    - .fdo.container-build@ubuntu
+    - .set-image
+  variables:
+    HWC_IMAGE: $UBUNTU_AOSPLESS_IMAGE
+    HWC_TAG: $UBUNTU_AOSPLESS_TAG
+  needs:
+    - ubuntu/x86_64_aospless
+
+.use-ubuntu/x86_64_android:
+  extends:
+    - .fdo.container-build@ubuntu
+    - .set-image
+  variables:
+    HWC_IMAGE: $UBUNTU_ANDROID_IMAGE
+    HWC_TAG: $UBUNTU_ANDROID_TAG
+  needs:
+    - ubuntu/x86_64_android
+
+use-debian/x86_64_cuttlefish:
+  extends:
+    - .fdo.container-build@debian
+    - .set-image
+  variables:
+    HWC_IMAGE: $DEBIAN_CUTTLEFISH_IMAGE
+    HWC_TAG: $DEBIAN_CUTTLEFISH_TAG
+  needs:
+    - debian/x86_64_cuttlefish
+  script:
+    - cp -a "/${CUTTLEFISH_TARBALL}" "${CI_PROJECT_DIR}"
+  artifacts:
+    when: always
+    paths:
+      - "${CI_PROJECT_DIR}/${CUTTLEFISH_TARBALL}"
+    expire_in: 1 week
