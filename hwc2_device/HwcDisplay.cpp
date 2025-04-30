@@ -106,45 +106,6 @@ auto ToColorTransform(const std::array<float, 16> &color_transform_matrix) {
 
 }  // namespace
 
-std::string HwcDisplay::DumpDelta(HwcDisplay::Stats delta) {
-  if (delta.total_pixops_ == 0)
-    return "No stats yet";
-  auto ratio = 1.0 - (double(delta.gpu_pixops_) / double(delta.total_pixops_));
-
-  std::stringstream ss;
-  ss << " Total frames count: " << delta.total_frames_ << "\n"
-     << " Failed cursor test commit frames: "
-     << delta.failed_kms_cursor_validate_ << "\n"
-     << " Failed to test commit frames: " << delta.failed_kms_validate_ << "\n"
-     << " Failed to commit frames: " << delta.failed_kms_present_ << "\n"
-     << ((delta.failed_kms_present_ > 0)
-             ? " !!! Internal failure, FIX it please\n"
-             : "")
-     << " Flattened frames: " << delta.frames_flattened_ << "\n"
-     << " Cursor plane frames: " << delta.cursor_plane_frames_ << "\n"
-     << " Pixel operations (free units) : [TOTAL: " << delta.total_pixops_
-     << " / GPU: " << delta.gpu_pixops_ << "]\n"
-     << " Composition efficiency: " << ratio;
-
-  return ss.str();
-}
-
-std::string HwcDisplay::Dump() {
-  auto connector_name = IsInHeadlessMode()
-                            ? std::string("NULL-DISPLAY")
-                            : GetPipe().connector->Get()->GetName();
-
-  std::stringstream ss;
-  ss << "- Display on: " << connector_name << "\n"
-     << "Statistics since system boot:\n"
-     << DumpDelta(total_stats_) << "\n\n"
-     << "Statistics since last dumpsys request:\n"
-     << DumpDelta(total_stats_.minus(prev_stats_)) << "\n\n";
-
-  memcpy(&prev_stats_, &total_stats_, sizeof(Stats));
-  return ss.str();
-}
-
 auto HwcDisplay::GetDisplayName() -> std::string {
   std::ostringstream stream;
   if (IsInHeadlessMode()) {
@@ -384,7 +345,7 @@ auto HwcDisplay::PresentStagedComposition(
 
   HWC2::Error ret{};
 
-  ++total_stats_.total_frames_;
+  ++total_stats_.total_frames;
 
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
@@ -399,7 +360,7 @@ auto HwcDisplay::PresentStagedComposition(
   ret = CreateComposition(a_args);
 
   if (ret != HWC2::Error::None)
-    ++total_stats_.failed_kms_present_;
+    ++total_stats_.failed_kms_present;
 
   if (ret == HWC2::Error::BadLayer) {
     // Can we really have no client or device layers?

@@ -123,4 +123,9 @@ void DrmHwcTwo::SendRefreshEventToClient(hwc2_display_t displayid) {
   }
 }
 
+const std::string& DrmHwcTwo::RefreshStateDump() {
+  last_state_dump_ = DumpState();
+  return last_state_dump_;
+}
+
 }  // namespace android

@@ -15,6 +15,7 @@ src_common = files(
     'backend/BackendManager.cpp',
     'backend/Backend.cpp',
     'backend/BackendClient.cpp',
+    'stats/CompositionStats.cpp',
     'utils/fd.cpp',
     'utils/LibdisplayEdidWrapper.cpp',
     'utils/properties.cpp',

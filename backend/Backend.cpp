@@ -53,7 +53,7 @@ void Backend::ValidateDisplay(HwcDisplay *display) {
       should_flatten = flatcon->NewFrame();
 
     if (should_flatten) {
-      display->total_stats().frames_flattened_++;
+      display->total_stats().frames_flattened++;
       MarkValidated(layers, 0, layers.size(), /*use_cursor_plane=*/false);
       return;
     }
@@ -90,24 +90,24 @@ void Backend::ValidateDisplay(HwcDisplay *display) {
 
   // First fallback: convert cursor layer to device composition and reattempt.
   if (!success && use_cursor_plane) {
-    ++display->total_stats().failed_kms_cursor_validate_;
+    ++display->total_stats().failed_kms_cursor_validate;
     use_cursor_plane = false;
     success = validate_and_test();
   }
 
   // Final fallback: convert all layers to client composition.
   if (!success) {
-    ++display->total_stats().failed_kms_validate_;
+    ++display->total_stats().failed_kms_validate;
     client_start = 0;
     client_size = layers.size();
     MarkValidated(layers, client_start, client_size, use_cursor_plane);
   }
 
-  display->total_stats().gpu_pixops_ += CalcPixOps(layers, client_start,
-                                                   client_size);
-  display->total_stats().total_pixops_ += CalcPixOps(layers, 0, layers.size());
+  display->total_stats().gpu_pixops += CalcPixOps(layers, client_start,
+                                                  client_size);
+  display->total_stats().total_pixops += CalcPixOps(layers, 0, layers.size());
   if (use_cursor_plane) {
-    ++display->total_stats().cursor_plane_frames_;
+    ++display->total_stats().cursor_plane_frames;
   }
 }
 

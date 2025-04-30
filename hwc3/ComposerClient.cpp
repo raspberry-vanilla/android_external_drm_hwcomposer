@@ -1575,12 +1575,7 @@ ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
 #endif
 
 std::string ComposerClient::Dump() {
-  uint32_t size = 0;
-  hwc_->Dump(&size, nullptr);
-
-  std::string buffer(size, '\0');
-  hwc_->Dump(&size, &buffer.front());
-  return buffer;
+  return hwc_->DumpState();
 }
 
 ::ndk::SpAIBinder ComposerClient::createBinder() {

@@ -102,6 +102,8 @@ filegroup {
         "hwc2_device/HwcLayer.cpp",
         "hwc2_device/hwc2_device.cpp",
 
+        "stats/CompositionStats.cpp",
+
         "utils/LibdisplayEdidWrapper.cpp",
         "utils/fd.cpp",
         "utils/properties.cpp",
@@ -266,5 +268,17 @@ apex {
     prebuilts: [
         "drm_hwcomposer_hwc3_apex_init_rc",
         "drm_hwcomposer_hwc3_apex_vintf",
+    ],
+}
+
+cc_test_host {
+    name: "drm_hwcomposer_unittests",
+    srcs: [
+        "stats/CompositionStats.cpp",
+        "stats/CompositionStatsTest.cpp",
+    ],
+    static_libs: [
+        "libgmock",
+        "libgtest",
     ],
 }

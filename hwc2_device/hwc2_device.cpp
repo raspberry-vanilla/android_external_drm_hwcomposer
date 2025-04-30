@@ -281,6 +281,26 @@ static BufferSampleRange Hwc2ToSampleRange(int32_t dataspace) {
   }
 }
 
+/* Device functions */
+static int32_t Dump(hwc2_device_t *device, uint32_t *out_size,
+                    char *out_buffer) {
+  DrmHwcTwo *hwc = ToDrmHwcTwo(device);
+  if (out_size == nullptr) {
+    return static_cast<int32_t>(HWC2::Error::BadParameter);
+  }
+
+  if (out_buffer != nullptr) {
+    const std::string &last_dump = hwc->GetLastStateDump();
+    auto copied_bytes = last_dump.copy(out_buffer, *out_size);
+    *out_size = copied_bytes;
+    return 0;
+  }
+
+  const std::string &new_dump = hwc->RefreshStateDump();
+  *out_size = static_cast<uint32_t>(new_dump.size());
+  return 0;
+}
+
 /* Display functions */
 static int32_t CreateLayer(hwc2_device_t *device, hwc2_display_t display,
                            hwc2_layer_t *out_layer) {
@@ -1130,9 +1150,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
           DeviceHook<int32_t, decltype(&DrmHwcTwo::DestroyVirtualDisplay),
                      &DrmHwcTwo::DestroyVirtualDisplay, hwc2_display_t>);
     case HWC2::FunctionDescriptor::Dump:
-      return ToHook<HWC2_PFN_DUMP>(
-          DeviceHook<void, decltype(&DrmHwcTwo::Dump), &DrmHwcTwo::Dump,
-                     uint32_t *, char *>);
+      return (hwc2_function_pointer_t)Dump;
     case HWC2::FunctionDescriptor::GetMaxVirtualDisplayCount:
       return ToHook<HWC2_PFN_GET_MAX_VIRTUAL_DISPLAY_COUNT>(
           DeviceHook<uint32_t, decltype(&DrmHwcTwo::GetMaxVirtualDisplayCount),

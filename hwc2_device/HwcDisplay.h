@@ -32,6 +32,7 @@
 #include "drm/ResourceManager.h"
 #include "drm/VSyncWorker.h"
 #include "hwc2_device/HwcLayer.h"
+#include "stats/CompositionStats.h"
 
 namespace android {
 
@@ -177,29 +178,6 @@ class HwcDisplay {
     return &it->second;
   }
 
-  /* Statistics */
-  struct Stats {
-    Stats minus(Stats b) const {
-      return {total_frames_ - b.total_frames_,
-              total_pixops_ - b.total_pixops_,
-              gpu_pixops_ - b.gpu_pixops_,
-              failed_kms_validate_ - b.failed_kms_validate_,
-              failed_kms_present_ - b.failed_kms_present_,
-              frames_flattened_ - b.frames_flattened_,
-              cursor_plane_frames_ - b.cursor_plane_frames_,
-              failed_kms_cursor_validate_ - b.failed_kms_cursor_validate_};
-    }
-
-    uint32_t total_frames_ = 0;
-    uint64_t total_pixops_ = 0;
-    uint64_t gpu_pixops_ = 0;
-    uint32_t failed_kms_validate_ = 0;
-    uint32_t failed_kms_present_ = 0;
-    uint32_t frames_flattened_ = 0;
-    uint32_t cursor_plane_frames_ = 0;
-    uint32_t failed_kms_cursor_validate_ = 0;
-  };
-
   const Backend *backend() const;
   void set_backend(std::unique_ptr<Backend> backend);
 
@@ -217,7 +195,7 @@ class HwcDisplay {
 
   bool CtmByGpu();
 
-  Stats &total_stats() {
+  CompositionStats &total_stats() {
     return total_stats_;
   }
 
@@ -302,9 +280,7 @@ class HwcDisplay {
   SharedFd writeback_complete_fence_;
 
   uint32_t frame_no_ = 0;
-  Stats total_stats_;
-  Stats prev_stats_;
-  std::string DumpDelta(HwcDisplay::Stats delta);
+  CompositionStats total_stats_;
 
   void SetColorMatrixToIdentity();
 

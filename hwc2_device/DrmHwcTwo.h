@@ -39,6 +39,11 @@ class DrmHwcTwo : public DrmHwc {
   void SendHotplugEventToClient(hwc2_display_t displayid,
                                 DisplayStatus display_status) override;
 
+  const std::string& RefreshStateDump();
+  const std::string& GetLastStateDump() const {
+    return last_state_dump_;
+  }
+
  private:
   std::pair<HWC2_PFN_HOTPLUG, hwc2_callback_data_t> hotplug_callback_{};
   std::pair<HWC2_PFN_VSYNC, hwc2_callback_data_t> vsync_callback_{};
@@ -48,5 +53,7 @@ class DrmHwcTwo : public DrmHwc {
       period_timing_changed_callback_{};
 #endif
   std::pair<HWC2_PFN_REFRESH, hwc2_callback_data_t> refresh_callback_{};
+
+  std::string last_state_dump_;
 };
 }  // namespace android
