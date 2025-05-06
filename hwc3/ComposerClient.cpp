@@ -220,7 +220,7 @@ std::optional<std::array<float, kCtmSize>> AidlToColorTransformMatrix(
   return color_transform_matrix;
 }
 
-std::optional<HWC2::Composition> AidlToCompositionType(
+std::optional<HwcLayer::CompositionType> AidlToCompositionType(
     const std::optional<ParcelableComposition> composition) {
   if (!composition) {
     return std::nullopt;
@@ -228,15 +228,15 @@ std::optional<HWC2::Composition> AidlToCompositionType(
 
   switch (composition->composition) {
     case Composition::INVALID:
-      return HWC2::Composition::Invalid;
+      return HwcLayer::CompositionType::kInvalid;
     case Composition::CLIENT:
-      return HWC2::Composition::Client;
+      return HwcLayer::CompositionType::kClient;
     case Composition::DEVICE:
-      return HWC2::Composition::Device;
+      return HwcLayer::CompositionType::kDevice;
     case Composition::SOLID_COLOR:
-      return HWC2::Composition::SolidColor;
+      return HwcLayer::CompositionType::kSolidColor;
     case Composition::CURSOR:
-      return HWC2::Composition::Cursor;
+      return HwcLayer::CompositionType::kCursor;
 
     // Unsupported composition types.
     case Composition::DISPLAY_DECORATION:

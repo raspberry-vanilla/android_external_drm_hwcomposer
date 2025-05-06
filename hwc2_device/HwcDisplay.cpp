@@ -286,11 +286,11 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
    */
   for (auto &l : layers_) {
     l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
-                                       HWC2::Composition::Client);
+                                       HwcLayer::CompositionType::kClient);
 
     /* Populate layer data for layers that might be mapped to a drm plane. */
-    if (l.second.GetSfType() == HWC2::Composition::Device ||
-        l.second.GetSfType() == HWC2::Composition::Cursor) {
+    if (l.second.GetSfType() == HwcLayer::CompositionType::kDevice ||
+        l.second.GetSfType() == HwcLayer::CompositionType::kCursor) {
       l.second.PopulateLayerData();
     }
   }
@@ -568,8 +568,7 @@ bool HwcDisplay::Init() {
     pipeline_->writeback_connector = pipeline_->connector;
   } else if (IsInHeadlessMode()) {
     configs_.GenFakeMode(0, 0);
-  } else if (configs_.Update(*pipeline_->connector->Get()) !=
-             HWC2::Error::None) {
+  } else if (!configs_.Update(*pipeline_->connector->Get())) {
     return false;
   }
   return SetConfig(configs_.preferred_config_id) ==
@@ -780,10 +779,10 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   std::optional<LayerData> cursor_layer = std::nullopt;
   for (auto &[_, layer] : layers_) {
     switch (layer.GetValidatedType()) {
-      case HWC2::Composition::Device:
+      case HwcLayer::CompositionType::kDevice:
         z_map.emplace(layer.GetZOrder(), &layer);
         break;
-      case HWC2::Composition::Cursor:
+      case HwcLayer::CompositionType::kCursor:
         if (!cursor_layer.has_value()) {
           cursor_layer = layer.GetLayerData();
         } else {
@@ -791,13 +790,16 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
           z_map.emplace(layer.GetZOrder(), &layer);
         }
         break;
-      case HWC2::Composition::Client:
+      case HwcLayer::CompositionType::kClient:
         // Place it at the z_order of the lowest client layer
         use_client_layer = true;
         client_layer_count++;
         client_z_order = std::min(client_z_order, layer.GetZOrder());
         break;
-      default:
+      case HwcLayer::CompositionType::kSolidColor:
+      case HwcLayer::CompositionType::kInvalid:
+        ALOGE("Invalid layer type: %d",
+              static_cast<int>(layer.GetValidatedType()));
         continue;
     }
   }
@@ -1043,9 +1045,9 @@ std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
   std::sort(std::begin(ordered_layers), std::end(ordered_layers),
             [](const HwcLayer *lhs, const HwcLayer *rhs) {
               // Cursor layers should always have highest zpos.
-              if ((lhs->GetSfType() == HWC2::Composition::Cursor) !=
-                  (rhs->GetSfType() == HWC2::Composition::Cursor)) {
-                return rhs->GetSfType() == HWC2::Composition::Cursor;
+              if ((lhs->GetSfType() == HwcLayer::CompositionType::kCursor) !=
+                  (rhs->GetSfType() == HwcLayer::CompositionType::kCursor)) {
+                return rhs->GetSfType() == HwcLayer::CompositionType::kCursor;
               }
 
               return lhs->GetZOrder() < rhs->GetZOrder();
@@ -1154,8 +1156,8 @@ void HwcDisplay::set_backend(std::unique_ptr<Backend> backend) {
 bool HwcDisplay::NeedsClientLayerUpdate() const {
   return std::any_of(layers_.begin(), layers_.end(), [](const auto &pair) {
     const auto &layer = pair.second;
-    return layer.GetSfType() == HWC2::Composition::Client ||
-           layer.GetValidatedType() == HWC2::Composition::Client;
+    return layer.GetSfType() == HwcLayer::CompositionType::kClient ||
+           layer.GetValidatedType() == HwcLayer::CompositionType::kClient;
   });
 }
 

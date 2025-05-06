@@ -22,7 +22,7 @@ namespace android {
 
 void BackendClient::ValidateDisplay(HwcDisplay *display) {
   for (auto &[layer_handle, layer] : display->layers()) {
-    layer.SetValidatedType(HWC2::Composition::Client);
+    layer.SetValidatedType(HwcLayer::CompositionType::kClient);
   }
 }
 

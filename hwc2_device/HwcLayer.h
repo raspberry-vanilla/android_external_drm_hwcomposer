@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <aidl/android/hardware/graphics/common/Transform.h>
-#include <hardware/hwcomposer2.h>
 #include <memory>
 
 #include "bufferinfo/BufferInfo.h"
@@ -44,6 +42,13 @@ class HwcLayer {
     int32_t slot_id;
     SharedFd fence;
   };
+  enum class CompositionType {
+    kInvalid,
+    kClient,
+    kDevice,
+    kSolidColor,
+    kCursor
+  };
   // A set of properties to be validated.
   struct LayerProperties {
     std::optional<Buffer> slot_buffer;
@@ -51,7 +56,7 @@ class HwcLayer {
     std::optional<BufferBlendMode> blend_mode;
     std::optional<BufferColorSpace> color_space;
     std::optional<BufferSampleRange> sample_range;
-    std::optional<HWC2::Composition> composition_type;
+    std::optional<CompositionType> composition_type;
     std::optional<DstRectInfo> display_frame;
     std::optional<float> alpha;
     std::optional<SrcRectInfo> source_crop;
@@ -62,16 +67,16 @@ class HwcLayer {
 
   explicit HwcLayer(HwcDisplay *parent_display) : parent_(parent_display){};
 
-  HWC2::Composition GetSfType() const {
+  CompositionType GetSfType() const {
     return sf_type_;
   }
-  HWC2::Composition GetValidatedType() const {
+  CompositionType GetValidatedType() const {
     return validated_type_;
   }
   void AcceptTypeChange() {
     sf_type_ = validated_type_;
   }
-  void SetValidatedType(HWC2::Composition type) {
+  void SetValidatedType(CompositionType type) {
     validated_type_ = type;
   }
   bool IsTypeChanged() const {
@@ -107,8 +112,8 @@ class HwcLayer {
  private:
   // sf_type_ stores the initial type given to us by surfaceflinger,
   // validated_type_ stores the type after running ValidateDisplay
-  HWC2::Composition sf_type_ = HWC2::Composition::Invalid;
-  HWC2::Composition validated_type_ = HWC2::Composition::Invalid;
+  CompositionType sf_type_ = CompositionType::kInvalid;
+  CompositionType validated_type_ = CompositionType::kInvalid;
 
   uint32_t z_order_ = 0;
   LayerData layer_data_;

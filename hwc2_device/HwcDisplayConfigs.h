@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <hardware/hwcomposer2.h>
-
 #include <map>
 
 #include "drm/DrmMode.h"
@@ -38,7 +36,7 @@ struct HwcDisplayConfig {
 };
 
 struct HwcDisplayConfigs {
-  HWC2::Error Update(DrmConnector &conn);
+  bool Update(DrmConnector &conn);
   void GenFakeMode(uint16_t width, uint16_t height);
 
   std::map<uint32_t /*config_id*/, struct HwcDisplayConfig> hwc_configs;

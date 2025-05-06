@@ -102,7 +102,7 @@ void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
 }
 
 // NOLINTNEXTLINE (readability-function-cognitive-complexity): Fixme
-HWC2::Error HwcDisplayConfigs::Update(DrmConnector &connector) {
+bool HwcDisplayConfigs::Update(DrmConnector &connector) {
   /* In case UpdateModes will fail we will still have one mode for headless
    * mode
    */
@@ -111,12 +111,12 @@ HWC2::Error HwcDisplayConfigs::Update(DrmConnector &connector) {
   auto ret = connector.UpdateModes();
   if (ret != 0) {
     ALOGE("Failed to update display modes %d", ret);
-    return HWC2::Error::BadDisplay;
+    return false;
   }
 
   if (connector.GetModes().empty()) {
     ALOGE("No modes reported by KMS");
-    return HWC2::Error::BadDisplay;
+    return false;
   }
 
   hwc_configs.clear();
@@ -248,7 +248,7 @@ HWC2::Error HwcDisplayConfigs::Update(DrmConnector &connector) {
     }
   }
 
-  return HWC2::Error::None;
+  return true;
 }
 
 }  // namespace android

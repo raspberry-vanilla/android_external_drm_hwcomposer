@@ -31,7 +31,7 @@ HwcLayer *GetCursorLayer(const std::vector<HwcLayer *> &layers) {
   auto it = std::find_if(layers.begin(), layers.end(),
                          [&](auto *layer) -> bool {
                            return layer->GetSfType() ==
-                                  HWC2::Composition::Cursor;
+                                  HwcLayer::CompositionType::kCursor;
                          });
   if (it == layers.end()) {
     return nullptr;
@@ -136,9 +136,9 @@ bool Backend::IsClientLayer(HwcDisplay *display, HwcLayer *layer) {
           display->GetHwc()->GetResMan().ForcedScalingWithGpu());
 }
 
-bool Backend::HardwareSupportsLayerType(HWC2::Composition comp_type) {
-  return comp_type == HWC2::Composition::Device ||
-         comp_type == HWC2::Composition::Cursor;
+bool Backend::HardwareSupportsLayerType(HwcLayer::CompositionType comp_type) {
+  return comp_type == HwcLayer::CompositionType::kDevice ||
+         comp_type == HwcLayer::CompositionType::kCursor;
 }
 
 uint32_t Backend::CalcPixOps(const std::vector<HwcLayer *> &layers,
@@ -161,12 +161,12 @@ void Backend::MarkValidated(std::vector<HwcLayer *> &layers,
                             bool use_cursor_plane) {
   for (size_t z_order = 0; z_order < layers.size(); ++z_order) {
     if (z_order >= client_first_z && z_order < client_first_z + client_size) {
-      layers[z_order]->SetValidatedType(HWC2::Composition::Client);
-    } else if (use_cursor_plane &&
-               layers[z_order]->GetSfType() == HWC2::Composition::Cursor) {
-      layers[z_order]->SetValidatedType(HWC2::Composition::Cursor);
+      layers[z_order]->SetValidatedType(HwcLayer::CompositionType::kClient);
+    } else if (use_cursor_plane && layers[z_order]->GetSfType() ==
+                                       HwcLayer::CompositionType::kCursor) {
+      layers[z_order]->SetValidatedType(HwcLayer::CompositionType::kCursor);
     } else {
-      layers[z_order]->SetValidatedType(HWC2::Composition::Device);
+      layers[z_order]->SetValidatedType(HwcLayer::CompositionType::kDevice);
     }
   }
 }
