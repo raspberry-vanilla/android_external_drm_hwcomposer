@@ -123,6 +123,12 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
         !connector->GetCrtcIdProperty().AtomicSet(*pset, crtc->GetId())) {
       return -EINVAL;
     }
+    if (!*args.active && args.teardown) {
+      if (!connector->GetCrtcIdProperty().AtomicSet(*pset, 0) ||
+          !crtc->GetModeProperty().AtomicSet(*pset, 0)) {
+        return -EINVAL;
+      }
+    }
   }
 
   auto *drm = pipe_->device;

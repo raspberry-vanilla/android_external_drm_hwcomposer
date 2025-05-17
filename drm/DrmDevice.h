@@ -113,6 +113,8 @@ class DrmDevice {
     return cap_cursor_size_;
   }
 
+  auto RefreshConnectors() -> void;
+
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);
   auto Init(const char *path) -> int;

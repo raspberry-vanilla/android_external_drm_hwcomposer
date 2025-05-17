@@ -301,6 +301,37 @@ static int32_t Dump(hwc2_device_t *device, uint32_t *out_size,
   return 0;
 }
 
+static int32_t CreateVirtualDisplay(hwc2_device_t *device, uint32_t width,
+                                    uint32_t height, int32_t * /*format*/,
+                                    hwc2_display_t *out_display_id) {
+  ALOGV("CreateVirtualDisplay");
+  LOCK_COMPOSER(device);
+  auto display_id = ihwc->CreateVirtualDisplay(width, height);
+  if (!display_id) {
+    return static_cast<int32_t>(HWC2::Error::Unsupported);
+  }
+
+  *out_display_id = display_id.value();
+  return 0;
+}
+
+static int32_t DestroyVirtualDisplay(hwc2_device_t *device,
+                                     hwc2_display_t display) {
+  ALOGV("DestroyVirtualDisplay");
+  LOCK_COMPOSER(device);
+  GET_DISPLAY(display);
+  if (!ihwc->DestroyVirtualDisplay(display)) {
+    return static_cast<int32_t>(HWC2::Error::BadParameter);
+  }
+  return 0;
+}
+
+static int32_t GetMaxVirtualDisplayCount(hwc2_device_t *device) {
+  ALOGV("GetMaxVirtualDisplayCount");
+  LOCK_COMPOSER(device);
+  return static_cast<int32_t>(ihwc->GetMaxVirtualDisplayCount());
+}
+
 /* Display functions */
 static int32_t CreateLayer(hwc2_device_t *device, hwc2_display_t display,
                            hwc2_layer_t *out_layer) {
@@ -1158,20 +1189,13 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
   switch (func) {
     // Device functions
     case HWC2::FunctionDescriptor::CreateVirtualDisplay:
-      return ToHook<HWC2_PFN_CREATE_VIRTUAL_DISPLAY>(
-          DeviceHook<int32_t, decltype(&DrmHwcTwo::CreateVirtualDisplay),
-                     &DrmHwcTwo::CreateVirtualDisplay, uint32_t, uint32_t,
-                     int32_t *, hwc2_display_t *>);
+      return (hwc2_function_pointer_t)CreateVirtualDisplay;
     case HWC2::FunctionDescriptor::DestroyVirtualDisplay:
-      return ToHook<HWC2_PFN_DESTROY_VIRTUAL_DISPLAY>(
-          DeviceHook<int32_t, decltype(&DrmHwcTwo::DestroyVirtualDisplay),
-                     &DrmHwcTwo::DestroyVirtualDisplay, hwc2_display_t>);
+      return (hwc2_function_pointer_t)DestroyVirtualDisplay;
     case HWC2::FunctionDescriptor::Dump:
       return (hwc2_function_pointer_t)Dump;
     case HWC2::FunctionDescriptor::GetMaxVirtualDisplayCount:
-      return ToHook<HWC2_PFN_GET_MAX_VIRTUAL_DISPLAY_COUNT>(
-          DeviceHook<uint32_t, decltype(&DrmHwcTwo::GetMaxVirtualDisplayCount),
-                     &DrmHwcTwo::GetMaxVirtualDisplayCount>);
+      return (hwc2_function_pointer_t)GetMaxVirtualDisplayCount;
     case HWC2::FunctionDescriptor::RegisterCallback:
       return ToHook<HWC2_PFN_REGISTER_CALLBACK>(
           DeviceHook<int32_t, decltype(&DrmHwcTwo::RegisterCallback),

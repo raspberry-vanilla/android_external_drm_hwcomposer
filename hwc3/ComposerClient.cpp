@@ -540,17 +540,14 @@ ndk::ScopedAStatus ComposerClient::createVirtualDisplay(
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
 
-  hwc2_display_t hwc2_display_id = 0;
   // TODO: Format is currently not used in drm_hwcomposer.
-  int32_t hwc2_format = 0;
-  auto err = Hwc2toHwc3Error(hwc_->CreateVirtualDisplay(width, height,
-                                                        &hwc2_format,
-                                                        &hwc2_display_id));
-  if (err != hwc3::Error::kNone) {
-    return ToBinderStatus(err);
+  std::optional<hwc2_display_t>
+      hwc2_display_id = hwc_->CreateVirtualDisplay(width, height);
+  if (!hwc2_display_id) {
+    return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
-  out_display->display = Hwc2DisplayToHwc3(hwc2_display_id);
+  out_display->display = Hwc2DisplayToHwc3(hwc2_display_id.value());
   out_display->format = format_hint;
   return ndk::ScopedAStatus::ok();
 }
@@ -574,8 +571,14 @@ ndk::ScopedAStatus ComposerClient::destroyLayer(int64_t display_id,
 ndk::ScopedAStatus ComposerClient::destroyVirtualDisplay(int64_t display_id) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
-  auto err = Hwc2toHwc3Error(hwc_->DestroyVirtualDisplay(display_id));
-  return ToBinderStatus(err);
+  auto* display = GetDisplay(display_id);
+  if (display == nullptr) {
+    return ToBinderStatus(hwc3::Error::kBadDisplay);
+  }
+  if (!hwc_->DestroyVirtualDisplay(display_id)) {
+    return ToBinderStatus(hwc3::Error::kBadParameter);
+  }
+  return ndk::ScopedAStatus::ok();
 }
 
 ::android::HwcDisplay* ComposerClient::GetDisplay(uint64_t display_id) {

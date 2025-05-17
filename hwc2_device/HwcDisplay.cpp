@@ -519,6 +519,7 @@ void HwcDisplay::Deinit() {
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
     a_args.composition = {};
     a_args.active = false;
+    a_args.teardown = true;
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
 
     current_plan_.reset();
