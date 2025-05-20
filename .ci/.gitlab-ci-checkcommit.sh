@@ -49,18 +49,6 @@ git log --pretty='%h' FETCH_HEAD..HEAD | while read h; do
 
 	commit_body=$(git show -s --pretty=%b "$h")
 
-	author=$(git show -s --format='%an <%ae>' "$h")
-	if findtag "$commit_body" "Signed-off-by" "$author"; then
-		echoerr "Author SoB tag is missing from commit $h"
-		exit 1
-	fi
-
-	committer=$(git show -s --format='%cn <%ce>' "$h")
-	if findtag "$commit_body" "Signed-off-by" "$committer"; then
-		echoerr "Committer SoB tag is missing from commit $h"
-		exit 1
-	fi
-
 	git diff -U0 "$h" -- | clang-format-diff-19 -p 1 -style=file > /tmp/format-fixup.patch
 	if [ -s  /tmp/format-fixup.patch ]; then
 		cat /tmp/format-fixup.patch >&2

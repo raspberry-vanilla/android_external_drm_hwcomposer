@@ -170,6 +170,42 @@ auto HwcDisplay::GetLastRequestedConfig() const -> const HwcDisplayConfig * {
   return GetConfig(staged_mode_config_id_.value_or(configs_.active_config_id));
 }
 
+HWC2::Error HwcDisplay::SetOutputType(uint32_t hdr_output_type) {
+  switch (hdr_output_type) {
+    case 3: {  // HDR10
+      auto ret = SetHdrOutputMetadata(ui::Hdr::HDR10);
+      if (ret != HWC2::Error::None)
+        return ret;
+      min_bpc_ = 8;
+      colorspace_ = Colorspace::kBt2020Rgb;
+      break;
+    }
+    case 1: {  // SYSTEM
+      std::vector<ui::Hdr> hdr_types;
+      GetEdid()->GetSupportedHdrTypes(hdr_types);
+      if (!hdr_types.empty()) {
+        auto ret = SetHdrOutputMetadata(hdr_types.front());
+        if (ret != HWC2::Error::None)
+          return ret;
+        min_bpc_ = 8;
+        colorspace_ = Colorspace::kBt2020Rgb;
+        break;
+      }
+      [[fallthrough]];
+    }
+    case 0:  // INVALID
+      [[fallthrough]];
+    case 2:  // SDR
+      [[fallthrough]];
+    default:
+      hdr_metadata_.reset();
+      min_bpc_ = 6;
+      colorspace_ = Colorspace::kDefault;
+  }
+
+  return HWC2::Error::None;
+}
+
 HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
   const HwcDisplayConfig *new_config = GetConfig(config);
   if (new_config == nullptr) {
@@ -217,6 +253,8 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
   }
 
   ALOGV("Create modeset commit.");
+  SetOutputType(new_config->output_type);
+
   // Create atomic commit args for a blocking modeset. There's no need to do a
   // separate test commit, since the commit does a test anyways.
   AtomicCommitArgs commit_args = CreateModesetCommit(new_config,
@@ -263,6 +301,12 @@ auto HwcDisplay::QueueConfig(hwc2_config_t config, int64_t desired_time,
   // refresh time.
   staged_mode_change_time_ = out_timing->refresh_time_ns;
   staged_mode_config_id_ = config;
+
+  // Allow HDR only on external displays
+  if (current_config && !IsInHeadlessMode() &&
+      GetPipe().connector->Get()->IsExternal()) {
+    SetOutputType(current_config->output_type);
+  }
 
   // Enable vsync events until the mode has been applied.
   vsync_worker_->SetVsyncTimestampTracking(true);
@@ -682,6 +726,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.hdr_metadata = hdr_metadata_;
+  args.min_bpc = min_bpc_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -754,6 +799,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.hdr_metadata = hdr_metadata_;
+  a_args.min_bpc = min_bpc_;
 
   uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
   std::optional<uint32_t> new_vsync_period_ns;
@@ -899,38 +945,24 @@ HWC2::Error HwcDisplay::SetColorMode(int32_t mode) {
 
   switch (mode) {
     case HAL_COLOR_MODE_NATIVE:
-      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kDefault;
       break;
     case HAL_COLOR_MODE_STANDARD_BT601_625:
     case HAL_COLOR_MODE_STANDARD_BT601_625_UNADJUSTED:
     case HAL_COLOR_MODE_STANDARD_BT601_525:
     case HAL_COLOR_MODE_STANDARD_BT601_525_UNADJUSTED:
-      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       // The DP spec does not say whether this is the 525 or the 625 line version.
       colorspace_ = Colorspace::kBt601Ycc;
       break;
     case HAL_COLOR_MODE_STANDARD_BT709:
     case HAL_COLOR_MODE_SRGB:
-      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kBt709Ycc;
       break;
     case HAL_COLOR_MODE_DCI_P3:
     case HAL_COLOR_MODE_DISPLAY_P3:
-      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       colorspace_ = Colorspace::kDciP3RgbD65;
       break;
-    case HAL_COLOR_MODE_DISPLAY_BT2020: {
-      std::vector<ui::Hdr> hdr_types;
-      GetEdid()->GetSupportedHdrTypes(hdr_types);
-      if (!hdr_types.empty()) {
-        auto ret = SetHdrOutputMetadata(hdr_types.front());
-        if (ret != HWC2::Error::None)
-          return ret;
-      }
-      colorspace_ = Colorspace::kBt2020Rgb;
-      break;
-    }
+    case HAL_COLOR_MODE_DISPLAY_BT2020:
     case HAL_COLOR_MODE_ADOBE_RGB:
     case HAL_COLOR_MODE_BT2020:
     case HAL_COLOR_MODE_BT2100_PQ:

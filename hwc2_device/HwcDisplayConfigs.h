@@ -29,6 +29,7 @@ struct HwcDisplayConfig {
   uint32_t group_id{};
   DrmMode mode{};
   bool disabled{};
+  uint32_t output_type{};
 
   bool IsInterlaced() const {
     return (mode.GetRawMode().flags & DRM_MODE_FLAG_INTERLACE) != 0;

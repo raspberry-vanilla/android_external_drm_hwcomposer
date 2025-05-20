@@ -154,6 +154,15 @@ class ComposerClient : public BnComposerClient {
 
 #endif
 
+#if __ANDROID_API__ >= 36
+  ndk::ScopedAStatus startHdcpNegotiation(
+      int64_t display, const drm::HdcpLevels& levels) override;
+  ndk::ScopedAStatus getMaxLayerPictureProfiles(int64_t display,
+                                                int32_t* maxProfiles) override;
+  ndk::ScopedAStatus getLuts(int64_t, const std::vector<Buffer>&,
+                             std::vector<Luts>* out_luts) override;
+#endif
+
  protected:
   ::ndk::SpAIBinder createBinder() override;
 

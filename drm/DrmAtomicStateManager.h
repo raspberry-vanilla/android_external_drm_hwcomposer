@@ -42,6 +42,7 @@ struct AtomicCommitArgs {
   std::optional<Colorspace> colorspace;
   std::optional<ContentType> content_type;
   std::shared_ptr<hdr_output_metadata> hdr_metadata;
+  std::optional<int32_t> min_bpc;
 
   std::shared_ptr<DrmFbIdHandle> writeback_fb;
   SharedFd writeback_release_fence;

@@ -44,6 +44,7 @@ ubuntu/x86_64_aospless:
   variables:
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_aospless.sh'
     HWC_TAG: $UBUNTU_AOSPLESS_TAG
+    ANDROID_SDK_VERSION: 35
 
 ubuntu/x86_64_android:
   extends:

@@ -11,6 +11,7 @@ SRC_DIR := .
 CXXFLAGS := -Wall -Wextra -Werror -Wno-missing-designated-field-initializers
 CXXFLAGS += -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS -Wthread-safety
 CXXFLAGS += -fvisibility-inlines-hidden -std=gnu++17 -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -fno-rtti
+CXXFLAGS += --target=aarch64-linux-android35
 
 CXXARGS := $(shell cat $(BASE_DIR)/toolchain_wrapper/sharedlib.cppflags)
 CXXARGS := $(subst [BASE_DIR],$(BASE_DIR),$(CXXARGS))
