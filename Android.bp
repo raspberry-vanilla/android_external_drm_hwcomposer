@@ -163,7 +163,7 @@ cc_defaults {
     ],
 
     shared_libs: [
-        "android.hardware.graphics.composer3-V4-ndk",
+        "android.hardware.graphics.composer3-V3-ndk",
         "libbase",
         "libbinder_ndk",
         "liblog",
