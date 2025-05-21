@@ -79,7 +79,7 @@ void Backend::ValidateDisplay(HwcDisplay *display) {
     AtomicCommitArgs a_args = {.test_only = true};
 
     if (testing_needed) {
-      return display->CreateComposition(a_args) == HWC2::Error::None;
+      return display->CreateComposition(a_args);
     }
 
     return true;

@@ -387,8 +387,6 @@ auto HwcDisplay::PresentStagedComposition(
     return true;
   }
 
-  HWC2::Error ret{};
-
   ++total_stats_.total_frames;
 
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
@@ -401,17 +399,10 @@ auto HwcDisplay::PresentStagedComposition(
   }
 
   AtomicCommitArgs a_args{};
-  ret = CreateComposition(a_args);
-
-  if (ret != HWC2::Error::None)
+  if (!CreateComposition(a_args)) {
     ++total_stats_.failed_kms_present;
-
-  if (ret == HWC2::Error::BadLayer) {
-    // Can we really have no client or device layers?
-    return true;
-  }
-  if (ret != HWC2::Error::None)
     return false;
+  }
 
   out_present_fence = a_args.out_fence;
 
@@ -789,10 +780,10 @@ uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
+bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
-    return HWC2::Error::None;
+    return true;
   }
 
   a_args.color_matrix = color_matrix_;
@@ -808,7 +799,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
     const HwcDisplayConfig *staged_config = GetConfig(
         staged_mode_config_id_.value());
     if (staged_config == nullptr) {
-      return HWC2::Error::BadConfig;
+      return false;
     }
 
     configs_.active_config_id = staged_mode_config_id_.value();
@@ -871,7 +862,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
        * imported. For example when non-contiguous buffer is imported into
        * contiguous-only DRM/KMS driver.
        */
-      return HWC2::Error::BadLayer;
+      return false;
     }
   }
 
@@ -882,7 +873,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   // now that they're ordered by z, add them to the composition
   for (std::pair<const uint32_t, HwcLayer *> &l : z_map) {
     if (!l.second->IsLayerUsableAsDevice()) {
-      return HWC2::Error::BadLayer;
+      return false;
     }
     composition_layers.emplace_back(l.second->GetLayerData());
   }
@@ -895,7 +886,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                                                cursor_layer);
   if (!current_plan_) {
     ALOGE_IF(!a_args.test_only, "Failed to create DrmKmsPlan");
-    return HWC2::Error::BadConfig;
+    return false;
   }
   a_args.composition = current_plan_;
 
@@ -903,7 +894,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
     writeback_layer_->PopulateLayerData();
     if (!writeback_layer_->IsLayerUsableAsDevice()) {
       ALOGE("Writeback layer not usable by DRM/KMS - no valid buffer set");
-      return HWC2::Error::BadLayer;
+      return false;
     }
     a_args.writeback_fb = writeback_layer_->GetLayerData().fb;
     a_args.writeback_release_fence = writeback_layer_->GetLayerData()
@@ -913,7 +904,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   auto ret = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
   if (ret) {
     ALOGE_IF(!a_args.test_only, "Failed to apply the frame composition ret=%d", ret);
-    return HWC2::Error::BadParameter;
+    return false;
   }
 
   if (!a_args.test_only) {
@@ -933,7 +924,7 @@ HWC2::Error HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
     vsync_worker_->SetVsyncPeriodNs(new_vsync_period_ns.value());
   }
 
-  return HWC2::Error::None;
+  return true;
 }
 
 HWC2::Error HwcDisplay::SetColorMode(int32_t mode) {
