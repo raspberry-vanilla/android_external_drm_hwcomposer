@@ -33,6 +33,7 @@ class HwcDisplay;
 }  // namespace android
 
 namespace aidl::android::hardware::graphics::composer3::impl {
+using AidlColorMode = ColorMode;
 
 class DrmHwcThree;
 
@@ -93,7 +94,7 @@ class ComposerClient : public BnComposerClient {
   ndk::ScopedAStatus getReadbackBufferFence(
       int64_t display, ndk::ScopedFileDescriptor* acquire_fence) override;
   ndk::ScopedAStatus getRenderIntents(
-      int64_t display, ColorMode mode,
+      int64_t display, AidlColorMode mode,
       std::vector<RenderIntent>* intents) override;
   ndk::ScopedAStatus getSupportedContentTypes(
       int64_t display, std::vector<ContentType>* types) override;
@@ -115,7 +116,7 @@ class ComposerClient : public BnComposerClient {
   ndk::ScopedAStatus setAutoLowLatencyMode(int64_t display, bool on) override;
   ndk::ScopedAStatus setClientTargetSlotCount(int64_t display,
                                               int32_t count) override;
-  ndk::ScopedAStatus setColorMode(int64_t display, ColorMode mode,
+  ndk::ScopedAStatus setColorMode(int64_t display, AidlColorMode mode,
                                   RenderIntent intent) override;
   ndk::ScopedAStatus setContentType(int64_t display, ContentType type) override;
   ndk::ScopedAStatus setDisplayedContentSamplingEnabled(

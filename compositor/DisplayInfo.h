@@ -16,13 +16,28 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+
+/*
+ * 4x4 Identity matrix used for color transformations.
+ */
+constexpr int kColorMatrixSize = 16;
+// clang-format off
+// NOLINTNEXTLINE(clang-diagnostic-unused-const-variable)
+constexpr std::array<float, kColorMatrixSize> kIdentityMatrix = {
+    1.0F, 0.0F, 0.0F, 0.0F,
+    0.0F, 1.0F, 0.0F, 0.0F,
+    0.0F, 0.0F, 1.0F, 0.0F,
+    0.0F, 0.0F, 0.0F, 1.0F,
+};
+// clang-format on
 
 /*
  * Display colorimetry enums.
  */
 // NOLINTBEGIN(readability-identifier-naming)
-enum class Colormode : int32_t {
+enum class ColorMode : int32_t {
   kNative,
   kBt601_625,
   kBt601_625Unadjusted,

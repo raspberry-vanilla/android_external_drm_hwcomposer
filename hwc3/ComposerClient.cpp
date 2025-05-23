@@ -67,15 +67,6 @@ constexpr int kCtmRows = 4;
 constexpr int kCtmColumns = 4;
 constexpr int kCtmSize = kCtmRows * kCtmColumns;
 
-// clang-format off
-constexpr std::array<float, kCtmSize> kIdentityMatrix = {
-    1.0F, 0.0F, 0.0F, 0.0F,
-    0.0F, 1.0F, 0.0F, 0.0F,
-    0.0F, 0.0F, 1.0F, 0.0F,
-    0.0F, 0.0F, 0.0F, 1.0F,
-};
-// clang-format on
-
 std::optional<BufferBlendMode> AidlToBlendMode(
     const std::optional<ParcelableBlendMode>& aidl_blend_mode) {
   if (!aidl_blend_mode) {
@@ -846,7 +837,7 @@ ndk::ScopedAStatus ComposerClient::getActiveConfig(int64_t display_id,
 }
 
 ndk::ScopedAStatus ComposerClient::getColorModes(
-    int64_t display_id, std::vector<ColorMode>* color_modes) {
+    int64_t display_id, std::vector<AidlColorMode>* color_modes) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
   HwcDisplay* display = GetDisplay(display_id);
@@ -854,21 +845,8 @@ ndk::ScopedAStatus ComposerClient::getColorModes(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint32_t num_modes = 0;
-  auto error = Hwc2toHwc3Error(display->GetColorModes(&num_modes, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  std::vector<int32_t> hwc2_color_modes(num_modes);
-  error = Hwc2toHwc3Error(
-      display->GetColorModes(&num_modes, hwc2_color_modes.data()));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  for (const auto& mode : hwc2_color_modes) {
-    color_modes->push_back(Hwc2ColorModeToHwc3(mode));
+  for (const auto& mode : display->GetColorModes()) {
+    color_modes->emplace_back(static_cast<AidlColorMode>(mode));
   }
 
   return ndk::ScopedAStatus::ok();
@@ -1109,27 +1087,8 @@ ndk::ScopedAStatus ComposerClient::getHdrCapabilities(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  uint32_t num_types = 0;
-  hwc3::Error error = Hwc2toHwc3Error(
-      display->GetHdrCapabilities(&num_types, nullptr, nullptr, nullptr,
-                                  nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  std::vector<int32_t> out_types(num_types);
-  error = Hwc2toHwc3Error(
-      display->GetHdrCapabilities(&num_types, out_types.data(),
-                                  &caps->maxLuminance,
-                                  &caps->maxAverageLuminance,
-                                  &caps->minLuminance));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
-
-  caps->types.reserve(num_types);
-  for (const auto type : out_types)
-    caps->types.emplace_back(Hwc2HdrTypeToHwc3(type));
+  display->GetHdrCapabilities(&caps->types, &caps->maxLuminance,
+                              &caps->maxAverageLuminance, &caps->minLuminance);
 
   return ndk::ScopedAStatus::ok();
 }
@@ -1204,7 +1163,8 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
 }
 
 ndk::ScopedAStatus ComposerClient::getRenderIntents(
-    int64_t display_id, ColorMode mode, std::vector<RenderIntent>* intents) {
+    int64_t display_id, AidlColorMode mode,
+    std::vector<RenderIntent>* intents) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
   HwcDisplay* display = GetDisplay(display_id);
@@ -1212,26 +1172,14 @@ ndk::ScopedAStatus ComposerClient::getRenderIntents(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  const int32_t hwc2_color_mode = Hwc3ColorModeToHwc2(mode);
-  uint32_t out_num_intents = 0;
-  auto error = Hwc2toHwc3Error(
-      display->GetRenderIntents(hwc2_color_mode, &out_num_intents, nullptr));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
+  // TODO: Remove invalid enum tests from VTS
+  if (mode < AidlColorMode::NATIVE || mode > AidlColorMode::DISPLAY_BT2020)
+    return ToBinderStatus(hwc3::Error::kBadParameter);
 
-  std::vector<int32_t> out_intents(out_num_intents);
-  error = Hwc2toHwc3Error(display->GetRenderIntents(hwc2_color_mode,
-                                                    &out_num_intents,
-                                                    out_intents.data()));
-  if (error != hwc3::Error::kNone) {
-    return ToBinderStatus(error);
-  }
+  intents->clear();
+  intents->reserve(1);
+  intents->emplace_back(RenderIntent::COLORIMETRIC);
 
-  intents->reserve(out_num_intents);
-  for (const auto intent : out_intents) {
-    intents->emplace_back(Hwc2RenderIntentToHwc3(intent));
-  }
   return ndk::ScopedAStatus::ok();
 }
 
@@ -1383,7 +1331,7 @@ ndk::ScopedAStatus ComposerClient::setClientTargetSlotCount(
 }
 
 ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_id,
-                                                ColorMode mode,
+                                                AidlColorMode mode,
                                                 RenderIntent intent) {
   DEBUG_FUNC();
   const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
@@ -1392,9 +1340,18 @@ ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_id,
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  auto error = display->SetColorModeWithIntent(Hwc3ColorModeToHwc2(mode),
-                                               Hwc3RenderIntentToHwc2(intent));
-  return ToBinderStatus(Hwc2toHwc3Error(error));
+  // TODO: Remove invalid enum tests from VTS
+  if (mode < AidlColorMode::NATIVE || mode > AidlColorMode::DISPLAY_BT2020)
+    return ToBinderStatus(hwc3::Error::kBadParameter);
+
+  if (intent < RenderIntent::COLORIMETRIC || intent > RenderIntent::TONE_MAP_ENHANCE)
+    return ToBinderStatus(hwc3::Error::kBadParameter);
+
+  if (intent != RenderIntent::COLORIMETRIC)
+    return ToBinderStatus(hwc3::Error::kUnsupported);
+
+  display->SetColorMode(static_cast<::ColorMode>(mode));
+  return ToBinderStatus(hwc3::Error::kNone);
 }
 
 ndk::ScopedAStatus ComposerClient::setContentType(int64_t display_id,
