@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include "hwc2_device/DrmHwcTwo.h"
+#include <vector>
+
+#include "hwc/HwcDisplay.h"
 
 namespace android {
 

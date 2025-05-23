@@ -111,7 +111,7 @@ auto HwcDisplay::GetDisplayName() -> std::string {
   return stream.str();
 }
 
-HwcDisplay::HwcDisplay(hwc2_display_t handle, bool is_virtual, DrmHwc *hwc)
+HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
     : hwc_(hwc), handle_(handle), is_virtual_(is_virtual), client_layer_(this) {
   // Create writeback layer for both virtual displays and potential readback
   // operations
@@ -152,7 +152,7 @@ HwcDisplay::~HwcDisplay() {
   Deinit();
 };
 
-auto HwcDisplay::GetConfig(hwc2_config_t config_id) const
+auto HwcDisplay::GetConfig(ConfigId config_id) const
     -> const HwcDisplayConfig * {
   auto config_iter = configs_.hwc_configs.find(config_id);
   if (config_iter == configs_.hwc_configs.end()) {
@@ -199,7 +199,7 @@ void HwcDisplay::SetOutputType(uint32_t hdr_output_type) {
   }
 }
 
-HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
+HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   const HwcDisplayConfig *new_config = GetConfig(config);
   if (new_config == nullptr) {
     ALOGE("Could not find active mode for %u", config);
@@ -268,7 +268,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(hwc2_config_t config) {
   return ConfigError::kNone;
 }
 
-auto HwcDisplay::QueueConfig(hwc2_config_t config, int64_t desired_time,
+auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
                              bool seamless, QueuedConfigTiming *out_timing)
     -> ConfigError {
   if (configs_.hwc_configs.count(config) == 0) {
@@ -494,7 +494,7 @@ void HwcDisplay::SetVsyncCallbacksEnabled(bool enabled) {
   std::optional<VSyncWorker::VsyncTimestampCallback> callback = std::nullopt;
   if (vsync_event_en_) {
     DrmHwc *hwc = hwc_;
-    hwc2_display_t id = handle_;
+    DisplayHandle id = handle_;
     // Callback will be called from the vsync thread.
     callback = [hwc, id](int64_t timestamp, uint32_t period_ns) {
       hwc->SendVsyncEventToClient(id, timestamp, period_ns);

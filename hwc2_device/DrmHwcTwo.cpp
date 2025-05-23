@@ -68,7 +68,7 @@ HWC2::Error DrmHwcTwo::RegisterCallback(int32_t descriptor,
   return HWC2::Error::None;
 }
 
-void DrmHwcTwo::SendHotplugEventToClient(hwc2_display_t displayid,
+void DrmHwcTwo::SendHotplugEventToClient(DisplayHandle display_handle,
                                          DisplayStatus display_status) {
   auto hc = hotplug_callback_;
 
@@ -76,31 +76,31 @@ void DrmHwcTwo::SendHotplugEventToClient(hwc2_display_t displayid,
     /* For some reason HWC Service will call HWC2 API in hotplug callback
      * handler. This is the reason we're using recursive mutex.
      */
-    hc.first(hc.second, displayid,
+    hc.first(hc.second, display_handle,
              display_status ? HWC2_CONNECTION_CONNECTED
                             : HWC2_CONNECTION_DISCONNECTED);
   }
 }
 
 void DrmHwcTwo::SendVsyncEventToClient(
-    hwc2_display_t displayid, int64_t timestamp,
+    DisplayHandle display_handle, int64_t timestamp,
     [[maybe_unused]] uint32_t vsync_period) const {
   /* vsync callback */
 #if __ANDROID_API__ > 29
   if (vsync_2_4_callback_.first != nullptr &&
       vsync_2_4_callback_.second != nullptr) {
-    vsync_2_4_callback_.first(vsync_2_4_callback_.second, displayid, timestamp,
-                              vsync_period);
+    vsync_2_4_callback_.first(vsync_2_4_callback_.second, display_handle,
+                              timestamp, vsync_period);
   } else
 #endif
       if (vsync_callback_.first != nullptr &&
           vsync_callback_.second != nullptr) {
-    vsync_callback_.first(vsync_callback_.second, displayid, timestamp);
+    vsync_callback_.first(vsync_callback_.second, display_handle, timestamp);
   }
 }
 
 void DrmHwcTwo::SendVsyncPeriodTimingChangedEventToClient(
-    [[maybe_unused]] hwc2_display_t displayid,
+    [[maybe_unused]] DisplayHandle display_handle,
     [[maybe_unused]] int64_t timestamp) const {
 #if __ANDROID_API__ > 29
   hwc_vsync_period_change_timeline_t timeline = {
@@ -111,15 +111,16 @@ void DrmHwcTwo::SendVsyncPeriodTimingChangedEventToClient(
   if (period_timing_changed_callback_.first != nullptr &&
       period_timing_changed_callback_.second != nullptr) {
     period_timing_changed_callback_
-        .first(period_timing_changed_callback_.second, displayid, &timeline);
+        .first(period_timing_changed_callback_.second, display_handle,
+               &timeline);
   }
 #endif
 }
 
-void DrmHwcTwo::SendRefreshEventToClient(hwc2_display_t displayid) {
+void DrmHwcTwo::SendRefreshEventToClient(DisplayHandle display_handle) {
   if (refresh_callback_.first != nullptr &&
       refresh_callback_.second != nullptr) {
-    refresh_callback_.first(refresh_callback_.second, displayid);
+    refresh_callback_.first(refresh_callback_.second, display_handle);
   }
 }
 

@@ -32,11 +32,11 @@ struct DisplayChanges {
   std::optional<ChangedCompositionTypes> composition_changes;
   std::optional<DisplayRequest> display_request_changes;
 
-  void AddLayerCompositionChange(int64_t display_id, int64_t layer_id,
+  void AddLayerCompositionChange(int64_t display_handle, int64_t layer_id,
                                  Composition layer_composition) {
     if (!composition_changes) {
       composition_changes.emplace();
-      composition_changes->display = display_id;
+      composition_changes->display = display_handle;
     }
 
     ChangedCompositionLayer composition_change;
@@ -84,22 +84,23 @@ class CommandResultWriter {
     has_error_ = true;
   }
 
-  void AddPresentFence(int64_t display_id, ::android::base::unique_fd fence) {
+  void AddPresentFence(int64_t display_handle,
+                       ::android::base::unique_fd fence) {
     if (!fence.ok()) {
       return;
     }
 
     PresentFence present_fence;
     present_fence.fence = ::ndk::ScopedFileDescriptor(fence.release());
-    present_fence.display = display_id;
+    present_fence.display = display_handle;
     results_->emplace_back(std::move(present_fence));
   }
 
   void AddReleaseFence(
-      int64_t display_id,
+      int64_t display_handle,
       std::unordered_map<int64_t, ::android::base::unique_fd>& layer_fences) {
     ReleaseFences release_fences;
-    release_fences.display = display_id;
+    release_fences.display = display_handle;
     for (auto& [layer, fence] : layer_fences) {
       if (!fence.ok()) {
         continue;
@@ -124,10 +125,10 @@ class CommandResultWriter {
     }
   }
 
-  void AddPresentOrValidateResult(int64_t display_id,
+  void AddPresentOrValidateResult(int64_t display_handle,
                                   const PresentOrValidate::Result& pov_result) {
     PresentOrValidate pov_command;
-    pov_command.display = display_id;
+    pov_command.display = display_handle;
     pov_command.result = pov_result;
 
     results_->emplace_back(pov_command);

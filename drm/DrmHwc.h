@@ -18,7 +18,7 @@
 
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/ResourceManager.h"
-#include "hwc2_device/HwcDisplay.h"
+#include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
 
 namespace android {
@@ -37,27 +37,28 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
   };
 
   // Client Callback functions.:
-  virtual void SendVsyncEventToClient(hwc2_display_t displayid,
+  virtual void SendVsyncEventToClient(DisplayHandle display_handle,
                                       int64_t timestamp,
                                       uint32_t vsync_period) const = 0;
   virtual void SendVsyncPeriodTimingChangedEventToClient(
-      hwc2_display_t displayid, int64_t timestamp) const = 0;
-  virtual void SendRefreshEventToClient(uint64_t displayid) = 0;
-  virtual void SendHotplugEventToClient(hwc2_display_t displayid,
+      DisplayHandle display_handle, int64_t timestamp) const = 0;
+  virtual void SendRefreshEventToClient(DisplayHandle display_handle) = 0;
+  virtual void SendHotplugEventToClient(DisplayHandle display_handle,
                                         enum DisplayStatus display_status) = 0;
 
   // CompositionStatsProvider:
-  auto PullCompositionStats() -> std::map<int64_t, CompositionStats> override;
+  auto PullCompositionStats()
+      -> std::map<DisplayHandle, CompositionStats> override;
 
   std::string DumpState();
 
   // Virtual Display functions.
-  std::optional<hwc2_display_t> CreateVirtualDisplay(uint32_t width,
-                                                     uint32_t height);
-  bool DestroyVirtualDisplay(hwc2_display_t display);
+  std::optional<DisplayHandle> CreateVirtualDisplay(uint32_t width,
+                                                    uint32_t height);
+  bool DestroyVirtualDisplay(DisplayHandle display_handle);
   uint32_t GetMaxVirtualDisplayCount();
 
-  auto GetDisplay(hwc2_display_t display_handle) {
+  auto GetDisplay(DisplayHandle display_handle) {
     return displays_.count(display_handle) != 0
                ? displays_[display_handle].get()
                : nullptr;
@@ -67,9 +68,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
     return resource_manager_;
   }
 
-  void ScheduleHotplugEvent(hwc2_display_t displayid,
+  void ScheduleHotplugEvent(DisplayHandle display_handle,
                             enum DisplayStatus display_status) {
-    deferred_hotplug_events_[displayid] = display_status;
+    deferred_hotplug_events_[display_handle] = display_status;
   }
 
   void DeinitDisplays();
@@ -90,14 +91,13 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
 
  private:
   ResourceManager resource_manager_;
-  std::map<hwc2_display_t, std::unique_ptr<HwcDisplay>> displays_;
-  std::map<std::shared_ptr<DrmDisplayPipeline>, hwc2_display_t>
-      display_handles_;
+  std::map<DisplayHandle, std::unique_ptr<HwcDisplay>> displays_;
+  std::map<std::shared_ptr<DrmDisplayPipeline>, DisplayHandle> display_handles_;
 
-  std::map<hwc2_display_t, enum DisplayStatus> deferred_hotplug_events_;
-  std::vector<hwc2_display_t> displays_for_removal_list_;
+  std::map<DisplayHandle, enum DisplayStatus> deferred_hotplug_events_;
+  std::vector<DisplayHandle> displays_for_removal_list_;
 
-  uint32_t last_display_handle_ = kPrimaryDisplay;
+  DisplayHandle last_display_handle_ = kPrimaryDisplay;
   CompositionStatsTracker dump_stats_tracker_;
 };
 }  // namespace android

@@ -172,25 +172,25 @@ void DrmHwc::NotifyDisplayLinkStatus(
                        DisplayStatus::kLinkTrainingFailed);
 }
 
-std::optional<hwc2_display_t> DrmHwc::CreateVirtualDisplay(uint32_t width,
-                                                           uint32_t height) {
+std::optional<DisplayHandle> DrmHwc::CreateVirtualDisplay(uint32_t width,
+                                                          uint32_t height) {
   ALOGI("Creating virtual display %dx%d", width, height);
 
   auto virtual_pipeline = resource_manager_.GetVirtualDisplayPipeline();
   if (!virtual_pipeline)
     return std::nullopt;
 
-  hwc2_display_t new_display_id = ++last_display_handle_;
-  auto disp = std::make_unique<HwcDisplay>(new_display_id,
+  DisplayHandle new_display_handle = ++last_display_handle_;
+  auto disp = std::make_unique<HwcDisplay>(new_display_handle,
                                            /* is_virtual */ true, this);
 
   disp->SetVirtualDisplayResolution(width, height);
   disp->SetPipeline(virtual_pipeline);
-  displays_[new_display_id] = std::move(disp);
-  return new_display_id;
+  displays_[new_display_handle] = std::move(disp);
+  return new_display_handle;
 }
 
-bool DrmHwc::DestroyVirtualDisplay(hwc2_display_t display) {
+bool DrmHwc::DestroyVirtualDisplay(DisplayHandle display) {
   ALOGI("Destroying virtual display %" PRIu64, display);
 
   if (displays_.count(display) == 0) {
@@ -218,10 +218,11 @@ bool DrmHwc::DestroyVirtualDisplay(hwc2_display_t display) {
   return true;
 }
 
-auto DrmHwc::PullCompositionStats() -> std::map<int64_t, CompositionStats> {
+auto DrmHwc::PullCompositionStats()
+    -> std::map<DisplayHandle, CompositionStats> {
   std::map<int64_t, CompositionStats> stats;
-  for (auto &[display_id, display] : displays_) {
-    stats[static_cast<int64_t>(display_id)] = display->total_stats();
+  for (auto &[display_handle, display] : displays_) {
+    stats[static_cast<int64_t>(display_handle)] = display->total_stats();
   }
   return stats;
 }
@@ -231,11 +232,12 @@ std::string DrmHwc::DumpState() {
 
   output << "-- drm_hwcomposer --\n\n";
 
-  auto callback = [this, &output](int64_t display_id,
+  auto callback = [this, &output](int64_t display_handle,
                                   const CompositionStats &stats,
                                   const CompositionStats &delta) {
-    auto *display = GetDisplay(display_id);
-    ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found", display_id);
+    auto *display = GetDisplay(display_handle);
+    ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found",
+             display_handle);
     if (display) {
       output << DumpDisplayStats(display, stats, delta);
     }

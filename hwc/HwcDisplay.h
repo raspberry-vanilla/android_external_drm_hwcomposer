@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <hardware/hwcomposer2.h>
-
 #include <atomic>
 #include <optional>
 #include <sstream>
@@ -25,16 +23,18 @@
 #include <ui/GraphicTypes.h>
 
 #include "HwcDisplayConfigs.h"
+#include "HwcLayer.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/ResourceManager.h"
 #include "drm/VSyncWorker.h"
-#include "hwc2_device/HwcLayer.h"
 #include "stats/CompositionStats.h"
 
 namespace android {
+
+using DisplayHandle = int64_t;
 
 class Backend;
 class DrmHwc;
@@ -58,7 +58,7 @@ class HwcDisplay {
 
   enum DisplayType { kInternal, kExternal, kVirtual };
 
-  HwcDisplay(hwc2_display_t handle, bool is_virtual, DrmHwc *hwc);
+  HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay();
 
@@ -90,14 +90,14 @@ class HwcDisplay {
   // Set a config synchronously. If the requested config fails to be committed,
   // this will return with an error. Otherwise, the config will have been
   // committed to the kernel on successful return.
-  ConfigError SetConfig(hwc2_config_t config);
+  ConfigError SetConfig(ConfigId config);
 
   // Queue a configuration change to take effect in the future.
-  auto QueueConfig(hwc2_config_t config, int64_t desired_time, bool seamless,
+  auto QueueConfig(ConfigId config, int64_t desired_time, bool seamless,
                    QueuedConfigTiming *out_timing) -> ConfigError;
 
   // Get the HwcDisplayConfig, or nullptor if none.
-  auto GetConfig(hwc2_config_t config_id) const -> const HwcDisplayConfig *;
+  auto GetConfig(ConfigId config_id) const -> const HwcDisplayConfig *;
 
   auto GetDisplayBoundsMm() -> std::pair<int32_t, int32_t>;
 
@@ -238,7 +238,7 @@ class HwcDisplay {
   DrmHwc *const hwc_;
 
   int64_t staged_mode_change_time_{};
-  std::optional<uint32_t> staged_mode_config_id_{};
+  std::optional<ConfigId> staged_mode_config_id_{};
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 
@@ -248,7 +248,7 @@ class HwcDisplay {
   std::unique_ptr<VSyncWorker> vsync_worker_;
   bool vsync_event_en_{};
 
-  const hwc2_display_t handle_;
+  const DisplayHandle handle_;
   bool is_virtual_;
 
   std::map<ILayerId, HwcLayer> layers_;

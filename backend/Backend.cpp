@@ -21,7 +21,7 @@
 
 #include "BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
-#include "hardware/hwcomposer2.h"
+#include "drm/DrmHwc.h"
 
 namespace android {
 

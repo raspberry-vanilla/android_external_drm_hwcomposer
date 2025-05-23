@@ -54,7 +54,7 @@ class CompositionStatsProvider {
 class CompositionStatsTracker {
  public:
   // Arguments are the display ID, the cumulative stats, and the stats delta.
-  using Callback = std::function<void(int64_t display_id,
+  using Callback = std::function<void(int64_t display_handle,
                                       const CompositionStats& cumulative,
                                       const CompositionStats& delta)>;
   explicit CompositionStatsTracker(CompositionStatsProvider* provider)

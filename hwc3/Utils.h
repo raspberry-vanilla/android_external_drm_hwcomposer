@@ -16,9 +16,7 @@
 
 #pragma once
 
-#include <aidl/android/hardware/graphics/common/Hdr.h>
 #include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
-#include <hardware/hwcomposer2.h>
 #include <log/log.h>
 
 #include <cstdint>
@@ -43,61 +41,12 @@ enum class Error : int32_t {
 };
 }  // namespace hwc3
 
-hwc3::Error Hwc2toHwc3Error(HWC2::Error error);
-
 inline ndk::ScopedAStatus ToBinderStatus(hwc3::Error error) {
   if (error != hwc3::Error::kNone) {
     return ndk::ScopedAStatus::fromServiceSpecificError(
         static_cast<int32_t>(error));
   }
   return ndk::ScopedAStatus::ok();
-}
-
-inline ndk::ScopedAStatus ToBinderStatus(HWC2::Error error) {
-  return ToBinderStatus(Hwc2toHwc3Error(error));
-}
-
-inline int64_t Hwc2DisplayToHwc3(hwc2_display_t display) {
-  return static_cast<int64_t>(display);
-}
-
-inline int32_t Hwc2ConfigIdToHwc3(hwc2_config_t config_id) {
-  return static_cast<int32_t>(config_id);
-}
-
-// Values for color modes match across HWC versions, so static cast is safe:
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/ColorMode.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.0.h;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2;l=118
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.1.h;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2;l=35
-inline ColorMode Hwc2ColorModeToHwc3(int32_t color_mode) {
-  return static_cast<ColorMode>(color_mode);
-}
-
-inline int32_t Hwc3ColorModeToHwc2(ColorMode color_mode) {
-  return static_cast<int32_t>(color_mode);
-}
-
-// Values match, so static_cast is safe.
-// https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/graphics/composer/aidl/android/hardware/graphics/composer3/RenderIntent.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.1.h;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2;l=37
-inline RenderIntent Hwc2RenderIntentToHwc3(int32_t intent) {
-  if (intent < HAL_RENDER_INTENT_COLORIMETRIC ||
-      intent > HAL_RENDER_INTENT_TONE_MAP_ENHANCE) {
-    ALOGE("Unknown HWC2 render intent. Could not translate: %d", intent);
-    return RenderIntent::COLORIMETRIC;
-  }
-  return static_cast<RenderIntent>(intent);
-}
-inline int32_t Hwc3RenderIntentToHwc2(RenderIntent render_intent) {
-  return static_cast<int32_t>(render_intent);
-}
-
-// Values appear to match.
-// https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/graphics/common/aidl/android/hardware/graphics/common/Hdr.aidl
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.0.h;l=130;drc=7d940ae4afa450696afa25e07982f3a95e17e9b2
-// https://cs.android.com/android/platform/superproject/main/+/main:system/core/libsystem/include/system/graphics-base-v1.2.h;l=12;drc=af7be7616859f8e9e57710b9c37c66cf880a6643
-inline common::Hdr Hwc2HdrTypeToHwc3(int32_t hdr_type) {
-  return static_cast<common::Hdr>(hdr_type);
 }
 
 };  // namespace aidl::android::hardware::graphics::composer3

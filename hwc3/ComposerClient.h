@@ -20,7 +20,7 @@
 
 #include "aidl/android/hardware/graphics/composer3/BnComposerClient.h"
 #include "aidl/android/hardware/graphics/composer3/LayerCommand.h"
-#include "hwc2_device/HwcLayer.h"
+#include "hwc/HwcLayer.h"
 #include "hwc3/CommandResultWriter.h"
 #include "hwc3/Utils.h"
 #include "utils/Mutex.h"
@@ -168,20 +168,22 @@ class ComposerClient : public BnComposerClient {
   ::ndk::SpAIBinder createBinder() override;
 
  private:
-  hwc3::Error ImportLayerBuffer(int64_t display_id, int64_t layer_id,
+  hwc3::Error ImportLayerBuffer(int64_t display_handle, int64_t layer_id,
                                 const Buffer& buffer,
                                 ::android::HwcLayer::Buffer* out_buffer);
 
   // Layer commands
-  void DispatchLayerCommand(int64_t display_id, const LayerCommand& command);
+  void DispatchLayerCommand(int64_t display_handle,
+                            const LayerCommand& command);
 
   // Display commands
   void ExecuteDisplayCommand(const DisplayCommand& command);
-  void ExecuteSetDisplayClientTarget(uint64_t display_id,
+  void ExecuteSetDisplayClientTarget(int64_t display_handle,
                                      const ClientTarget& command);
-  void ExecuteSetDisplayOutputBuffer(uint64_t display_id, const Buffer& buffer);
+  void ExecuteSetDisplayOutputBuffer(int64_t display_handle,
+                                     const Buffer& buffer);
 
-  ::android::HwcDisplay* GetDisplay(uint64_t display_id);
+  ::android::HwcDisplay* GetDisplay(int64_t display_handle);
 
   std::unique_ptr<CommandResultWriter> cmd_result_writer_;
 

@@ -36,7 +36,7 @@ constexpr uint32_t kHzInKHz = 1000;
 namespace android {
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-uint32_t HwcDisplayConfigs::last_config_id = 1;
+ConfigId HwcDisplayConfigs::last_config_id = 1;
 
 void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
   char value[PROPERTY_VALUE_MAX];
@@ -232,8 +232,8 @@ bool HwcDisplayConfigs::Update(DrmConnector &connector) {
    * otherwise android.graphics.cts.SetFrameRateTest CTS will fail
    */
   constexpr float kMinFpsDelta = 1.0;  // FPS
-  for (uint32_t m1 = first_config_id; m1 < last_config_id; m1++) {
-    for (uint32_t m2 = first_config_id; m2 < last_config_id; m2++) {
+  for (ConfigId m1 = first_config_id; m1 < last_config_id; m1++) {
+    for (ConfigId m2 = first_config_id; m2 < last_config_id; m2++) {
       if (m1 != m2 && hwc_configs[m1].group_id == hwc_configs[m2].group_id &&
           !hwc_configs[m1].disabled && !hwc_configs[m2].disabled &&
           fabsf(hwc_configs[m1].mode.GetVRefresh() -

@@ -1,9 +1,6 @@
 src_hwc2_device = files(
     'hwc2_device.cpp',
     'DrmHwcTwo.cpp',
-    'HwcDisplayConfigs.cpp',
-    'HwcDisplay.cpp',
-    'HwcLayer.cpp',
 )
 
 drmhwc_hwc2_common = static_library(

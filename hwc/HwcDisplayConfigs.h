@@ -22,10 +22,12 @@
 
 namespace android {
 
+using ConfigId = int32_t;
+
 class DrmConnector;
 
 struct HwcDisplayConfig {
-  uint32_t id{};
+  ConfigId id{};
   uint32_t group_id{};
   DrmMode mode{};
   bool disabled{};
@@ -40,13 +42,13 @@ struct HwcDisplayConfigs {
   bool Update(DrmConnector &conn);
   void GenFakeMode(uint16_t width, uint16_t height);
 
-  std::map<uint32_t /*config_id*/, struct HwcDisplayConfig> hwc_configs;
+  std::map<ConfigId, struct HwcDisplayConfig> hwc_configs;
 
-  uint32_t active_config_id = 0;
-  uint32_t preferred_config_id = 0;
+  ConfigId active_config_id = 0;
+  ConfigId preferred_config_id = 0;
 
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-  static uint32_t last_config_id;
+  static ConfigId last_config_id;
 
   uint32_t mm_width = 0;
   uint32_t mm_height = 0;

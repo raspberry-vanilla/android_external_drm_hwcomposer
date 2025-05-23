@@ -30,7 +30,7 @@
 #include "DrmHwcTwo.h"
 #include "backend/Backend.h"
 #include "compositor/DisplayInfo.h"
-#include "hwc2_device/HwcLayer.h"
+#include "hwc/HwcLayer.h"
 #include "utils/log.h"
 
 namespace android {
@@ -218,7 +218,7 @@ static int32_t DisplayHook(hwc2_device_t *dev, hwc2_display_t display_handle,
         GetFuncName(__PRETTY_FUNCTION__).c_str());
   DrmHwcTwo *hwc = ToDrmHwcTwo(dev);
   const std::unique_lock lock(hwc->GetResMan().GetMainLock());
-  auto *display = hwc->GetDisplay(display_handle);
+  auto *display = hwc->GetDisplay(static_cast<DisplayHandle>(display_handle));
   if (display == nullptr)
     return static_cast<int32_t>(HWC2::Error::BadDisplay);
 
@@ -243,9 +243,9 @@ static void HookDevGetCapabilities(hwc2_device_t * /*dev*/, uint32_t *out_count,
   auto *ihwc = ToDrmHwcTwo(dev); \
   const std::unique_lock lock(ihwc->GetResMan().GetMainLock());
 
-#define GET_DISPLAY(display_id)                  \
-  auto *idisplay = ihwc->GetDisplay(display_id); \
-  if (!idisplay)                                 \
+#define GET_DISPLAY(display_handle)                  \
+  auto *idisplay = ihwc->GetDisplay(display_handle); \
+  if (!idisplay)                                     \
     return static_cast<int32_t>(HWC2::Error::BadDisplay);
 
 #define GET_LAYER(layer_id)                     \
@@ -305,15 +305,15 @@ static int32_t Dump(hwc2_device_t *device, uint32_t *out_size,
 
 static int32_t CreateVirtualDisplay(hwc2_device_t *device, uint32_t width,
                                     uint32_t height, int32_t * /*format*/,
-                                    hwc2_display_t *out_display_id) {
+                                    hwc2_display_t *out_display_handle) {
   ALOGV("CreateVirtualDisplay");
   LOCK_COMPOSER(device);
-  auto display_id = ihwc->CreateVirtualDisplay(width, height);
-  if (!display_id) {
+  auto display_handle = ihwc->CreateVirtualDisplay(width, height);
+  if (!display_handle) {
     return static_cast<int32_t>(HWC2::Error::Unsupported);
   }
 
-  *out_display_id = display_id.value();
+  *out_display_handle = display_handle.value();
   return 0;
 }
 
@@ -322,7 +322,7 @@ static int32_t DestroyVirtualDisplay(hwc2_device_t *device,
   ALOGV("DestroyVirtualDisplay");
   LOCK_COMPOSER(device);
   GET_DISPLAY(display);
-  if (!ihwc->DestroyVirtualDisplay(display)) {
+  if (!ihwc->DestroyVirtualDisplay(static_cast<DisplayHandle>(display))) {
     return static_cast<int32_t>(HWC2::Error::BadParameter);
   }
   return 0;
@@ -494,7 +494,7 @@ static int32_t GetDisplayAttribute(hwc2_device_t *device,
   LOCK_COMPOSER(device);
   GET_DISPLAY(display);
 
-  const auto* hwc_config = idisplay->GetConfig(config);
+  const auto *hwc_config = idisplay->GetConfig(static_cast<ConfigId>(config));
 
   if (hwc_config == nullptr) {
     ALOGE("Could not find mode #%d", config);
@@ -875,7 +875,7 @@ static int32_t SetActiveConfig(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
 
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(config,
+  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
                                       ResourceManager::GetTimeMonotonicNs(),
                                       false, &out_timing);
   return ConfigErrorToHWC2(result);
@@ -1034,7 +1034,7 @@ static int32_t SetActiveConfigWithConstraints(
   }
 
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(config,
+  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
                                       vsync_period_change_constraints
                                           ->desiredTimeNanos,
                                       false, &out_timing);

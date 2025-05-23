@@ -31,12 +31,12 @@ class DrmHwcTwo : public DrmHwc {
                                hwc2_function_pointer_t function);
 
   // DrmHwc
-  void SendVsyncEventToClient(hwc2_display_t displayid, int64_t timestamp,
+  void SendVsyncEventToClient(DisplayHandle display_handle, int64_t timestamp,
                               uint32_t vsync_period) const override;
   void SendVsyncPeriodTimingChangedEventToClient(
-      hwc2_display_t displayid, int64_t timestamp) const override;
-  void SendRefreshEventToClient(uint64_t displayid) override;
-  void SendHotplugEventToClient(hwc2_display_t displayid,
+      DisplayHandle display_handle, int64_t timestamp) const override;
+  void SendRefreshEventToClient(DisplayHandle display_handle) override;
+  void SendHotplugEventToClient(DisplayHandle display_handle,
                                 DisplayStatus display_status) override;
 
   const std::string& RefreshStateDump();

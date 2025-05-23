@@ -32,9 +32,9 @@ CompositionStats operator-(const CompositionStats& a,
 
 void CompositionStatsTracker::ReportStats(const Callback& callback) {
   auto new_stats = provider_->PullCompositionStats();
-  for (auto& [display_id, cumulative_stats] : new_stats) {
-    auto delta = cumulative_stats - previous_stats_[display_id];
-    callback(display_id, cumulative_stats, delta);
+  for (auto& [display_handle, cumulative_stats] : new_stats) {
+    auto delta = cumulative_stats - previous_stats_[display_handle];
+    callback(display_handle, cumulative_stats, delta);
   }
   previous_stats_ = new_stats;
 }
