@@ -359,18 +359,15 @@ std::optional<DamageInfo> AidlToDamage(
     return std::nullopt;
   }
 
-  std::optional<DamageInfo> damage_info = std::nullopt;
+  DamageInfo damage_info;
   for (const auto& r : damage.value()) {
     auto i_rect = AidlToIRect(r);
     if (i_rect.has_value()) {
-      if (!damage_info.has_value()) {
-        damage_info = DamageInfo{};
-      }
-      damage_info->dmg_rects.push_back(i_rect.value());
+      damage_info.dmg_rects.push_back(i_rect.value());
     }
   }
 
-  return damage_info;
+  return std::make_optional(damage_info);
 }
 
 }  // namespace
