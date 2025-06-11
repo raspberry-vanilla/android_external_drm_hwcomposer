@@ -47,7 +47,11 @@
 #include "hwc/HwcLayer.h"
 #include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
+#include "stats/CompositionStatsAtomReporter.h"
+#include "stats/CompositionStatsPoller.h"
 
+using ::android::CompositionStatsAtomReporter;
+using ::android::CompositionStatsPoller;
 using ::android::DamageInfo;
 using ::android::DisplayHandle;
 using ::android::DstRectInfo;
@@ -490,10 +494,18 @@ ComposerClient::ComposerClient() {
 void ComposerClient::Init() {
   DEBUG_FUNC();
   hwc_ = std::make_unique<DrmHwcThree>();
+
+  auto reporter = CompositionStatsAtomReporter::Create();
+  if (reporter) {
+    stats_poller_ = std::make_unique<CompositionStatsPoller>(std::move(
+                                                                 reporter),
+                                                             hwc_.get());
+  }
 }
 
 ComposerClient::~ComposerClient() {
   DEBUG_FUNC();
+  stats_poller_.reset();
   if (hwc_) {
     const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
     hwc_->DeinitDisplays();

@@ -95,7 +95,8 @@ clean:
 
 # Build
 # clang-tidy picks up gtest and gmock headers
-SKIP_FILES := stats/CompositionStatsTest.cpp
+# IStats includes are not available in aospless
+SKIP_FILES := stats/CompositionStatsTest.cpp stats/CompositionStatsAtomReporterDesktop.cpp
 
 BUILD_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -path '*.cpp')
 SKIP_FILES_path := $(foreach file,$(SKIP_FILES),$(SRC_DIR)/$(file))

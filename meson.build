@@ -19,6 +19,8 @@ src_common = files(
     'hwc/HwcDisplay.cpp',
     'hwc/HwcLayer.cpp',
     'stats/CompositionStats.cpp',
+    'stats/CompositionStatsAtomReporter.cpp',
+    'stats/CompositionStatsPoller.cpp',
     'utils/fd.cpp',
     'utils/LibdisplayEdidWrapper.cpp',
     'utils/properties.cpp',
