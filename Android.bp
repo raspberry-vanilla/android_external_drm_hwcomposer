@@ -157,11 +157,11 @@ cc_defaults {
     ],
 
     defaults: [
+        "android.hardware.graphics.composer3-ndk_shared",
         "hwcomposer.drm_defaults",
     ],
 
     shared_libs: [
-        "android.hardware.graphics.composer3-V3-ndk",
         "libbase",
         "libbinder_ndk",
         "liblog",
