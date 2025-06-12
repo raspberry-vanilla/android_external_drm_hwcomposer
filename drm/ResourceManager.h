@@ -25,13 +25,9 @@
 #include "DrmFbImporter.h"
 #include "DrmProperty.h"
 #include "UEventListener.h"
+#include "utils/properties.h"
 
 namespace android {
-
-enum class CtmHandling {
-  kDrmOrGpu,    /* Handled by DRM is possible, otherwise by GPU */
-  kDrmOrIgnore, /* Handled by DRM is possible, otherwise displayed as is */
-};
 
 class PipelineToFrontendBindingInterface {
  public:

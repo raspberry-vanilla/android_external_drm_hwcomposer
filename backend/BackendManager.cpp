@@ -44,10 +44,10 @@ int BackendManager::RegisterBackend(const std::string &name,
 
 int BackendManager::SetBackendForDisplay(HwcDisplay *display) {
   auto driver_name(display->GetPipe().device->GetName());
-  char backend_override[PROPERTY_VALUE_MAX];
-  property_get("vendor.hwc.backend_override", backend_override,
-               driver_name.c_str());
-  std::string backend_name(backend_override);
+  std::string backend_name = Properties::GetBackendOverride();
+  if (backend_name.empty()) {
+    backend_name = driver_name;
+  }
 
   display->set_backend(GetBackendByName(backend_name));
   if (display->backend() == nullptr) {

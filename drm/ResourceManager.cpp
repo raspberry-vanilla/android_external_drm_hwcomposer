@@ -50,18 +50,19 @@ void ResourceManager::Init() {
     return;
   }
 
-  char path_pattern[PROPERTY_VALUE_MAX];
   // Could be a valid path or it can have at the end of it the wildcard %
   // which means that it will try open all devices until an error is met.
-  auto path_len = property_get("vendor.hwc.drm.device", path_pattern,
-                               "/dev/dri/card%");
-  if (path_pattern[path_len - 1] != '%') {
+  std::string path_pattern = Properties::GetDevicePath();
+  if (path_pattern.empty()) {
+    path_pattern = "/dev/dri/card%";
+  }
+  if (path_pattern.back() != '%') {
     auto dev = DrmDevice::CreateInstance(path_pattern, this, 0);
     if (dev) {
       drms_.emplace_back(std::move(dev));
     }
   } else {
-    path_pattern[path_len - 1] = '\0';
+    path_pattern.resize(path_pattern.size() - 1);
     for (int idx = 0;; ++idx) {
       std::ostringstream path;
       path << path_pattern << idx;
@@ -83,18 +84,7 @@ void ResourceManager::Init() {
 
   scale_with_gpu_ = Properties::ScaleWithGpu();
 
-  char proptext[PROPERTY_VALUE_MAX];
-  constexpr char kDrmOrGpu[] = "DRM_OR_GPU";
-  constexpr char kDrmOrIgnore[] = "DRM_OR_IGNORE";
-  property_get("vendor.hwc.drm.ctm", proptext, kDrmOrGpu);
-  if (strncmp(proptext, kDrmOrGpu, sizeof(kDrmOrGpu)) == 0) {
-    ctm_handling_ = CtmHandling::kDrmOrGpu;
-  } else if (strncmp(proptext, kDrmOrIgnore, sizeof(kDrmOrIgnore)) == 0) {
-    ctm_handling_ = CtmHandling::kDrmOrIgnore;
-  } else {
-    ALOGE("Invalid value for vendor.hwc.drm.ctm: %s", proptext);
-    ctm_handling_ = CtmHandling::kDrmOrGpu;
-  }
+  ctm_handling_ = Properties::GetCtmHandling();
 
   if (BufferInfoGetter::GetInstance() == nullptr) {
     ALOGE("Failed to initialize BufferInfoGetter");

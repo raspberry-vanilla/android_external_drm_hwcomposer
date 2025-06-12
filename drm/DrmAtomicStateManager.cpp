@@ -41,9 +41,14 @@ auto DrmAtomicStateManager::CreateInstance(DrmDisplayPipeline *pipe)
       new DrmAtomicStateManager());
 
   dasm->pipe_ = pipe;
-  std::thread(&DrmAtomicStateManager::ThreadFn, dasm.get(), dasm).detach();
+  dasm->thread_ = std::thread(&DrmAtomicStateManager::ThreadFn, dasm.get());
 
   return dasm;
+}
+
+DrmAtomicStateManager::~DrmAtomicStateManager() {
+  StopThread();
+  thread_.join();
 }
 
 // NOLINTNEXTLINE (readability-function-cognitive-complexity): Fixme
@@ -51,7 +56,12 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_CALL();
 
-  if (args.active && *args.active == active_frame_state_.crtc_active_state) {
+  // new_frame_state is initialized to the current frame state and may be
+  // modified below.
+  auto new_frame_state = committed_frame_state_;
+  KmsObjects used_kms_objects;
+
+  if (args.active && *args.active == new_frame_state.crtc_active_state) {
     /* Don't set the same state twice */
     args.active.reset();
   }
@@ -61,12 +71,10 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     return 0;
   }
 
-  if (!active_frame_state_.crtc_active_state) {
+  if (!new_frame_state.crtc_active_state) {
     /* Force activate display */
     args.active = true;
   }
-
-  auto new_frame_state = NewFrameState();
 
   auto *crtc = pipe_->crtc->Get();
 
@@ -133,9 +141,9 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
 
   auto *drm = pipe_->device;
   if (args.display_mode) {
-    new_frame_state.mode_blob = args.display_mode.value().CreateModeBlob(*drm);
+    auto mode_blob = args.display_mode.value().CreateModeBlob(*drm);
 
-    if (!new_frame_state.mode_blob) {
+    if (!mode_blob) {
       ALOGE("Failed to create mode_blob");
       return -EINVAL;
     }
@@ -143,23 +151,24 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     auto raw_mode = args.display_mode.value().GetRawMode();
     whole_display_rect_.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
 
-    if (!crtc->GetModeProperty().AtomicSet(*pset, *new_frame_state.mode_blob)) {
+    if (!crtc->GetModeProperty().AtomicSet(*pset, *mode_blob)) {
       return -EINVAL;
     }
+    used_kms_objects.blobs.emplace_back(std::move(mode_blob));
   }
 
   if (args.color_matrix && crtc->GetCtmProperty()) {
-    auto blob = drm->RegisterUserPropertyBlob(args.color_matrix.get(),
-                                              sizeof(drm_color_ctm));
-    new_frame_state.ctm_blob = std::move(blob);
-
-    if (!new_frame_state.ctm_blob) {
+    auto ctm_blob = drm->RegisterUserPropertyBlob(args.color_matrix.get(),
+                                                  sizeof(drm_color_ctm));
+    if (!ctm_blob) {
       ALOGE("Failed to create CTM blob");
       return -EINVAL;
     }
 
-    if (!crtc->GetCtmProperty().AtomicSet(*pset, *new_frame_state.ctm_blob))
+    if (!crtc->GetCtmProperty().AtomicSet(*pset, *ctm_blob))
       return -EINVAL;
+
+    used_kms_objects.blobs.emplace_back(std::move(ctm_blob));
   }
 
   if (args.colorspace && connector->GetColorspaceProperty()) {
@@ -177,18 +186,18 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
   }
 
   if (args.hdr_metadata && connector->GetHdrOutputMetadataProperty()) {
-    auto blob = drm->RegisterUserPropertyBlob(args.hdr_metadata.get(),
-                                              sizeof(hdr_output_metadata));
-    new_frame_state.hdr_metadata_blob = std::move(blob);
-    if (!new_frame_state.hdr_metadata_blob) {
+    auto hdr_metadata_blob = drm->RegisterUserPropertyBlob(
+        args.hdr_metadata.get(), sizeof(hdr_output_metadata));
+    if (!hdr_metadata_blob) {
       ALOGE("Failed to create %s blob",
             connector->GetHdrOutputMetadataProperty().GetName().c_str());
       return -EINVAL;
     }
 
     if (!connector->GetHdrOutputMetadataProperty()
-             .AtomicSet(*pset, *new_frame_state.hdr_metadata_blob))
+             .AtomicSet(*pset, *hdr_metadata_blob))
       return -EINVAL;
+    used_kms_objects.blobs.emplace_back(std::move(hdr_metadata_blob));
   }
 
   if (args.min_bpc && connector->GetMinBpcProperty()) {
@@ -219,7 +228,7 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
       DrmPlane *plane = joining.plane->Get();
       LayerData &layer = joining.layer;
 
-      new_frame_state.used_framebuffers.emplace_back(layer.fb);
+      used_kms_objects.framebuffers.emplace_back(layer.fb);
       new_frame_state.used_planes.emplace_back(joining.plane);
 
       /* Remove from 'unused' list, since plane is re-used */
@@ -231,7 +240,7 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
                                 whole_display_rect_, damage_blob) != 0) {
         return -EINVAL;
       }
-      new_frame_state.damage_blobs.push_back(std::move(damage_blob));
+      used_kms_objects.blobs.emplace_back(std::move(damage_blob));
     }
   }
 
@@ -256,18 +265,28 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     return err;
   }
 
-  if (last_present_fence_) {
+  SharedFd present_fence;
+  {
+    std::lock_guard lock(mutex_);
+    present_fence = last_present_fence_;
+  }
+
+  if (present_fence) {
     // NOLINTNEXTLINE(misc-const-correctness)
     ATRACE_NAME("WaitPriorFramePresented");
 
     constexpr int kTimeoutMs = 500;
-    const int err = sync_wait(*last_present_fence_, kTimeoutMs);
+    const int err = sync_wait(*present_fence, kTimeoutMs);
     if (err != 0) {
-      ALOGE("sync_wait(fd=%i) returned: %i (errno: %i)", *last_present_fence_,
-            err, errno);
+      ALOGE("sync_wait(fd=%i) returned: %i (errno: %i)", *present_fence, err,
+            errno);
     }
 
-    CleanupPriorFrameResources();
+    // Lock again in case the helper thread cleaned this up while sync_waiting.
+    std::lock_guard lock(mutex_);
+    if (last_present_fence_) {
+      CleanupPriorFrameResources();
+    }
   }
 
   if (nonblock) {
@@ -288,34 +307,38 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     args.out_writeback_complete_fence = MakeSharedFd(wb_fence);
   }
 
+  committed_frame_state_ = std::move(new_frame_state);
+
   if (nonblock) {
     {
-      const std::unique_lock lock(mutex_);
+      const std::lock_guard lock(mutex_);
       last_present_fence_ = args.out_fence;
-      staged_frame_state_ = std::move(new_frame_state);
+      frame_objects_.emplace(std::move(used_kms_objects));
       frames_staged_++;
     }
     cv_.notify_all();
   } else {
-    active_frame_state_ = std::move(new_frame_state);
+    const std::lock_guard lock(mutex_);
+    last_present_fence_ = {};
+    frame_objects_ = {};
+    frame_objects_.emplace(std::move(used_kms_objects));
   }
 
   return 0;
 }
 
-void DrmAtomicStateManager::ThreadFn(
-    const std::shared_ptr<DrmAtomicStateManager> &dasm) {
+void DrmAtomicStateManager::ThreadFn() {
   int tracking_at_the_moment = -1;
-  auto &main_mutex = pipe_->device->GetResMan().GetMainLock();
 
   for (;;) {
     SharedFd present_fence;
 
     {
       std::unique_lock lk(mutex_);
+      base::ScopedLockAssertion lock_assertion(mutex_);
       cv_.wait(lk);
 
-      if (exit_thread_ || dasm.use_count() == 1)
+      if (exit_thread_)
         break;
 
       if (frames_staged_ <= tracking_at_the_moment)
@@ -340,8 +363,7 @@ void DrmAtomicStateManager::ThreadFn(
     }
 
     {
-      const std::unique_lock mlk(main_mutex);
-      const std::unique_lock lk(mutex_);
+      const std::lock_guard lk(mutex_);
       if (exit_thread_)
         break;
 
@@ -357,11 +379,12 @@ void DrmAtomicStateManager::ThreadFn(
 void DrmAtomicStateManager::CleanupPriorFrameResources() {
   assert(frames_staged_ - frames_tracked_ == 1);
   assert(last_present_fence_);
+  assert(frame_objects_.size() > 1);
 
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_NAME("CleanupPriorFrameResources");
   frames_tracked_++;
-  active_frame_state_ = std::move(staged_frame_state_);
+  frame_objects_.pop();
   last_present_fence_ = {};
 }
 

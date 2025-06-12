@@ -27,6 +27,8 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
+using ::android::Properties;
+
 namespace aidl::android::hardware::graphics::composer3::impl {
 
 ndk::ScopedAStatus Composer::createClient(

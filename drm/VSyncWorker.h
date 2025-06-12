@@ -22,8 +22,9 @@
 #include <mutex>
 #include <thread>
 
+#include <android-base/thread_annotations.h>
+
 #include "DrmDevice.h"
-#include "utils/thread_annotations.h"
 
 namespace android {
 

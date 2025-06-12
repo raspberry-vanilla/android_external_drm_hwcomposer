@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <optional>
+#include <queue>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/DrmKmsPlan.h"
@@ -62,64 +63,63 @@ class DrmAtomicStateManager {
   static auto CreateInstance(DrmDisplayPipeline *pipe)
       -> std::shared_ptr<DrmAtomicStateManager>;
 
-  ~DrmAtomicStateManager() = default;
+  ~DrmAtomicStateManager();
 
   auto ExecuteAtomicCommit(AtomicCommitArgs &args) -> int;
   auto ActivateDisplayUsingDPMS() -> int;
 
   void StopThread() {
     {
-      const std::unique_lock lock(mutex_);
+      const std::lock_guard lock(mutex_);
       exit_thread_ = true;
     }
     cv_.notify_all();
   }
 
  private:
+  void ThreadFn();
+
   DrmAtomicStateManager() = default;
-  auto CommitFrame(AtomicCommitArgs &args) -> int;
+  int CommitFrame(AtomicCommitArgs &args);
+
+  // Collection of kms objects that were committed to the kernel. There must be
+  // a userspace handle to keep these from being removed/unregistered until the
+  // commit that used them is no longer being presented.
+  struct KmsObjects {
+    /* We have to hold a reference to framebuffer while displaying it ,
+     * otherwise picture will blink */
+    std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
+    std::vector<DrmModeUserPropertyBlobUnique> blobs;
+  };
 
   struct KmsState {
     /* Required to cleanup unused planes */
     std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
-    /* We have to hold a reference to framebuffer while displaying it ,
-     * otherwise picture will blink */
-    std::vector<std::shared_ptr<DrmFbIdHandle>> used_framebuffers;
-
-    DrmModeUserPropertyBlobUnique mode_blob;
-    DrmModeUserPropertyBlobUnique ctm_blob;
-    DrmModeUserPropertyBlobUnique hdr_metadata_blob;
-    std::vector<DrmModeUserPropertyBlobUnique> damage_blobs;
-
-    int release_fence_pt_index{};
 
     /* To avoid setting the inactive state twice, which will fail the commit */
     bool crtc_active_state{};
-  } active_frame_state_;
+  };
 
-  auto NewFrameState() -> KmsState {
-    auto *prev_frame_state = &active_frame_state_;
-    return (KmsState){
-        .used_planes = prev_frame_state->used_planes,
-        .crtc_active_state = prev_frame_state->crtc_active_state,
-    };
-  }
-
+  // Only accessed from main thread.
   DrmDisplayPipeline *pipe_{};
-
-  void CleanupPriorFrameResources();
-
-  KmsState staged_frame_state_;
-  SharedFd last_present_fence_;
-  int frames_staged_{};
-  int frames_tracked_{};
-
+  KmsState committed_frame_state_;
   DstRectInfo whole_display_rect_{};
 
-  void ThreadFn(const std::shared_ptr<DrmAtomicStateManager> &dasm);
+  std::thread thread_;
   std::condition_variable cv_;
   std::mutex mutex_;
-  bool exit_thread_{};
+
+  // Accessed from both threads.
+  //
+  void CleanupPriorFrameResources() REQUIRES(mutex_);
+
+  bool exit_thread_ GUARDED_BY(mutex_){};
+  // Front of the queue is the objects for the currently presented frame.
+  // Objects for nonblocking frames are pushed to the back of the queue.
+  std::queue<KmsObjects> frame_objects_ GUARDED_BY(mutex_);
+  SharedFd last_present_fence_ GUARDED_BY(mutex_);
+  int frames_staged_ GUARDED_BY(mutex_){};
+  int frames_tracked_ GUARDED_BY(mutex_){};
 };
 
 }  // namespace android

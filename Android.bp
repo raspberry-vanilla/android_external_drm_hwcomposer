@@ -25,6 +25,8 @@ cc_defaults {
     name: "hwcomposer.drm_defaults",
 
     shared_libs: [
+        "drm_hwcomposer_atom_reporter",
+
         "libbase",
         "libcutils",
         "libdrm",
@@ -159,8 +161,6 @@ cc_defaults {
     ],
 
     shared_libs: [
-        "drm_hwcomposer_atom_reporter",
-
         "android.hardware.graphics.composer3-V3-ndk",
         "libbase",
         "libbinder_ndk",

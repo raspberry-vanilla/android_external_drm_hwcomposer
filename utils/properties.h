@@ -16,65 +16,15 @@
 
 #pragma once
 
-#ifdef ANDROID
-
-#include <cutils/properties.h>
-
-#else
-
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-
-// NOLINTNEXTLINE(readability-identifier-naming)
-constexpr int PROPERTY_VALUE_MAX = 92;
-
-// NOLINTNEXTLINE(readability-identifier-naming)
-auto inline property_get(const char *name, char *value,
-                         const char *default_value) -> int {
-  // NOLINTNEXTLINE (concurrency-mt-unsafe)
-  char *prop = std::getenv(name);
-  snprintf(value, PROPERTY_VALUE_MAX, "%s",
-           (prop == nullptr) ? default_value : prop);
-  return static_cast<int>(strlen(value));
-}
-
-/**
- * Bluntly copied from system/core/libcutils/properties.cpp,
- * which is part of the Android Project and licensed under Apache 2.
- * Source:
- * https://cs.android.com/android/platform/superproject/main/+/main:system/core/libcutils/properties.cpp;l=27
- */
-auto inline property_get_bool(const char *key, int8_t default_value) -> int8_t {
-  if (!key)
-    return default_value;
-
-  int8_t result = default_value;
-  char buf[PROPERTY_VALUE_MAX] = {};
-
-  int len = property_get(key, buf, "");
-  if (len == 1) {
-    char ch = buf[0];
-    if (ch == '0' || ch == 'n') {
-      result = false;
-    } else if (ch == '1' || ch == 'y') {
-      result = true;
-    }
-  } else if (len > 1) {
-    if (!strcmp(buf, "no") || !strcmp(buf, "false") || !strcmp(buf, "off")) {
-      result = false;
-    } else if (!strcmp(buf, "yes") || !strcmp(buf, "true") ||
-               !strcmp(buf, "on")) {
-      result = true;
-    }
-  }
-
-  return result;
-}
-
-#endif
-
+#include <optional>
 #include <string>
+
+namespace android {
+
+enum class CtmHandling {
+  kDrmOrGpu,    /* Handled by DRM is possible, otherwise by GPU */
+  kDrmOrIgnore, /* Handled by DRM is possible, otherwise displayed as is */
+};
 
 class Properties {
  public:
@@ -84,4 +34,9 @@ class Properties {
   static auto UseOverlayPlanes() -> bool;
   static auto ScaleWithGpu() -> bool;
   static auto EnableVirtualDisplay() -> bool;
+  static auto GetCtmHandling() -> CtmHandling;
+  static auto GetBackendOverride() -> std::string;
+  static auto GetDevicePath() -> std::string;
 };
+
+}  // namespace android

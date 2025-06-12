@@ -17,10 +17,10 @@
 #pragma once
 
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
+#include <android-base/thread_annotations.h>
 
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
-#include "utils/thread_annotations.h"
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
