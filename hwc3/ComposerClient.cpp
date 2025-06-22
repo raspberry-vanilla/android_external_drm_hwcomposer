@@ -494,17 +494,19 @@ ComposerClient::ComposerClient() {
 void ComposerClient::Init() {
   DEBUG_FUNC();
   hwc_ = std::make_unique<DrmHwcThree>();
-
-  auto reporter = CompositionStatsAtomReporter::Create();
-  if (reporter) {
-    stats_poller_ = std::make_unique<CompositionStatsPoller>(std::move(
-                                                                 reporter),
-                                                             hwc_.get());
-  }
+  initialize_stats_thread_ = std::thread([this] {
+    auto reporter = CompositionStatsAtomReporter::Create();
+    if (reporter) {
+      stats_poller_ = std::make_unique<CompositionStatsPoller>(std::move(
+                                                                   reporter),
+                                                               hwc_.get());
+    }
+  });
 }
 
 ComposerClient::~ComposerClient() {
   DEBUG_FUNC();
+  initialize_stats_thread_.join();
   stats_poller_.reset();
   if (hwc_) {
     const std::unique_lock lock(hwc_->GetResMan().GetMainLock());
