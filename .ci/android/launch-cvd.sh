@@ -28,7 +28,6 @@ function my_atexit()
 
 # Cuttlefish is an artifact built earlier in the pipeline
 tar xf "${CI_PROJECT_DIR}/${CUTTLEFISH_TARBALL}" -C /
-cp -r "/cuttlefish/cvd-host_package/." /cuttlefish
 
 export PATH=/cuttlefish/bin:/android-tools/android-cts/jdk/bin/:/android-tools/build-tools:$PATH
 
@@ -37,7 +36,7 @@ trap my_atexit EXIT
 trap 'exit 2' HUP INT PIPE TERM
 
 section_start launch_cvd "launch_cvd"
-cd /cuttlefish
+pushd /cuttlefish
 
 VSOCK_BASE=10000 # greater than all the default vsock ports
 VSOCK_CID=$((VSOCK_BASE + (CI_JOB_ID & 0xfff)))
@@ -52,6 +51,7 @@ HOME=/cuttlefish launch_cvd \
   -guest_enforce_security=false \
   -report_anonymous_usage_stats=no \
   -gpu_mode="guest_swiftshader" \
+  -hwcomposer="drm" \
   -memory_mb 32768 \
   -blank_sdcard_image_mb 65536 \
   -data_policy=always_create \
@@ -65,42 +65,74 @@ HOME=/cuttlefish launch_cvd \
 while [ "$(adb shell dumpsys -l | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
 adb shell dumpsys SurfaceFlinger | grep GLES
 
+popd
 section_end launch_cvd
 
-section_start push_drm_hwc "push_drm_hwc"
+section_start push_new_apex "push_new_apex"
 set -x
 
+mkdir /old_apex
 adb wait-for-device root
-adb remount /vendor
-adb reboot
-adb wait-for-device root
-adb remount /vendor
+adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex /old_apex
 
-# stop ranchu that comes with the cuttlefish image
-adb shell stop vendor.hwcomposer-3
-adb shell umount /apex/com.android.hardware.graphics.composer.ranchu
-adb shell umount /apex/com.android.hardware.graphics.composer.ranchu@1
-adb shell umount /bootstrap-apex/com.android.hardware.graphics.composer.ranchu@1
-adb shell umount /bootstrap-apex/com.android.hardware.graphics.composer.ranchu
+# Unzip it to get apex_build_info.pb which has all the build parameters normally passed to apexer
+unzip /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex -d /old_apex
 
-# These artifacts are built earlier in the pipeline
-adb push "${CI_PROJECT_DIR}/install/x86_64/vendor/bin/hw/android.hardware.composer.hwc3-service.drm" \
-  "/vendor/bin/hw/android.hardware.composer.hwc3-service.drm"
-adb push "${CI_PROJECT_DIR}/install/x86_64/vendor/etc/init/hwc3-drm.rc" \
-  "/vendor/etc/init/hwc3-drm.rc"
-adb push "${CI_PROJECT_DIR}/install/x86_64/vendor/etc/vintf/manifest/hwc3-drm.xml" \
-  "/vendor/etc/vintf/manifest/hwc3-drm.xml"
-adb push "${CI_PROJECT_DIR}/install/x86_64/vendor/lib64/hw/hwcomposer.drm.so" \
-  "/vendor/lib64/hw/hwcomposer.drm.so"
+# Extract all the apex pieces that can be reused
+deapexer \
+  --fsckerofs_path /cuttlefish/bin/fsck.erofs \
+  --debugfs_path /cuttlefish/bin/debugfs_static \
+  extract \
+  /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
+  /old_apex
 
-# Start drmhwc
-adb shell LD_LIBRARY_PATH=/system/lib64:/apex/com.android.hardware.graphics.composer@1/lib64 \
-  /vendor/bin/hw/android.hardware.composer.hwc3-service.drm &
+mkdir -p /new_image/bin/hw
+# This binary is built earlier in the pipeline
+cp "${CI_PROJECT_DIR}/install/x86_64/vendor/bin/hw/android.hardware.composer.hwc3-service.drm" \
+  "/new_image/bin/hw"
+
+cp -r /old_apex/etc /new_image/etc
+cp -r /old_apex/lib64 /new_image/lib64
+
+mkdir /new_apex
+cp /old_apex/apex_manifest.pb /new_apex/
+cp /old_apex/apex_build_info.pb /new_apex/
+
+mkdir -p $PWD/prebuilts/sdk/current/public/
+cp /android.jar $PWD/prebuilts/sdk/current/public/
+
+apexer \
+  --build_info /new_apex/apex_build_info.pb \
+  --apexer_tool_path $PATH \
+  --manifest /new_apex/apex_manifest.pb \
+  --force \
+  --key /cuttlefish/com.android.hardware.pem \
+  --pubkey /cuttlefish/com.android.hardware.avbpubkey \
+  /new_image \
+  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+
+java \
+ -Djava.library.path=/cuttlefish/lib64 \
+  -jar /cuttlefish/framework/signapk.jar \
+  -a 4096 \
+  /cuttlefish/com.android.hardware.x509.pem \
+  /cuttlefish/com.android.hardware.pk8 \
+  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
+  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex
+
+mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
+  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex_unsigned
+
+mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex \
+  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+
+adb install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+
 adb logcat -d | grep -i hwc
 
 set +x
 
-# If these service is missing, cts-tradefed will fail device pretests
+# If this service is missing, cts-tradefed will fail device pretests
 while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
 echo "window ok"
 
@@ -119,4 +151,4 @@ echo "logcat ok"
 # Look for other missing services
 adb shell dumpsys > /dev/null
 
-section_end push_drm_hwc
+section_end push_new_apex

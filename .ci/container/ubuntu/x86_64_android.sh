@@ -39,7 +39,7 @@ section_end install_packages
 # Build and install Debian package for cuttlefish
 section_start get_cuttlefish_packages "get_cuttlefish_packages"
 set -x
-ANDROID_CUTTLEFISH_VERSION=v1.0.1
+ANDROID_CUTTLEFISH_VERSION=v1.5.0
 mkdir /android-cuttlefish
 pushd /android-cuttlefish
 git init
@@ -112,5 +112,13 @@ cp "${TOP}/out/target/product/vsoc_x86_64_only/data/nativetest64/VtsHalGraphicsC
 set +x
 section_end build_vts
 
+section_start build_apexer "build_apexer"
+m apexer-host
+cp "${TOP}/out/host/linux-x86/bin/apexer" "/android-tools/build-tools/apexer"
+section_end build_apexer
+
+cp "${TOP}/prebuilts/sdk/current/public/android.jar" "/android.jar"
+
 # clean up
+rm "/root/.cache" -rf
 rm "${TOP}" -rf

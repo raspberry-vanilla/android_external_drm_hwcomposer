@@ -35,16 +35,14 @@ debian/x86_64_cuttlefish:
   extends:
     - .fdo.container-build@ubuntu
     - .container
-  variables:
-    FDO_DISTRIBUTION_VERSION: "24.10"
 
 ubuntu/x86_64_aospless:
   extends:
     - .ubuntu/x86_64_hwc
   variables:
+    FDO_DISTRIBUTION_VERSION: "24.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_aospless.sh'
     HWC_TAG: $UBUNTU_AOSPLESS_TAG
-    ANDROID_SDK_VERSION: 35
 
 ubuntu/x86_64_android:
   extends:
@@ -52,11 +50,11 @@ ubuntu/x86_64_android:
   timeout: 2h
   variables:
     ANDROID_VERSION: 15
-    ANDROID_SDK_VERSION: 35
     ANDROID_CTS_DEVICE_ARCH: "x86"
     ANDROID_CTS_MODULES: >-
       CtsGraphicsTestCases
       CtsDisplayTestCases
+    FDO_DISTRIBUTION_VERSION: "22.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android.sh'
     HWC_TAG: $UBUNTU_ANDROID_TAG
   after_script:
