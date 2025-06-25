@@ -17,7 +17,6 @@
 #pragma once
 
 #include <memory>
-#include <thread>
 
 #include "aidl/android/hardware/graphics/composer3/BnComposerClient.h"
 #include "aidl/android/hardware/graphics/composer3/LayerCommand.h"
@@ -191,9 +190,6 @@ class ComposerClient : public BnComposerClient {
 
   std::unique_ptr<DrmHwcThree> hwc_;
 
-  // The CompositionStatsPoller is initialized on the helper thread. The thread
-  // must be joined before the object is accessed or destroyed.
-  std::thread initialize_stats_thread_;
   std::unique_ptr<::android::CompositionStatsPoller> stats_poller_;
 };
 
