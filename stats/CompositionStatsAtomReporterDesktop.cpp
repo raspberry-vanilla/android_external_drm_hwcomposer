@@ -35,14 +35,13 @@ namespace DesktopAtoms = android::vendor::google::desktop::stats::DesktopAtoms;
 namespace android {
 namespace {
 
+const std::string kStatsServiceName = std::string(IStats::descriptor)
+                                          .append("/default");
+
 // Use a private implementation of CompositionStatsAtomReporter to avoid leaking
 // the IStats interface through the public api.
 class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
  public:
-  explicit CompositionStatsReporterDesktop(std::shared_ptr<IStats> stats_client)
-      : stats_client_(std::move(stats_client)) {
-  }
-
   void PushAtom(int64_t display_handle, int64_t presented_frame_count,
                 int64_t present_failed_count,
                 int64_t validate_failed_count) override {
@@ -50,6 +49,7 @@ class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
           ", failed_present=%" PRId64 ", failed_validate=%" PRId64,
           display_handle, presented_frame_count, present_failed_count,
           validate_failed_count);
+
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
     const char* kDeprecatedReverseDomainName = "";
@@ -58,36 +58,26 @@ class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
                          kDeprecatedReverseDomainName, display_handle,
                          presented_frame_count, present_failed_count,
                          validate_failed_count);
-    const ndk::ScopedAStatus ret = stats_client_->reportVendorAtom(atom);
-    ALOGE_IF(!ret.isOk(), "Failed to report stats: %s",
-             ret.getDescription().c_str());
-  }
 
- private:
-  std::shared_ptr<IStats> stats_client_;
+    auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
+        AServiceManager_checkService(kStatsServiceName.c_str())));
+    ALOGE_IF(stats_service == nullptr, "Failed to get IStats service");
+    if (stats_service) {
+      const ndk::ScopedAStatus ret = stats_service->reportVendorAtom(atom);
+      ALOGE_IF(!ret.isOk(), "Failed to report stats: %s",
+               ret.getDescription().c_str());
+    }
+  }
 };
-
-auto GetStatsService() -> std::shared_ptr<IStats> {
-  const std::string stats_service_name = std::string(IStats::descriptor)
-                                             .append("/default");
-  if (!AServiceManager_isDeclared(stats_service_name.c_str())) {
-    ALOGW("Stats service is not declared.");
-    return nullptr;
-  }
-  return IStats::fromBinder(ndk::SpAIBinder(
-      AServiceManager_waitForService(stats_service_name.c_str())));
-}
-
 }  // namespace
 
 std::unique_ptr<CompositionStatsAtomReporter>
 CompositionStatsAtomReporter::Create() {
-  std::shared_ptr<IStats> stats_client = GetStatsService();
-  ALOGW_IF(!stats_client, "Failed to get stats service");
-  if (!stats_client) {
-    return {};
+  if (!AServiceManager_isDeclared(kStatsServiceName.c_str())) {
+    ALOGW("Stats service is not declared.");
+    return nullptr;
   }
-  return std::make_unique<CompositionStatsReporterDesktop>(stats_client);
+  return std::make_unique<CompositionStatsReporterDesktop>();
 }
 
 }  // namespace android

@@ -31,20 +31,6 @@ auto DrmKmsPlan::CreateDrmKmsPlan(
   auto [avail_planes, cursor_plane] = pipe.GetUsablePlanes();
 
   int z_pos = 0;
-  if (cursor_layer.has_value()) {
-    if (cursor_plane &&
-        cursor_plane->Get()->IsValidForLayer(&cursor_layer.value())) {
-      plan->plan.emplace_back(
-          LayerToPlaneJoining{.layer = std::move(cursor_layer.value()),
-                              .plane = cursor_plane,
-                              .z_pos = z_pos++});
-    } else {
-      // Cursor plane can't be used. The cursor layer may need to fallback to
-      // device or client composition.
-      return {};
-    }
-  }
-
   for (auto &dhl : composition) {
     std::shared_ptr<BindingOwner<DrmPlane>> plane;
     /* Skip unsupported planes */
@@ -64,6 +50,21 @@ auto DrmKmsPlan::CreateDrmKmsPlan(
     };
 
     plan->plan.emplace_back(std::move(joining));
+  }
+
+  // Add cursor plane last to ensure it gets highest z-pos.
+  if (cursor_layer.has_value()) {
+    if (cursor_plane &&
+        cursor_plane->Get()->IsValidForLayer(&cursor_layer.value())) {
+      plan->plan.emplace_back(
+          LayerToPlaneJoining{.layer = std::move(cursor_layer.value()),
+                              .plane = cursor_plane,
+                              .z_pos = z_pos++});
+    } else {
+      // Cursor plane can't be used. The cursor layer may need to fallback to
+      // device or client composition.
+      return {};
+    }
   }
 
   return plan;
