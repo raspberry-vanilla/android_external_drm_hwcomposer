@@ -4,7 +4,7 @@
 
 set -e
 
-source "./.ci/setup-test-env.sh"
+source "${FDO_CI_BASH_HELPERS}"
 
 DEPS=(
   ca-certificates
@@ -26,7 +26,7 @@ DEPS_FOR_AOSP=(
 export DEBIAN_FRONTEND=noninteractive
 ln -fs /usr/share/zoneinfo/UTC /etc/localtime # suppress tzdata prompt
 
-section_start install_packages "install_packages"
+fdo_log_section_start_collapsed install_packages "install_packages"
 apt-get update
 apt-get upgrade -y
 apt-get install -y --no-remove --no-install-recommends "${DEPS[@]}"
@@ -34,11 +34,10 @@ apt-get install -y --no-remove --no-install-recommends "${DEPS_FOR_AOSP[@]}"
 
 curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
 chmod a+x /usr/local/bin/repo
-section_end install_packages
+fdo_log_section_end install_packages
 
 # Build and install Debian package for cuttlefish
-section_start get_cuttlefish_packages "get_cuttlefish_packages"
-set -x
+fdo_log_section_start_collapsed get_cuttlefish_packages "get_cuttlefish_packages"
 ANDROID_CUTTLEFISH_VERSION=v1.5.0
 mkdir /android-cuttlefish
 pushd /android-cuttlefish
@@ -50,12 +49,10 @@ git checkout FETCH_HEAD
 apt-get install -y --allow-downgrades ./cuttlefish-base_*.deb ./cuttlefish-user_*.deb
 popd
 rm -rf /android-cuttlefish
-set +x
-section_end get_cuttlefish_packages
+fdo_log_section_end get_cuttlefish_packages
 
 # Download Android CTS
-section_start get_android_cts "get_android_cts"
-set -x
+fdo_log_section_start_collapsed get_android_cts "get_android_cts"
 ANDROID_CTS_VERSION="${ANDROID_VERSION}_r3"
 mkdir /android-tools
 cd /android-tools
@@ -69,21 +66,18 @@ rm ./*.zip
 # shellcheck disable=SC2086 # keep word splitting
 ANDROID_CTS_MODULES_KEEP_EXPRESSION=$(printf "%s|" $ANDROID_CTS_MODULES | sed -e 's/|$//g')
 find android-cts/testcases/ -mindepth 1 -type d | grep -v -E "$ANDROID_CTS_MODULES_KEEP_EXPRESSION" | xargs rm -rf
-set +x
-section_end get_android_cts
+fdo_log_section_end get_android_cts
 
-section_start get_build-tools "get_build-tools"
-set -x
+fdo_log_section_start_collapsed get_build-tools "get_build-tools"
 curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
   -o "build-tools_r${ANDROID_SDK_VERSION}-linux.zip" \
   "https://dl.google.com/android/repository/build-tools_r${ANDROID_SDK_VERSION}_linux.zip"
 unzip "build-tools_r${ANDROID_SDK_VERSION}-linux.zip"
 rm ./*.zip
 mv "android-$ANDROID_VERSION" build-tools #rename the directory
-set +x
-section_end get_build-tools "get_build-tools"
+fdo_log_section_end get_build-tools "get_build-tools"
 
-section_start repo_init "repo_init"
+fdo_log_section_start_collapsed repo_init "repo_init"
 TOP="/aosp"
 mkdir "${TOP}"
 cd "${TOP}"
@@ -98,9 +92,9 @@ yes n | repo init \
 
  # Don't increase parallel jobs or they will be denied
 time repo sync --fail-fast --no-tags -j2
-section_end repo_init
+fdo_log_section_end repo_init
 
-section_start build_vts "build_vts"
+fdo_log_section_start_collapsed build_vts "build_vts"
 source "${TOP}/build/envsetup.sh"
 export TARGET_BUILD_VARIANT=userdebug
 export TARGET_PRODUCT=aosp_cf_x86_64_slim
@@ -109,13 +103,12 @@ lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 time m VtsHalGraphicsComposer3_TargetTest > "/vts.log.txt" 2>&1
 cp "${TOP}/out/target/product/vsoc_x86_64_only/data/nativetest64/VtsHalGraphicsComposer3_TargetTest/VtsHalGraphicsComposer3_TargetTest" \
   "/VtsHalGraphicsComposer3_TargetTest"
-set +x
-section_end build_vts
+fdo_log_section_end build_vts
 
-section_start build_apexer "build_apexer"
+fdo_log_section_start_collapsed build_apexer "build_apexer"
 m apexer-host
 cp "${TOP}/out/host/linux-x86/bin/apexer" "/android-tools/build-tools/apexer"
-section_end build_apexer
+fdo_log_section_end build_apexer
 
 cp "${TOP}/prebuilts/sdk/current/public/android.jar" "/android.jar"
 

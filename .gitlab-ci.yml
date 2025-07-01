@@ -8,7 +8,7 @@ variables:
   ANDROID_BRANCH: android15-release
   ANDROID_SDK_VERSION: 35
   DEBIAN_FRONTEND: noninteractive
-  CI_TEMPLATES_COMMIT: &ci-templates-commit ea3f77641d91765396beba192b8defd3085fa343
+  CI_TEMPLATES_COMMIT: &ci-templates-commit 32afe5644697e503af18a736587c8619fa036a72
   FDO_UPSTREAM_REPO: "drm-hwcomposer/drm-hwcomposer"
   CUTTLEFISH_TARBALL: "cuttlefish.tar.xz"
 

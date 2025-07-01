@@ -43,7 +43,7 @@ trap 'exit 2' HUP INT PIPE TERM
 rm "/cache/${CI_PROJECT_PATH}/cuttlefish.log.txt" || true
 rm "/cache/${CI_PROJECT_PATH}/${CUTTLEFISH_TARBALL}" || true
 
-source "./.ci/setup-test-env.sh"
+source "${FDO_CI_BASH_HELPERS}"
 
 EPHEMERAL_DEPS=(
   binutils
@@ -79,18 +79,16 @@ DEPS=(
 
 export DEBIAN_FRONTEND=noninteractive
 
-section_start install_packages "install_packages"
-set -x
+fdo_log_section_start_collapsed install_packages "install_packages"
 apt-get update
 apt-get upgrade -y
 apt-get install -y --no-install-recommends "${EPHEMERAL_DEPS[@]}"
 apt-get install -y --no-install-recommends "${DEPS[@]}"
 curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
 chmod a+x /usr/local/bin/repo
-set +x
-section_end install_packages
+fdo_log_section_end install_packages
 
-section_start repo_init "repo_init"
+fdo_log_section_start_collapsed repo_init "repo_init"
 
 # avoid accidentally reusing the .repo from previous builds
 rm /cache/.repo -rf
@@ -109,9 +107,9 @@ yes n | repo init \
 
  # Don't increase parallel jobs or they will be denied
 time repo sync --fail-fast --no-tags -j4
-section_end repo_init
+fdo_log_section_end repo_init
 
-section_start customize_repo "customize_repo"
+fdo_log_section_start_collapsed customize_repo "customize_repo"
 
 MESA3D_DIR="${TOP}/external/mesa3d"
 MESA3D_URL="https://gitlab.freedesktop.org/mesa/mesa.git"
@@ -178,9 +176,9 @@ EOF
 sed -i 's/ranchu/drm_hwcomposer/' \
   "${TOP}/device/google/cuttlefish/shared/graphics/device_vendor.mk"
 
-section_end customize_repo
+fdo_log_section_end customize_repo
 
-section_start build_cuttlefish "build_cuttlefish"
+fdo_log_section_start_collapsed build_cuttlefish "build_cuttlefish"
 source build/envsetup.sh
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_phone
@@ -190,10 +188,9 @@ lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 time make -j"${FDO_CI_CONCURRENT:-4}" > "/cuttlefish.log.txt" 2>&1 # Silent or job logs will exceed limit
 echo "Build of ${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT} complete."
 
-section_end build_cuttlefish
+fdo_log_section_end build_cuttlefish
 
-section_start get_cuttlefish_images "get_cuttlefish_images"
-set -x
+fdo_log_section_start_collapsed get_cuttlefish_images "get_cuttlefish_images"
 
 CUTTLEFISH_DIR="/cuttlefish"
 mkdir -p "${CUTTLEFISH_DIR}"
@@ -226,4 +223,4 @@ cp "${TOP}/hardware/interfaces/apexkey/com.android.hardware.avbpubkey" "${CUTTLE
 : "${CUTTLEFISH_TARBALL:?CUTTLEFISH_TARBALL is not set}"
 
 tar -cf - "${CUTTLEFISH_DIR}" | xz --best -e -T"${FDO_CI_CONCURRENT:-4}" > "/${CUTTLEFISH_TARBALL}" || true
-section_end get_cuttlefish_images
+fdo_log_section_end get_cuttlefish_images

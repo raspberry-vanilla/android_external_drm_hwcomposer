@@ -4,7 +4,7 @@
 
 set -e
 
-source "./.ci/setup-test-env.sh"
+source "${FDO_CI_BASH_HELPERS}"
 
 DEPS=(
   ca-certificates
@@ -43,8 +43,7 @@ DEPS_FOR_CHECK=(
 
 export DEBIAN_FRONTEND=noninteractive
 
-section_start install_packages "install_packages"
-set -x
+fdo_log_section_start_collapsed install_packages "install_packages"
 apt-get update
 apt-get upgrade -y
 apt-get install -y --no-remove --no-install-recommends "${DEPS[@]}"
@@ -55,12 +54,10 @@ apt-get install -y --no-remove --no-install-recommends "${DEPS_FOR_CHECK[@]}"
 
 curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
 chmod a+x /usr/local/bin/repo
-set +x
-section_end install_packages
+fdo_log_section_end install_packages
 
-section_start repo_init "repo_init"
-set -x
-TOP="$(pwd)/aosp" # $CI_PROJECT_DIR is unavailable in FDO_DISTRIBUTION_EXEC
+fdo_log_section_start_collapsed repo_init "repo_init"
+TOP="$(pwd)/aosp"
 mkdir "${TOP}"
 cd "${TOP}"
 
@@ -93,12 +90,10 @@ cat >> "${TOP}/device/google/cuttlefish/shared/device.mk" <<EOF
 BOARD_BUILD_AOSPEXT_DRMHWCOMPOSER := true
 BOARD_DRMHWCOMPOSER_SRC_DIR := external/drm_hwcomposer
 EOF
-set +x
 source build/envsetup.sh
-section_end repo_init
+fdo_log_section_end repo_init
 
-section_start build_aospless_x86_64 "build_aospless_x86_64"
-set -x
+fdo_log_section_start_collapsed build_aospless_x86_64 "build_aospless_x86_64"
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_slim
@@ -110,12 +105,10 @@ make gen_aospless
 tar --no-same-owner -xf aospless.tar.gz
 # Rename and move the artifacts needed for subsequent jobs to the root directory
 cp -r "./aospless" "/aospless_x86_64"
-set +x
-section_end build_aospless_x86_64
+fdo_log_section_end build_aospless_x86_64
 
 
-section_start build_aospless_arm64 "build_aospless_arm64"
-set -x
+fdo_log_section_start_collapsed build_aospless_arm64 "build_aospless_arm64"
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_arm64_slim
@@ -127,8 +120,7 @@ make gen_aospless
 tar --no-same-owner -xf aospless.tar.gz
 # Rename and move the artifacts needed for subsequent jobs to the root directory
 cp -r "./aospless" "/aospless_arm64"
-set +x
-section_end build_aospless_arm64
+fdo_log_section_end build_aospless_arm64
 
 # clean up
 rm "${TOP}" -rf

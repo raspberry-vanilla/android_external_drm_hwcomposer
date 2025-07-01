@@ -7,7 +7,7 @@ EXIT_CODE=1
 
 : "${CI_PROJECT_DIR:=/}"
 
-source "${CI_PROJECT_DIR}/.ci/setup-test-env.sh"
+source "${FDO_CI_BASH_HELPERS}"
 
 : "${RESULTS_DIR:=./results}"
 
@@ -35,7 +35,7 @@ export PATH=/cuttlefish/bin:/android-tools/android-cts/jdk/bin/:/android-tools/b
 trap my_atexit EXIT
 trap 'exit 2' HUP INT PIPE TERM
 
-section_start launch_cvd "launch_cvd"
+fdo_log_section_start_collapsed launch_cvd "launch_cvd"
 pushd /cuttlefish
 
 VSOCK_BASE=10000 # greater than all the default vsock ports
@@ -66,10 +66,9 @@ while [ "$(adb shell dumpsys -l | grep SurfaceFlinger)" = "" ] ; do sleep 1; don
 adb shell dumpsys SurfaceFlinger | grep GLES
 
 popd
-section_end launch_cvd
+fdo_log_section_end launch_cvd
 
-section_start push_new_apex "push_new_apex"
-set -x
+fdo_log_section_start_collapsed push_new_apex "push_new_apex"
 
 mkdir /old_apex
 adb wait-for-device root
@@ -130,8 +129,6 @@ adb install --force-non-staged /new_apex/com.android.hardware.graphics.composer.
 
 adb logcat -d | grep -i hwc
 
-set +x
-
 # If this service is missing, cts-tradefed will fail device pretests
 while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
 echo "window ok"
@@ -151,4 +148,4 @@ echo "logcat ok"
 # Look for other missing services
 adb shell dumpsys > /dev/null
 
-section_end push_new_apex
+fdo_log_section_end push_new_apex

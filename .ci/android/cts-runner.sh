@@ -11,8 +11,7 @@ fi
 
 source "${CI_PROJECT_DIR}/.ci/android/launch-cvd.sh"
 
-section_start run_android_cts "run_android_cts"
-set -x
+fdo_log_section_start_collapsed run_android_cts "run_android_cts"
 
 INCLUDE_FILE="${CI_PROJECT_DIR}/.ci/android/cts-includes.txt"
 # shellcheck disable=SC2086 # keep word splitting
@@ -25,7 +24,7 @@ eval /android-tools/android-cts/tools/cts-tradefed run commandAndExit cts-dev \
 # Even if there are failed tests, eval will exit with 0, so check for failures manually.
 [ "$(grep "^FAILED" /android-tools/android-cts/results/latest/invocation_summary.txt | tr -d ' ' | cut -d ':' -f 2)" = "0" ]
 export EXIT_CODE=$?
-section_end run_android_cts
+fdo_log_section_end run_android_cts
 
 cp -r "/android-tools/android-cts/results/latest"/* "${RESULTS_DIR}"
 cp -r "/android-tools/android-cts/logs/latest"/* "${RESULTS_DIR}"
