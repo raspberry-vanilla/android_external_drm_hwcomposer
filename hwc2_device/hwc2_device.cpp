@@ -17,6 +17,7 @@
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 // #define LOG_NDEBUG 0 // Uncomment to see HWC2 API calls in logcat
 
+#include "hardware/hwcomposer2.h"
 #include "system/graphics-base-v1.1.h"
 #define LOG_TAG "drmhwc"
 
@@ -43,6 +44,8 @@ static int32_t ConfigErrorToHWC2(HwcDisplay::ConfigError result) {
       return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
     case HwcDisplay::ConfigError::kSeamlessNotPossible:
       return static_cast<int32_t>(HWC2::Error::SeamlessNotPossible);
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return static_cast<int32_t>(HWC2::Error::BadConfig);
     case HwcDisplay::ConfigError::kNone:
       return static_cast<int32_t>(HWC2::Error::None);
   }

@@ -257,7 +257,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   if (ret) {
     ALOGE("Blocking config failed: %d", ret);
-    return HwcDisplay::ConfigError::kBadConfig;
+    return HwcDisplay::ConfigError::kConfigFailed;
   }
 
   ALOGV("Blocking config succeeded.");

@@ -53,7 +53,8 @@ class HwcDisplay {
     kNone,
     kBadConfig,
     kSeamlessNotAllowed,
-    kSeamlessNotPossible
+    kSeamlessNotPossible,
+    kConfigFailed
   };
 
   enum DisplayType { kInternal, kExternal, kVirtual };

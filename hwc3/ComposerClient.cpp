@@ -1298,6 +1298,13 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
       return ToBinderStatus(hwc3::Error::kSeamlessNotAllowed);
     case HwcDisplay::ConfigError::kSeamlessNotPossible:
       return ToBinderStatus(hwc3::Error::kSeamlessNotPossible);
+    #if __ANDROID_API__ >= 36
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return ToBinderStatus(hwc3::Error::kConfigFailed);
+    #else
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return ToBinderStatus(hwc3::Error::kBadConfig);
+    #endif
     case HwcDisplay::ConfigError::kNone:
       return ndk::ScopedAStatus::ok();
   }
