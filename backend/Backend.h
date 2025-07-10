@@ -34,7 +34,9 @@ class Backend {
  protected:
   static bool HardwareSupportsLayerType(HwcLayer::CompositionType comp_type);
   static uint32_t CalcPixOps(const std::vector<HwcLayer *> &layers,
-                             size_t first_z, size_t size);
+                             size_t first_z, size_t size,
+                             std::pair<uint32_t, uint32_t> display_size,
+                             bool use_cursor_plane);
   static void MarkValidated(std::vector<HwcLayer *> &layers,
                             size_t client_first_z, size_t client_size,
                             bool use_cursor_plane);

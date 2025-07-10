@@ -169,6 +169,15 @@ auto HwcDisplay::GetLastRequestedConfig() const -> const HwcDisplayConfig * {
   return GetConfig(staged_mode_config_id_.value_or(configs_.active_config_id));
 }
 
+const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
+  if (staged_mode_config_id_ &&
+      staged_mode_change_time_ <= vsync_worker_->GetNextVsyncTimestamp(
+                                      ResourceManager::GetTimeMonotonicNs())) {
+    return GetLastRequestedConfig();
+  }
+  return GetCurrentConfig();
+}
+
 void HwcDisplay::SetOutputType(uint32_t hdr_output_type) {
   switch (hdr_output_type) {
     case 3: {  // HDR10

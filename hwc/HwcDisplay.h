@@ -88,6 +88,11 @@ class HwcDisplay {
   // is queued up to take effect in the future.
   auto GetLastRequestedConfig() const -> const HwcDisplayConfig *;
 
+  // Get the config that will be active during the next commit. If a config
+  // change has been staged, it will be returned iff the scheduled time has
+  // arrived. Otherwise the current config will be returned.
+  const HwcDisplayConfig *GetNextConfig() const;
+
   // Set a config synchronously. If the requested config fails to be committed,
   // this will return with an error. Otherwise, the config will have been
   // committed to the kernel on successful return.
@@ -97,7 +102,7 @@ class HwcDisplay {
   auto QueueConfig(ConfigId config, int64_t desired_time, bool seamless,
                    QueuedConfigTiming *out_timing) -> ConfigError;
 
-  // Get the HwcDisplayConfig, or nullptor if none.
+  // Get the HwcDisplayConfig, or nullptr if none.
   auto GetConfig(ConfigId config_id) const -> const HwcDisplayConfig *;
 
   auto GetDisplayBoundsMm() -> std::pair<int32_t, int32_t>;
