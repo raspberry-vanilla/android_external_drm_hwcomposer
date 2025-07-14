@@ -909,16 +909,14 @@ ndk::ScopedAStatus ComposerClient::getDisplayAttribute(
       *value = aidl_configuration.vsyncPeriod;
       break;
     case DisplayAttribute::DPI_X:
-      *value = aidl_configuration.dpi
-                   ? static_cast<int>(aidl_configuration.dpi->x *
-                                      kLegacyDpiUnit)
-                   : -1;
+      if (!aidl_configuration.dpi)
+        return ToBinderStatus(hwc3::Error::kUnsupported);
+      *value = static_cast<int>(aidl_configuration.dpi->x * kLegacyDpiUnit);
       break;
     case DisplayAttribute::DPI_Y:
-      *value = aidl_configuration.dpi
-                   ? static_cast<int>(aidl_configuration.dpi->y *
-                                      kLegacyDpiUnit)
-                   : -1;
+      if (!aidl_configuration.dpi)
+        return ToBinderStatus(hwc3::Error::kUnsupported);
+      *value = static_cast<int>(aidl_configuration.dpi->y * kLegacyDpiUnit);
       break;
     case DisplayAttribute::CONFIG_GROUP:
       *value = aidl_configuration.configGroup;
