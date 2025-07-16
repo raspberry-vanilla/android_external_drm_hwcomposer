@@ -206,23 +206,36 @@ std::tuple<int, int> Backend::GetExtraClientRange(
   // Cursor plane is not counted among |avail_planes|, so the cursor layer
   // shouldn't be counted in |layers_size|.
   if (use_cursor_plane) {
+    ALOGE_IF(layers.empty() || layers.back()->GetSfType() !=
+                                   HwcLayer::CompositionType::kCursor,
+             "Cursor layer was not found at highest z-order");
     --layers_size;
   }
 
-  /*
-   * If more layers than planes, save one plane
-   * for client composited layers
-   */
+  // If there are more layers than planes, save one plane for client composited
+  // layers.
   if (avail_planes < layers_size) {
     avail_planes--;
   }
 
+  // If the cursor plane isn't being used, reserve a plane for the cursor to be
+  // device composited.
+  if (!use_cursor_plane && avail_planes > 0 && layers_size > 0 &&
+      layers.back()->GetSfType() == HwcLayer::CompositionType::kCursor) {
+    avail_planes--;
+    layers_size--;
+  }
+
   const int extra_client = int(layers_size - client_size) - int(avail_planes);
 
+  // If extra layers need to be added to the client range, prepare to perform a
+  // sliding window search.
   if (extra_client > 0) {
     int start = 0;
     size_t steps = 0;
     if (client_size != 0) {
+      // There are already client layers present, so the window needs to
+      // encompass them. Determine the maximum offsets of the ensuing search.
       const int prepend = std::min(client_start, extra_client);
       const int append = std::min(int(layers_size) -
                                       int(client_start + client_size),
@@ -232,10 +245,14 @@ std::tuple<int, int> Backend::GetExtraClientRange(
       steps = 1 + std::min(std::min(append, prepend),
                            int(layers_size) - int(start + client_size));
     } else {
+      // There are no other client layers present, so the window may search the
+      // entire range.
       client_size = extra_client;
       steps = 1 + layers_size - extra_client;
     }
 
+    // Use a sliding window to determine the client range that results in the
+    // fewest GPU pixops.
     uint32_t gpu_pixops = UINT32_MAX;
     for (size_t i = 0; i < steps; i++) {
       const uint32_t po = CalcPixOps(layers, start + i, client_size,
