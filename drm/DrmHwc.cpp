@@ -92,16 +92,10 @@ void DrmHwc::FinalizeDisplayBinding() {
   }
   deferred_hotplug_events_.clear();
 
-  /* Wait 0.2s before removing the displays to flush pending HWC2 transactions
-   */
-  auto &mutex = GetResMan().GetMainLock();
-  mutex.unlock();
-  const int time_for_sf_to_dispose_display_us = 200000;
-  usleep(time_for_sf_to_dispose_display_us);
-  mutex.lock();
   for (auto handle : displays_for_removal_list_) {
     displays_.erase(handle);
   }
+  displays_for_removal_list_.clear();
 }
 
 bool DrmHwc::BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -152,10 +146,7 @@ bool DrmHwc::UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   }
   displays_[handle]->SetPipeline({});
 
-  /* We must defer display disposal and removal, since it may still have pending
-   * HWC_API calls scheduled and waiting until ueventlistener thread releases
-   * main lock, otherwise transaction may fail and SF may crash
-   */
+  /* Defer destruction of the display until after the hotplug event is sent. */
   if (handle != kPrimaryDisplay) {
     displays_for_removal_list_.emplace_back(handle);
   }
@@ -205,15 +196,6 @@ bool DrmHwc::DestroyVirtualDisplay(DisplayHandle display) {
   }
 
   displays_[display]->SetPipeline({});
-
-  /* Wait 0.2s before removing the displays to flush pending HWC2 transactions
-   */
-  auto &mutex = GetResMan().GetMainLock();
-  mutex.unlock();
-  const int time_for_sf_to_dispose_display_us = 200000;
-  usleep(time_for_sf_to_dispose_display_us);
-  mutex.lock();
-
   displays_.erase(display);
   return true;
 }

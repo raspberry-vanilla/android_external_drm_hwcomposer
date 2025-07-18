@@ -17,6 +17,8 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
+#include <thread>
 
 #include "utils/UEvent.h"
 
@@ -24,7 +26,7 @@ namespace android {
 
 class UEventListener {
  public:
-  ~UEventListener() = default;
+  ~UEventListener();
 
   static auto CreateInstance() -> std::shared_ptr<UEventListener>;
 
@@ -37,8 +39,11 @@ class UEventListener {
  private:
   UEventListener() = default;
 
-  void ThreadFn(const std::shared_ptr<UEventListener> &uel);
+  void ThreadFn();
 
+  std::thread thread_;
+  std::mutex mutex_;
+  bool exit_ = false;
   std::unique_ptr<UEvent> uevent_;
 
   std::function<void()> hotplug_handler_;

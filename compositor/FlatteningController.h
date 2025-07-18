@@ -34,6 +34,10 @@ class FlatteningController {
  public:
   static auto CreateInstance(FlatConCallbacks &cbks)
       -> std::shared_ptr<FlatteningController>;
+  ~FlatteningController() {
+    StopThread();
+    thread_.join();
+  }
 
   void Disable() {
     auto lock = std::lock_guard<std::mutex>(mutex_);
@@ -58,11 +62,12 @@ class FlatteningController {
 
  private:
   FlatteningController() = default;
-  static void ThreadFn(const std::shared_ptr<FlatteningController> &fc);
+  void ThreadFn();
 
   bool flatten_next_frame_{};
   bool disabled_{};
   decltype(std::chrono::system_clock::now()) sleep_until_{};
+  std::thread thread_;
   std::mutex mutex_;
   std::condition_variable cv_;
   FlatConCallbacks cbks_;

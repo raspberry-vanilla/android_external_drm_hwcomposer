@@ -24,7 +24,16 @@
 
 namespace android {
 
+UEventListener::~UEventListener() {
+  StopThread();
+  thread_.join();
+}
+
 void UEventListener::StopThread() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    exit_ = true;
+  }
   uevent_->Stop();
 }
 
@@ -35,19 +44,13 @@ auto UEventListener::CreateInstance() -> std::shared_ptr<UEventListener> {
   if (!uel->uevent_)
     return {};
 
-  std::thread(&UEventListener::ThreadFn, uel.get(), uel).detach();
-
+  uel->thread_ = std::thread(&UEventListener::ThreadFn, uel.get());
   return uel;
 }
 
-void UEventListener::ThreadFn(const std::shared_ptr<UEventListener> &uel) {
-  // TODO(nobody): Rework code to allow stopping the thread (low priority)
-  while (true) {
-    if (uel.use_count() == 1)
-      break;
-
-    auto uevent_str = uel->uevent_->ReadNext();
-
+void UEventListener::ThreadFn() {
+  while (!exit_) {
+    auto uevent_str = uevent_->ReadNext();
     if (!hotplug_handler_ || !uevent_str)
       continue;
 
