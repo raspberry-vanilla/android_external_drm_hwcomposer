@@ -26,12 +26,22 @@ using ConfigId = int32_t;
 
 class DrmConnector;
 
+/**
+ * Display panel colorspace property values.
+ */
+enum class OutputType : uint32_t {
+  kInvalid,
+  kSystem,
+  kSdr,
+  kHdr10,
+};
+
 struct HwcDisplayConfig {
   ConfigId id{};
   uint32_t group_id{};
   DrmMode mode{};
   bool disabled{};
-  uint32_t output_type{};
+  OutputType output_type{};
 
   bool IsInterlaced() const {
     return (mode.GetRawMode().flags & DRM_MODE_FLAG_INTERLACE) != 0;

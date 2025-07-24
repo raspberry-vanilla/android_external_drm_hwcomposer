@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
 #include "utils/log.h"
 #include "utils/properties.h"
@@ -161,7 +162,7 @@ bool HwcDisplayConfigs::Update(DrmConnector &connector) {
         .group_id = group_found,
         .mode = mode,
         .disabled = disabled,
-        .output_type = 1,  // OutputType::SYSTEM
+        .output_type = OutputType::kSystem,
     };
 
     /* Chwck if the mode is preferred */

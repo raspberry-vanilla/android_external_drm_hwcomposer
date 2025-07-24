@@ -136,9 +136,7 @@ void HwcDisplay::SetColorTransformMatrix(
     return;
   }
 
-  if (TransformHasOffsetValue(color_transform_matrix.data()))
-    ctm_has_offset_ = true;
-
+  ctm_has_offset_ = TransformHasOffsetValue(color_transform_matrix.data());
   color_matrix_ = ToColorTransform(color_transform_matrix);
 }
 
@@ -178,15 +176,15 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
-void HwcDisplay::SetOutputType(uint32_t hdr_output_type) {
+void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   switch (hdr_output_type) {
-    case 3: {  // HDR10
+    case OutputType::kHdr10: {
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
       colorspace_ = Colorspace::kBt2020Rgb;
       break;
     }
-    case 1: {  // SYSTEM
+    case OutputType::kSystem: {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
       if (!hdr_types.empty()) {
@@ -197,9 +195,9 @@ void HwcDisplay::SetOutputType(uint32_t hdr_output_type) {
       }
       [[fallthrough]];
     }
-    case 0:  // INVALID
+    case OutputType::kInvalid:
       [[fallthrough]];
-    case 2:  // SDR
+    case OutputType::kSdr:
       [[fallthrough]];
     default:
       hdr_metadata_.reset();
@@ -408,8 +406,8 @@ auto HwcDisplay::PresentStagedComposition(
 
   out_present_fence = a_args.out_fence;
 
-  // Reset the color matrix so we don't apply it over and over again.
-  color_matrix_ = {};
+  // Reset the hdr output metadata blobs so we don't apply it repeatedly.
+  hdr_metadata_.reset();
 
   ++frame_no_;
 
@@ -697,6 +695,13 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *min_luminance) {
   if (IsInHeadlessMode())
     return;
+
+  // Return HDR caps only when we have the ability to set HDR
+  DrmDisplayPipeline &pipeline = GetPipe();
+  if (pipeline.connector == nullptr || pipeline.connector->Get() == nullptr ||
+      !pipeline.connector->Get()->GetHdrOutputMetadataProperty()) {
+    return;
+  }
 
   GetEdid()->GetHdrCapabilities(*types, max_luminance, max_average_luminance,
                                 min_luminance);

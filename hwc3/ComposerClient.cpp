@@ -63,6 +63,11 @@ using ::android::IRect;
 using ::android::LayerTransform;
 using ::android::SrcRectInfo;
 
+using HwcOutputType = ::android::OutputType;
+#if __ANDROID_API__ >= 36
+using AidlOutputType = aidl::android::hardware::graphics::composer3::OutputType;
+#endif
+
 namespace aidl::android::hardware::graphics::composer3::impl {
 namespace {
 
@@ -266,6 +271,23 @@ class DisplayConfiguration {
 
 #endif
 
+#if __ANDROID_API__ >= 36
+AidlOutputType OutputTypeToAidl(const HwcOutputType output_type) {
+  switch (output_type) {
+    case HwcOutputType::kSystem:
+      return AidlOutputType::SYSTEM;
+    case HwcOutputType::kSdr:
+      return AidlOutputType::SDR;
+    case HwcOutputType::kHdr10:
+      return AidlOutputType::HDR10;
+    case HwcOutputType::kInvalid:
+      [[fallthrough]];
+    default:
+      return AidlOutputType::INVALID;
+  }
+}
+#endif
+
 DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
     int32_t width, int32_t height, const HwcDisplayConfig& config) {
   DisplayConfiguration aidl_configuration =
@@ -276,8 +298,7 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
        .vsyncPeriod = config.mode.GetVSyncPeriodNs()};
 
 #if __ANDROID_API__ >= 36
-  aidl_configuration.hdrOutputType = static_cast<OutputType>(
-      config.output_type);
+  aidl_configuration.hdrOutputType = OutputTypeToAidl(config.output_type);
 #endif
 
   if (width > 0) {

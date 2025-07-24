@@ -283,7 +283,7 @@ class HwcDisplay {
   bool Init();
 
   void SetHdrOutputMetadata(ui::Hdr hdrType);
-  void SetOutputType(uint32_t hdr_output_type);
+  void SetOutputType(OutputType hdr_output_type);
 
   auto GetEdid() -> EdidWrapperUnique & {
     return GetPipe().connector->Get()->GetParsedEdid();
