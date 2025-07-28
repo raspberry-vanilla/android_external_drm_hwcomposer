@@ -130,9 +130,6 @@ class ComposerClient : public BnComposerClient {
   ndk::ScopedAStatus setVsyncEnabled(int64_t display, bool enabled) override;
   ndk::ScopedAStatus setIdleTimerEnabled(int64_t display,
                                          int32_t timeout) override;
-
-#if __ANDROID_API__ >= 34
-
   ndk::ScopedAStatus getOverlaySupport(
       OverlayProperties* out_overlay_properties) override;
   ndk::ScopedAStatus getHdrConversionCapabilities(
@@ -142,19 +139,12 @@ class ComposerClient : public BnComposerClient {
       common::Hdr* out_hdr) override;
   ndk::ScopedAStatus setRefreshRateChangedCallbackDebugEnabled(
       int64_t display, bool enabled) override;
-
-#endif
-
-#if __ANDROID_API__ >= 35
-
   ndk::ScopedAStatus getDisplayConfigurations(
       int64_t display, int32_t max_frame_interval_ns,
       std::vector<DisplayConfiguration>* configurations) override;
   ndk::ScopedAStatus notifyExpectedPresent(
       int64_t display, const ClockMonotonicTimestamp& expected_present_time,
       int32_t frame_interval_ns) override;
-
-#endif
 
 #if __ANDROID_API__ >= 36
   ndk::ScopedAStatus startHdcpNegotiation(

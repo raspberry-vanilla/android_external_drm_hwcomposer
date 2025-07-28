@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#if __ANDROID_API__ >= 30
-
 #define LOG_TAG "drmhwc"
 
 #include "BufferInfoMapperMetadata.h"
@@ -182,5 +180,3 @@ auto BufferInfoMapperMetadata::GetBoInfo(buffer_handle_t handle)
 }
 
 }  // namespace android
-
-#endif

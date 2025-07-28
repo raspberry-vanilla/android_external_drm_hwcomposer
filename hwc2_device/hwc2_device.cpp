@@ -541,13 +541,11 @@ static int32_t GetDisplayAttribute(hwc2_device_t *device,
       *value = dpi_inches ? static_cast<int>(dpi_inches->first * kLegacyDpiUnit)
                           : -1;
       break;
-#if __ANDROID_API__ > 29
     case HWC2::Attribute::ConfigGroup:
       /* Dispite ConfigGroup is a part of HWC2.4 API, framework
        * able to request it even if service @2.1 is used */
       *value = int(hwc_config->group_id);
       break;
-#endif
     default:
       *value = -1;
       return static_cast<int32_t>(HWC2::Error::BadConfig);
@@ -884,8 +882,6 @@ static int32_t SetActiveConfig(hwc2_device_t *device, hwc2_display_t display,
   return ConfigErrorToHWC2(result);
 }
 
-#if __ANDROID_API__ >= 28
-
 static int32_t GetDisplayBrightnessSupport(hwc2_device_t * /*device*/,
                                            hwc2_display_t /*display*/,
                                            bool *out_support) {
@@ -981,9 +977,6 @@ static int32_t GetDisplayCapabilities(hwc2_device_t *device,
   return static_cast<int32_t>(HWC2::Error::None);
 }
 
-#endif
-
-#if __ANDROID_API__ >= 29
 static int32_t GetDisplayConnectionType(hwc2_device_t *device,
                                         hwc2_display_t display,
                                         int32_t *out_connection_type) {
@@ -1079,7 +1072,6 @@ static int32_t SetContentType(hwc2_device_t *device, hwc2_display_t display,
 
   return static_cast<int32_t>(HWC2::Error::None);
 }
-#endif
 
 /* Layer functions */
 
@@ -1396,13 +1388,10 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)SetVsyncEnabled;
     case HWC2::FunctionDescriptor::ValidateDisplay:
       return (hwc2_function_pointer_t)ValidateDisplay;
-#if __ANDROID_API__ > 27
     case HWC2::FunctionDescriptor::GetRenderIntents:
       return (hwc2_function_pointer_t)GetRenderIntents;
     case HWC2::FunctionDescriptor::SetColorModeWithRenderIntent:
       return (hwc2_function_pointer_t)SetColorModeWithRenderIntent;
-#endif
-#if __ANDROID_API__ > 28
     case HWC2::FunctionDescriptor::GetDisplayIdentificationData:
       return (hwc2_function_pointer_t)GetDisplayIdentificationData;
     case HWC2::FunctionDescriptor::GetDisplayCapabilities:
@@ -1411,8 +1400,6 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)GetDisplayBrightnessSupport;
     case HWC2::FunctionDescriptor::SetDisplayBrightness:
       return (hwc2_function_pointer_t)SetDisplayBrightness;
-#endif /* __ANDROID_API__ > 28 */
-#if __ANDROID_API__ > 29
     case HWC2::FunctionDescriptor::GetDisplayConnectionType:
       return (hwc2_function_pointer_t)GetDisplayConnectionType;
     case HWC2::FunctionDescriptor::GetDisplayVsyncPeriod:
@@ -1425,7 +1412,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)GetSupportedContentTypes;
     case HWC2::FunctionDescriptor::SetContentType:
       return (hwc2_function_pointer_t)SetContentType;
-#endif
+
     // Layer functions
     case HWC2::FunctionDescriptor::SetCursorPosition:
       return (hwc2_function_pointer_t)SetCursorPosition;
