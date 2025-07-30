@@ -82,14 +82,14 @@ void DrmAtomicStateManager::CleanFailedCommit() {
   // signal the release fences from that composition to avoid hanging.
   AtomicCommitArgs cl_args{};
   cl_args.composition = std::make_shared<DrmKmsPlan>();
-  if (CommitFrame(cl_args) != 0) {
+  if (CommitFrame(cl_args)) {
     ALOGE("Failed to clean-up active composition for pipeline %s",
           pipe_->connector->Get()->GetName().c_str());
   }
 }
 
 // NOLINTNEXTLINE (readability-function-cognitive-complexity): Fixme
-auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
+bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_CALL();
   // new_frame_state is initialized to the current frame state and may be
@@ -101,17 +101,16 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
 
   if (!args.HasInputs()) {
     /* nothing to do */
-    return 0;
+    return true;
   }
 
   auto pset = GetAtomicModeReqForArgs(args);
-
   if (!pset) {
     ALOGE("Failed to get property set");
-    return -ENOMEM;
+    return false;
   }
 
-  uint32_t flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
+  uint32_t flags = args.seamless ? 0U : DRM_MODE_ATOMIC_ALLOW_MODESET;
   const int error_buf_max_size = 64;
   char err_buf[error_buf_max_size];
   auto *drm = pipe_->device;
@@ -120,25 +119,32 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
                                    flags | DRM_MODE_ATOMIC_TEST_ONLY, drm);
 
-    ALOGE_IF(err != 0, "Test-only ret=%d errno=%d strerror=%s\n", err, errno,
+    ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
+             args.seamless, err, errno,
              strerror_r(errno, err_buf, error_buf_max_size));
-    return err;
+    return err == 0;
   }
 
   WaitLastFrame();
 
   bool nonblock = !args.blocking && !args.active;
 
-  if (nonblock) {
-    flags |= DRM_MODE_ATOMIC_NONBLOCK;
-  }
-
+  flags |= nonblock ? DRM_MODE_ATOMIC_NONBLOCK : 0U;
   auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
+  if (err != 0 && args.seamless) {
+    ALOGE(
+        "Seamless commit failed, retrying a full modeset (visual artifacts may "
+        "be observed). Error: %s",
+        strerror_r(errno, err_buf, error_buf_max_size));
+
+    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
+                              flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
+  }
 
   if (err != 0) {
     ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
           strerror_r(errno, err_buf, error_buf_max_size));
-    return err;
+    return false;
   }
 
   args.out_fence = MakeSharedFd(args.out_fence_address);
@@ -165,7 +171,7 @@ auto DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) -> int {
     frame_objects_.emplace(std::move(args.used_kms_objects));
   }
 
-  return 0;
+  return true;
 }
 
 void DrmAtomicStateManager::CheckDoubleSettingState(AtomicCommitArgs &args,
@@ -532,20 +538,20 @@ void DrmAtomicStateManager::CleanupPriorFrameResources() {
   last_present_fence_ = {};
 }
 
-auto DrmAtomicStateManager::ExecuteAtomicCommit(AtomicCommitArgs &args) -> int {
-  auto err = CommitFrame(args);
-
-  if (!args.test_only) {
-    if (err != 0) {
-      ALOGE("Composite failed for pipeline %s",
-            pipe_->connector->Get()->GetName().c_str());
-      CleanFailedCommit();
-      return err;
-    }
+bool DrmAtomicStateManager::ExecuteAtomicCommit(AtomicCommitArgs &args) {
+  if (CommitFrame(args)) {
+    return true;
   }
 
-  return err;
-}  // namespace android
+  if (args.test_only) {
+    return false;
+  }
+
+  ALOGE("Composite failed for pipeline %s",
+        pipe_->connector->Get()->GetName().c_str());
+  CleanFailedCommit();
+  return false;
+}
 
 auto DrmAtomicStateManager::ActivateDisplayUsingDPMS() -> int {
   return drmModeConnectorSetProperty(*pipe_->device->GetFd(),

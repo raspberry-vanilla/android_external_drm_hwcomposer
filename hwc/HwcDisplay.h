@@ -16,9 +16,7 @@
 
 #pragma once
 
-#include <atomic>
 #include <optional>
-#include <sstream>
 
 #include <ui/GraphicTypes.h>
 
@@ -28,7 +26,6 @@
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
 #include "drm/DrmAtomicStateManager.h"
-#include "drm/ResourceManager.h"
 #include "drm/VSyncWorker.h"
 #include "stats/CompositionStats.h"
 
@@ -76,9 +73,7 @@ class HwcDisplay {
 
   auto GetDisplayName() -> std::string;
 
-  const HwcDisplayConfigs &GetDisplayConfigs() const {
-    return configs_;
-  }
+  auto GetDisplayConfigs() const -> std::vector<HwcDisplayConfig>;
 
   // Get the config representing the mode that has been committed to KMS.
   auto GetCurrentConfig() const -> const HwcDisplayConfig *;
@@ -98,8 +93,9 @@ class HwcDisplay {
   // committed to the kernel on successful return.
   ConfigError SetConfig(ConfigId config);
 
-  // Queue a configuration change to take effect in the future.
-  auto QueueConfig(ConfigId config, int64_t desired_time, bool seamless,
+  // Queues a configuration change to take effect in the future. All queued
+  // configurations are seamless.
+  auto QueueConfig(ConfigId config, int64_t desired_time,
                    QueuedConfigTiming *out_timing) -> ConfigError;
 
   // Get the HwcDisplayConfig, or nullptr if none.
@@ -238,6 +234,15 @@ class HwcDisplay {
   void WaitForPresentTime(int64_t present_time, uint32_t vsync_period_ns);
 
   uint32_t GetCurrentVsyncPeriodNs() const;
+
+  // Returns a client's layer if one was already provided and its size matches
+  // the new config, otherwise allocates a new one.
+  std::optional<LayerData> GetModesetLayerData(
+      const HwcDisplayConfig *new_config);
+
+  // Seamless-tests all configs against the active config for future seamless
+  // transitions and update the config groups.
+  void SetConfigGroupsForActiveConfig();
 
   HwcDisplayConfigs configs_;
 

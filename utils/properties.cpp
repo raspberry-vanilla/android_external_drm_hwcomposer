@@ -94,10 +94,6 @@ auto Properties::IsPresentFenceNotReliable() -> bool {
                             0) != 0);
 }
 
-auto Properties::UseConfigGroups() -> bool {
-  return (property_get_bool("ro.vendor.hwc.drm.use_config_groups", 0) != 0);
-}
-
 auto Properties::InternalDisplayNames() -> std::string {
   char buf[PROPERTY_VALUE_MAX] = {};
   property_get("vendor.hwc.drm.internal_display_names", buf, "");

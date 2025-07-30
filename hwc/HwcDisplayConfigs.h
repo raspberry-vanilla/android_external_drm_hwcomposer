@@ -49,16 +49,21 @@ struct HwcDisplayConfig {
 };
 
 struct HwcDisplayConfigs {
-  bool Update(DrmConnector &conn);
+  bool Init(DrmConnector &connector);
   void GenFakeMode(uint16_t width, uint16_t height);
+
+  // Removes problematic configs from groups after they were set.
+  bool SanitizeGroups();
 
   std::map<ConfigId, struct HwcDisplayConfig> hwc_configs;
 
   ConfigId active_config_id = 0;
   ConfigId preferred_config_id = 0;
 
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-  static ConfigId last_config_id;
+  // Use sequential config IDs throughout the lifetime of the owner display to
+  // prevent race conditions around hotplugs (mode updates). See:
+  // https://source.android.com/docs/core/graphics/hotplug#prevent-race-conditions
+  ConfigId next_config_id = 1;
 
   uint32_t mm_width = 0;
   uint32_t mm_height = 0;

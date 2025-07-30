@@ -561,8 +561,8 @@ static int32_t GetDisplayConfigs(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
 
   uint32_t idx = 0;
-  for (const auto &hwc_config : idisplay->GetDisplayConfigs().hwc_configs) {
-    if (hwc_config.second.disabled) {
+  for (const auto &hwc_config : idisplay->GetDisplayConfigs()) {
+    if (hwc_config.disabled) {
       continue;
     }
 
@@ -571,7 +571,7 @@ static int32_t GetDisplayConfigs(hwc2_device_t *device, hwc2_display_t display,
         break;
       }
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic):
-      configs[idx] = hwc_config.second.id;
+      configs[idx] = hwc_config.id;
     }
 
     idx++;
@@ -876,10 +876,17 @@ static int32_t SetActiveConfig(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
 
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
-                                      ResourceManager::GetTimeMonotonicNs(),
-                                      false, &out_timing);
-  return ConfigErrorToHWC2(result);
+  const auto config_id = static_cast<ConfigId>(config);
+  auto error = idisplay->QueueConfig(config_id,
+                                     ResourceManager::GetTimeMonotonicNs(),
+                                     &out_timing);
+
+  if (error == HwcDisplay::kSeamlessNotAllowed) {
+    // Fallback to a full blocking modeset.
+    error = idisplay->SetConfig(config_id);
+  }
+
+  return ConfigErrorToHWC2(error);
 }
 
 static int32_t GetDisplayBrightnessSupport(hwc2_device_t * /*device*/,
@@ -1029,17 +1036,25 @@ static int32_t SetActiveConfigWithConstraints(
     return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
   }
 
+  const auto config_id = static_cast<ConfigId>(config);
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
-                                      vsync_period_change_constraints
-                                          ->desiredTimeNanos,
-                                      false, &out_timing);
+  auto error = idisplay->QueueConfig(config_id,
+                                     vsync_period_change_constraints
+                                         ->desiredTimeNanos,
+                                     &out_timing);
 
-  out_timeline->newVsyncAppliedTimeNanos = out_timing.new_vsync_time_ns;
-  out_timeline->refreshTimeNanos = out_timing.refresh_time_ns;
-  out_timeline->refreshRequired = 1;
+  if (error == HwcDisplay::kNone) {
+    out_timeline->newVsyncAppliedTimeNanos = out_timing.new_vsync_time_ns;
+    out_timeline->refreshTimeNanos = out_timing.refresh_time_ns;
+    out_timeline->refreshRequired = 1U;
+  } else if (error == HwcDisplay::kSeamlessNotAllowed) {
+    error = idisplay->SetConfig(config_id);
+    out_timeline
+        ->newVsyncAppliedTimeNanos = ResourceManager::GetTimeMonotonicNs();
+    out_timeline->refreshRequired = 0U;
+  }
 
-  return ConfigErrorToHWC2(result);
+  return ConfigErrorToHWC2(error);
 }
 
 static int32_t SetAutoLowLatencyMode(hwc2_device_t * /*device*/,

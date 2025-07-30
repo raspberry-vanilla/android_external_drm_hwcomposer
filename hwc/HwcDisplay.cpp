@@ -19,18 +19,14 @@
 
 #include "HwcDisplay.h"
 
-#include <cinttypes>
-
 #include <ui/ColorSpace.h>
 
 #include "backend/Backend.h"
 #include "backend/BackendManager.h"
-#include "bufferinfo/BufferInfoGetter.h"
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
-#include "utils/log.h"
 #include "utils/properties.h"
 
 using ::android::DrmDisplayPipeline;
@@ -111,6 +107,19 @@ auto HwcDisplay::GetDisplayName() -> std::string {
   return stream.str();
 }
 
+auto HwcDisplay::GetDisplayConfigs() const -> std::vector<HwcDisplayConfig> {
+  std::vector<HwcDisplayConfig> filtered_configs;
+  for (const auto &[_, config] : configs_.hwc_configs) {
+    if (config.disabled) {
+      continue;
+    }
+
+    filtered_configs.emplace_back(config);
+  }
+
+  return filtered_configs;
+}
+
 HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
     : hwc_(hwc), handle_(handle), is_virtual_(is_virtual), client_layer_(this) {
   // Create writeback layer for both virtual displays and potential readback
@@ -156,6 +165,11 @@ auto HwcDisplay::GetConfig(ConfigId config_id) const
   if (config_iter == configs_.hwc_configs.end()) {
     return nullptr;
   }
+
+  if (config_iter->second.disabled) {
+    return nullptr;
+  }
+
   return &config_iter->second;
 }
 
@@ -217,53 +231,17 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     return ConfigError::kNone;
   }
 
-  const HwcDisplayConfig *current_config = GetCurrentConfig();
-
-  const uint32_t width = new_config->mode.GetRawMode().hdisplay;
-  const uint32_t height = new_config->mode.GetRawMode().vdisplay;
-
-  std::optional<LayerData> modeset_layer_data;
-  // If a client layer has already been provided, and its size matches the
-  // new config, use it for the modeset.
-  if (client_layer_.IsLayerUsableAsDevice() && current_config &&
-      current_config->mode.GetRawMode().hdisplay == width &&
-      current_config->mode.GetRawMode().vdisplay == height) {
-    ALOGV("Use existing client_layer for blocking config.");
-    modeset_layer_data = client_layer_.GetLayerData();
-  } else {
-    ALOGV("Allocate modeset buffer.");
-    auto modeset_buffer =  //
-        GetPipe().device->CreateBufferForModeset(width, height);
-    if (modeset_buffer) {
-      auto modeset_layer = std::make_unique<HwcLayer>(this);
-      HwcLayer::LayerProperties properties;
-      properties.slot_buffer = {
-          .slot_id = 0,
-          .bi = modeset_buffer,
-      };
-      properties.active_slot = {
-          .slot_id = 0,
-          .fence = {},
-      };
-      properties.blend_mode = BufferBlendMode::kNone;
-      modeset_layer->SetLayerProperties(properties);
-      modeset_layer->PopulateLayerData();
-      modeset_layer_data = modeset_layer->GetLayerData();
-    }
-  }
-
   ALOGV("Create modeset commit.");
   SetOutputType(new_config->output_type);
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
   // separate test commit, since the commit does a test anyways.
+  std::optional<LayerData> modeset_layer_data = GetModesetLayerData(new_config);
   AtomicCommitArgs commit_args = CreateModesetCommit(new_config,
                                                      modeset_layer_data);
   commit_args.blocking = true;
-  int ret = GetPipe().atomic_state_manager->ExecuteAtomicCommit(commit_args);
-
-  if (ret) {
-    ALOGE("Blocking config failed: %d", ret);
+  if (!GetPipe().atomic_state_manager->ExecuteAtomicCommit(commit_args)) {
+    ALOGE("Blocking config failed.");
     return HwcDisplay::ConfigError::kConfigFailed;
   }
 
@@ -276,25 +254,21 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 }
 
 auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
-                             bool seamless, QueuedConfigTiming *out_timing)
-    -> ConfigError {
-  if (configs_.hwc_configs.count(config) == 0) {
+                             QueuedConfigTiming *out_timing) -> ConfigError {
+  const HwcDisplayConfig *new_config = GetConfig(config);
+  if (!new_config) {
     ALOGE("Could not find active mode for %u", config);
     return ConfigError::kBadConfig;
   }
 
-  // TODO: Add support for seamless configuration changes.
-  if (seamless) {
+  const HwcDisplayConfig *current_config = GetCurrentConfig();
+  if (!current_config || current_config->group_id != new_config->group_id) {
     return ConfigError::kSeamlessNotAllowed;
   }
 
-  // Request a refresh from the client one vsync period before the desired
-  // time, or simply at the desired time if there is no active configuration.
-  const HwcDisplayConfig *current_config = GetCurrentConfig();
+  // Request a refresh from the client one vsync period before the desired time.
   out_timing->refresh_time_ns = desired_time -
-                                (current_config
-                                     ? current_config->mode.GetVSyncPeriodNs()
-                                     : 0);
+                                current_config->mode.GetVSyncPeriodNs();
   out_timing->new_vsync_time_ns = desired_time;
 
   // Queue the config change timing to be consistent with the requested
@@ -528,9 +502,11 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   AtomicCommitArgs a_args{};
   a_args.active = false;
 
-  auto err = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-  ALOGE_IF(err != 0, "Failed to apply the dpms composition err=%d", err);
-  return err == 0;
+  const bool commit_success = GetPipe()
+                                  .atomic_state_manager->ExecuteAtomicCommit(
+                                      a_args);
+  ALOGE_IF(!commit_success, "Failed to apply the dpms composition.");
+  return commit_success;
 }
 
 void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -604,11 +580,19 @@ bool HwcDisplay::Init() {
     pipeline_->writeback_connector = pipeline_->connector;
   } else if (IsInHeadlessMode()) {
     configs_.GenFakeMode(0, 0);
-  } else if (!configs_.Update(*pipeline_->connector->Get())) {
+  } else if (!configs_.Init(*pipeline_->connector->Get())) {
     return false;
   }
-  return SetConfig(configs_.preferred_config_id) ==
-         HwcDisplay::ConfigError::kNone;
+
+  if (SetConfig(configs_.preferred_config_id) !=
+      HwcDisplay::ConfigError::kNone) {
+    return false;
+  }
+
+  if (GetPipe().connector->Get()->IsInternal()) {
+    SetConfigGroupsForActiveConfig();
+  }
+  return true;
 }
 
 std::optional<PanelOrientation> HwcDisplay::getDisplayPhysicalOrientation() {
@@ -803,6 +787,7 @@ bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
 
     configs_.active_config_id = staged_mode_config_id_.value();
     a_args.display_mode = staged_config->mode;
+    a_args.seamless = true;
     if (!a_args.test_only) {
       new_vsync_period_ns = staged_config->mode.GetVSyncPeriodNs();
     }
@@ -900,9 +885,8 @@ bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
                                          .acquire_fence;
   }
 
-  auto ret = GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
-  if (ret) {
-    ALOGE_IF(!a_args.test_only, "Failed to apply the frame composition ret=%d", ret);
+  if (!GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args)) {
+    ALOGE_IF(!a_args.test_only, "Failed to apply the frame composition.");
     return false;
   }
 
@@ -1069,6 +1053,64 @@ bool HwcDisplay::NeedsClientLayerUpdate() const {
     return layer.GetSfType() == HwcLayer::CompositionType::kClient ||
            layer.GetValidatedType() == HwcLayer::CompositionType::kClient;
   });
+}
+
+std::optional<LayerData> HwcDisplay::GetModesetLayerData(
+    const HwcDisplayConfig *new_config) {
+  const uint32_t new_width = new_config->mode.GetRawMode().hdisplay;
+  const uint32_t new_height = new_config->mode.GetRawMode().vdisplay;
+
+  const HwcDisplayConfig *active_config = GetCurrentConfig();
+  if (client_layer_.IsLayerUsableAsDevice() && active_config &&
+      active_config->mode.GetRawMode().hdisplay == new_width &&
+      active_config->mode.GetRawMode().vdisplay == new_height) {
+    ALOGV("Use existing client_layer for config.");
+    return client_layer_.GetLayerData();
+  }
+
+  ALOGV("Allocate modeset buffer.");
+  auto modeset_buffer = GetPipe().device->CreateBufferForModeset(new_width,
+                                                                 new_height);
+  if (!modeset_buffer)
+    return std::nullopt;
+
+  auto modeset_layer = std::make_unique<HwcLayer>(this);
+  modeset_layer->SetLayerProperties({
+      .slot_buffer = std::optional<HwcLayer::Buffer>({
+          .slot_id = 0,
+          .bi = modeset_buffer,
+      }),
+      .active_slot = std::optional<HwcLayer::Slot>({
+          .slot_id = 0,
+          .fence = {},
+      }),
+      .blend_mode = BufferBlendMode::kNone,
+  });
+  modeset_layer->PopulateLayerData();
+
+  return modeset_layer->GetLayerData();
+}
+
+void HwcDisplay::SetConfigGroupsForActiveConfig() {
+  const auto *active_config = GetCurrentConfig();
+  if (!active_config) {
+    ALOGW("Could not fetch active config for config group assignment.");
+    return;
+  }
+
+  const std::optional<LayerData> modeset_layer_data = GetModesetLayerData(
+      active_config);
+  for (auto &[_, config] : configs_.hwc_configs) {
+    AtomicCommitArgs commit_args = CreateModesetCommit(&config,
+                                                       modeset_layer_data);
+    commit_args.test_only = true;
+    commit_args.seamless = true;
+    if (pipeline_->atomic_state_manager->ExecuteAtomicCommit(commit_args)) {
+      config.group_id = active_config->group_id;
+    }
+  }
+
+  configs_.SanitizeGroups();
 }
 
 }  // namespace android
