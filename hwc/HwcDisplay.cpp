@@ -589,7 +589,7 @@ bool HwcDisplay::Init() {
     return false;
   }
 
-  if (GetPipe().connector->Get()->IsInternal()) {
+  if (!IsInHeadlessMode() && GetPipe().connector->Get()->IsInternal()) {
     SetConfigGroupsForActiveConfig();
   }
   return true;
