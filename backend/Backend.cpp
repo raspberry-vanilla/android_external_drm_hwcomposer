@@ -115,11 +115,9 @@ void Backend::ValidateDisplay(HwcDisplay *display) {
 
   display->total_stats().gpu_pixops += CalcPixOps(layers, client_start,
                                                   client_size,
-                                                  GetDisplaySize(display),
-                                                  use_cursor_plane);
+                                                  GetDisplaySize(display));
   display->total_stats().total_pixops += CalcPixOps(layers, 0, layers.size(),
-                                                    GetDisplaySize(display),
-                                                    use_cursor_plane);
+                                                    GetDisplaySize(display));
   if (use_cursor_plane) {
     ++display->total_stats().cursor_plane_frames;
   }
@@ -157,20 +155,14 @@ bool Backend::HardwareSupportsLayerType(HwcLayer::CompositionType comp_type) {
 
 uint32_t Backend::CalcPixOps(const std::vector<HwcLayer *> &layers,
                              size_t first_z, size_t size,
-                             std::pair<uint32_t, uint32_t> display_size,
-                             bool use_cursor_plane) {
+                             std::pair<uint32_t, uint32_t> display_size) {
   uint32_t whole_display = display_size.first * display_size.second;
   uint32_t pixops = 0;
   for (size_t z_order = 0; z_order < layers.size(); ++z_order) {
     if (z_order >= first_z && z_order < first_z + size) {
       auto *layer = layers[z_order];
       auto &df = layer->GetLayerData().pi.display_frame;
-      auto &bi = layer->GetLayerData().bi;
-      if (use_cursor_plane && bi.has_value() &&
-          layer->GetSfType() == HwcLayer::CompositionType::kCursor) {
-        // Cursor plane ignores the frame and uses buffer dimensions instead.
-        pixops += bi->width * bi->height;
-      } else if (df.i_rect.has_value()) {
+      if (df.i_rect.has_value()) {
         pixops += (df.i_rect->right - df.i_rect->left) *
                   (df.i_rect->bottom - df.i_rect->top);
       } else {
@@ -256,8 +248,7 @@ std::tuple<int, int> Backend::GetExtraClientRange(
     uint32_t gpu_pixops = UINT32_MAX;
     for (size_t i = 0; i < steps; i++) {
       const uint32_t po = CalcPixOps(layers, start + i, client_size,
-                                     GetDisplaySize(display),
-                                     /*use_cursor_plane=*/false);
+                                     GetDisplaySize(display));
       if (po < gpu_pixops) {
         gpu_pixops = po;
         client_start = start + int(i);
