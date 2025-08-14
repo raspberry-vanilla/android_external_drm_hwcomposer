@@ -156,6 +156,11 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
 
   committed_frame_state_ = std::move(args.new_frame_state);
 
+  if (args.display_mode) {
+    auto raw_mode = args.display_mode.value().GetRawMode();
+    whole_display_rect_.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
+  }
+
   if (nonblock) {
     {
       const std::lock_guard lock(mutex_);
@@ -265,9 +270,6 @@ bool DrmAtomicStateManager::SetDisplayModeIfNeeded(drmModeAtomicReq *pset,
     ALOGE("Failed to create mode_blob");
     return false;
   }
-
-  auto raw_mode = args.display_mode.value().GetRawMode();
-  whole_display_rect_.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
 
   auto *crtc = pipe_->crtc->Get();
   if (!crtc->GetModeProperty().AtomicSet(*pset, *mode_blob)) {
@@ -397,8 +399,15 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(drmModeAtomicReq *pset,
 
     DrmModeUserPropertyBlobUnique damage_blob;
     auto *crtc = pipe_->crtc->Get();
+
+    DstRectInfo display_rect_info = whole_display_rect_;
+    if (args.display_mode) {
+      auto raw_mode = args.display_mode.value().GetRawMode();
+      display_rect_info.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
+    }
+
     if (plane->AtomicSetState(*pset, layer, joining.z_pos, crtc->GetId(),
-                              whole_display_rect_, damage_blob) != 0) {
+                              display_rect_info, damage_blob) != 0) {
       return false;
     }
     args.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
