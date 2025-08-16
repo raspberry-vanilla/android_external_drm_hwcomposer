@@ -90,6 +90,7 @@ void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
       .id = active_config_id,
       .group_id = 1,
       .mode = DrmMode(&headless_drm_mode_info),
+      .output_type = OutputType::kSystem,
   };
 
   mm_width = kHeadlessModeDisplayWidthMm;

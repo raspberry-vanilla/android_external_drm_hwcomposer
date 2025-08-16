@@ -924,11 +924,19 @@ bool HwcDisplay::CtmByGpu() {
 }
 
 bool HwcDisplay::IsWritebackSupported() {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+
   return !is_virtual_ &&
          pipeline_->FindWritebackConnectorForPipeline() != nullptr;
 }
 
 bool HwcDisplay::SetWritebackEnabled(bool enabled) {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+
   // Handle Disable
   if (!enabled) {
     pipeline_->writeback_connector = nullptr;
