@@ -18,12 +18,13 @@
 #define HWC_DISPLAY_BACKEND_RPI5_H
 
 #include "Backend.h"
+#include "hwc/HwcDisplay.h"
 
 namespace android {
 
 class BackendRpi5 : public Backend {
  public:
-  bool IsClientLayer(HwcDisplay *display, HwcLayer *layer) override;
+  bool IsClientLayer(HwcDisplay* display, const HwcLayer* layer) override;
 };
 }  // namespace android
 
