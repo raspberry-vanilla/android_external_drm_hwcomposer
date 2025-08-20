@@ -16,31 +16,39 @@
 
 #pragma once
 
+#include <map>
 #include <vector>
 
-#include "hwc/HwcDisplay.h"
+#include "compositor/LayerData.h"
 
 namespace android {
 
+class HwcDisplay;
+class HwcLayer;
+
 class Backend {
  public:
+  // Mapping of the CompositionType that the Backend assigned to each
+  // HwcLayer.
+  using CompositionTypeMap = std::map<const HwcLayer*, CompositionType>;
+
   virtual ~Backend() = default;
-  virtual void ValidateDisplay(HwcDisplay *display);
+  virtual CompositionTypeMap ValidateDisplay(HwcDisplay* display);
   virtual std::tuple<int, size_t> GetClientLayers(
-      HwcDisplay *display, const std::vector<HwcLayer *> &layers,
+      HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       bool use_cursor_plane);
-  virtual bool IsClientLayer(HwcDisplay *display, HwcLayer *layer);
+  virtual bool IsClientLayer(HwcDisplay* display, const HwcLayer* layer);
 
  protected:
-  static bool HardwareSupportsLayerType(HwcLayer::CompositionType comp_type);
-  static uint32_t CalcPixOps(const std::vector<HwcLayer *> &layers,
+  static bool HardwareSupportsLayerType(CompositionType comp_type);
+  static uint32_t CalcPixOps(const std::vector<const HwcLayer*>& layers,
                              size_t first_z, size_t size,
                              std::pair<uint32_t, uint32_t> display_size);
-  static void MarkValidated(std::vector<HwcLayer *> &layers,
-                            size_t client_first_z, size_t client_size,
-                            bool use_cursor_plane);
+  static CompositionTypeMap GetCompositionTypes(
+      const std::vector<const HwcLayer*>& layers, size_t client_first_z,
+      size_t client_size, bool use_cursor_plane);
   static std::tuple<int, int> GetExtraClientRange(
-      HwcDisplay *display, const std::vector<HwcLayer *> &layers,
+      HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       int client_start, size_t client_size, bool use_cursor_plane);
 };
 }  // namespace android

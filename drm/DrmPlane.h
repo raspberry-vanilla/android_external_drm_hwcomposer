@@ -45,7 +45,7 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
       -> std::unique_ptr<DrmPlane>;
 
   bool IsCrtcSupported(const DrmCrtc &crtc) const;
-  bool IsValidForLayer(LayerData *layer);
+  bool IsValidForLayer(const LayerData *layer);
 
   auto GetType() const {
     return type_;

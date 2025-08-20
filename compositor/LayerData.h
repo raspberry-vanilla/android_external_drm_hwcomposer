@@ -32,6 +32,8 @@ class DrmFbIdHandle;
 
 using ILayerId = int64_t;
 
+enum class CompositionType { kInvalid, kClient, kDevice, kSolidColor, kCursor };
+
 /* Rotation is defined in the clockwise direction */
 /* The flip is done before rotation */
 struct LayerTransform {

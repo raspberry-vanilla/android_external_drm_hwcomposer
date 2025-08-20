@@ -304,24 +304,30 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
    */
   for (auto &l : layers_) {
     l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
-                                       HwcLayer::CompositionType::kClient);
+                                       CompositionType::kClient);
 
     /* Populate layer data for layers that might be mapped to a drm plane. */
-    if (l.second.GetSfType() == HwcLayer::CompositionType::kDevice ||
-        l.second.GetSfType() == HwcLayer::CompositionType::kCursor) {
+    if (l.second.GetSfType() == CompositionType::kDevice ||
+        l.second.GetSfType() == CompositionType::kCursor) {
       l.second.PopulateLayerData();
     }
   }
 
-  // ValidateDisplay modifies the composition type in layers_ which can be
-  // checked to see which layers' composition strategies have changed.
-  backend_->ValidateDisplay(this);
+  // ValidateDisplay returns CompositionTypeMap to indicate the composition
+  // type that the Backend has determined for each layer.
+  auto result = backend_->ValidateDisplay(this);
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
-  for (auto &l : layers_) {
-    if (l.second.IsTypeChanged()) {
-      changed_layers.emplace_back(l.first, l.second.GetValidatedType());
+  for (auto &[id, layer] : layers_) {
+    // Set the validated type
+    auto it = result.find(&layer);
+    ALOGE_IF(it == result.end(), "Backend did not composite layer %ld", id);
+    if (it != result.end()) {
+      layer.SetValidatedType(it->second);
+    }
+    if (layer.IsTypeChanged()) {
+      changed_layers.emplace_back(id, layer.GetValidatedType());
     }
   }
   return changed_layers;
@@ -372,8 +378,13 @@ auto HwcDisplay::PresentStagedComposition(
     WaitForPresentTime(desired_present_time.value(), vperiod_ns);
   }
 
+  Backend::CompositionTypeMap composition;
+  for (auto &l : layers_) {
+    composition.emplace(&l.second, l.second.GetValidatedType());
+  }
+
   AtomicCommitArgs a_args{};
-  if (!CreateComposition(a_args)) {
+  if (!CreateComposition(a_args, composition)) {
     ++total_stats_.failed_kms_present;
     return false;
   }
@@ -762,8 +773,15 @@ uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
   return config->mode.GetVSyncPeriodNs();
 }
 
+bool HwcDisplay::TestComposition(
+    const Backend::CompositionTypeMap &composition) {
+  AtomicCommitArgs a_args = {.test_only = true};
+  return CreateComposition(a_args, composition);
+}
+
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
+bool HwcDisplay::CreateComposition(
+    AtomicCommitArgs &a_args, const Backend::CompositionTypeMap &composition) {
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
     return true;
@@ -800,11 +818,14 @@ bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
   std::map<uint32_t, HwcLayer *> z_map;
   std::optional<LayerData> cursor_layer = std::nullopt;
   for (auto &[_, layer] : layers_) {
-    switch (layer.GetValidatedType()) {
-      case HwcLayer::CompositionType::kDevice:
+    auto it = composition.find(&layer);
+    CompositionType type = it != composition.end() ? it->second
+                                                   : CompositionType::kInvalid;
+    switch (type) {
+      case CompositionType::kDevice:
         z_map.emplace(layer.GetZOrder(), &layer);
         break;
-      case HwcLayer::CompositionType::kCursor:
+      case CompositionType::kCursor:
         if (!cursor_layer.has_value()) {
           cursor_layer = layer.GetLayerData();
         } else {
@@ -812,16 +833,15 @@ bool HwcDisplay::CreateComposition(AtomicCommitArgs &a_args) {
           z_map.emplace(layer.GetZOrder(), &layer);
         }
         break;
-      case HwcLayer::CompositionType::kClient:
+      case CompositionType::kClient:
         // Place it at the z_order of the lowest client layer
         use_client_layer = true;
         client_layer_count++;
         client_z_order = std::min(client_z_order, layer.GetZOrder());
         break;
-      case HwcLayer::CompositionType::kSolidColor:
-      case HwcLayer::CompositionType::kInvalid:
-        ALOGE("Invalid layer type: %d",
-              static_cast<int>(layer.GetValidatedType()));
+      case CompositionType::kSolidColor:
+      case CompositionType::kInvalid:
+        ALOGE("Invalid layer type: %d", static_cast<int>(type));
         continue;
     }
   }
@@ -971,20 +991,20 @@ SharedFd HwcDisplay::GetWritebackBufferFence() {
   return std::move(writeback_complete_fence_);
 }
 
-std::vector<HwcLayer *> HwcDisplay::GetOrderLayersByZPos() {
-  std::vector<HwcLayer *> ordered_layers;
+std::vector<const HwcLayer *> HwcDisplay::GetOrderLayersByZPos() const {
+  std::vector<const HwcLayer *> ordered_layers;
   ordered_layers.reserve(layers_.size());
 
-  for (auto &[handle, layer] : layers_) {
+  for (const auto &[handle, layer] : layers_) {
     ordered_layers.emplace_back(&layer);
   }
 
   std::sort(std::begin(ordered_layers), std::end(ordered_layers),
             [](const HwcLayer *lhs, const HwcLayer *rhs) {
               // Cursor layers should always have highest zpos.
-              if ((lhs->GetSfType() == HwcLayer::CompositionType::kCursor) !=
-                  (rhs->GetSfType() == HwcLayer::CompositionType::kCursor)) {
-                return rhs->GetSfType() == HwcLayer::CompositionType::kCursor;
+              if ((lhs->GetSfType() == CompositionType::kCursor) !=
+                  (rhs->GetSfType() == CompositionType::kCursor)) {
+                return rhs->GetSfType() == CompositionType::kCursor;
               }
 
               return lhs->GetZOrder() < rhs->GetZOrder();
@@ -1058,8 +1078,8 @@ void HwcDisplay::set_backend(std::unique_ptr<Backend> backend) {
 bool HwcDisplay::NeedsClientLayerUpdate() const {
   return std::any_of(layers_.begin(), layers_.end(), [](const auto &pair) {
     const auto &layer = pair.second;
-    return layer.GetSfType() == HwcLayer::CompositionType::kClient ||
-           layer.GetValidatedType() == HwcLayer::CompositionType::kClient;
+    return layer.GetSfType() == CompositionType::kClient ||
+           layer.GetValidatedType() == CompositionType::kClient;
   });
 }
 

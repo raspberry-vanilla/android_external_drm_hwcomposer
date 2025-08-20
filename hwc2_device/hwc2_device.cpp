@@ -1190,17 +1190,16 @@ static int32_t SetLayerCompositionType(hwc2_device_t *device,
   HwcLayer::LayerProperties layer_properties;
   switch (static_cast<HWC2::Composition>(type)) {
     case HWC2::Composition::Client:
-      layer_properties.composition_type = HwcLayer::CompositionType::kClient;
+      layer_properties.composition_type = CompositionType::kClient;
       break;
     case HWC2::Composition::Device:
-      layer_properties.composition_type = HwcLayer::CompositionType::kDevice;
+      layer_properties.composition_type = CompositionType::kDevice;
       break;
     case HWC2::Composition::SolidColor:
-      layer_properties
-          .composition_type = HwcLayer::CompositionType::kSolidColor;
+      layer_properties.composition_type = CompositionType::kSolidColor;
       break;
     case HWC2::Composition::Cursor:
-      layer_properties.composition_type = HwcLayer::CompositionType::kCursor;
+      layer_properties.composition_type = CompositionType::kCursor;
       break;
     default:
       ALOGE("Unsupported composition type t=%d", type);

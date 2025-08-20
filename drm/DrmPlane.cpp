@@ -196,7 +196,7 @@ static uint64_t ToDrmRotation(LayerTransform transform) {
   return rotation;
 }
 
-bool DrmPlane::IsValidForLayer(LayerData *layer) {
+bool DrmPlane::IsValidForLayer(const LayerData *layer) {
   if (layer == nullptr || !layer->bi) {
     ALOGE("%s: Invalid parameters", __func__);
     return false;

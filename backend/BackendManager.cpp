@@ -18,6 +18,7 @@
 
 #include "BackendManager.h"
 
+#include "hwc/HwcDisplay.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 

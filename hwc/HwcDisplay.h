@@ -22,6 +22,7 @@
 
 #include "HwcDisplayConfigs.h"
 #include "HwcLayer.h"
+#include "backend/Backend.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
@@ -66,8 +67,11 @@ class HwcDisplay {
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
-  bool CreateComposition(AtomicCommitArgs &a_args);
-  std::vector<HwcLayer *> GetOrderLayersByZPos();
+  bool TestComposition(const Backend::CompositionTypeMap &composition);
+
+  bool CreateComposition(AtomicCommitArgs &a_args,
+                         const Backend::CompositionTypeMap &composition);
+  std::vector<const HwcLayer *> GetOrderLayersByZPos() const;
 
   std::string Dump();
 
@@ -106,7 +110,7 @@ class HwcDisplay {
   // To be called after SetDisplayProperties. Returns an empty vector if the
   // requested layers have been validated, otherwise the vector describes
   // the requested composition type changes.
-  using ChangedLayer = std::pair<ILayerId, HwcLayer::CompositionType>;
+  using ChangedLayer = std::pair<ILayerId, CompositionType>;
   auto ValidateStagedComposition() -> std::vector<ChangedLayer>;
 
   // Mark previously validated properties as ready to present.
@@ -178,6 +182,10 @@ class HwcDisplay {
   }
 
   auto layers() -> std::map<ILayerId, HwcLayer> & {
+    return layers_;
+  }
+
+  auto layers() const -> const std::map<ILayerId, HwcLayer> & {
     return layers_;
   }
 
