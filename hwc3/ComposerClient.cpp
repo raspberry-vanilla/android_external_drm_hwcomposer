@@ -52,16 +52,21 @@
 
 using ::android::CompositionStatsAtomReporter;
 using ::android::CompositionStatsPoller;
+using ::android::CompositionType;
 using ::android::DamageInfo;
 using ::android::DisplayHandle;
 using ::android::DstRectInfo;
 using ::android::HwcDisplay;
 using ::android::HwcDisplayConfig;
-using ::android::HwcDisplayConfigs;
 using ::android::HwcLayer;
 using ::android::IRect;
 using ::android::LayerTransform;
 using ::android::SrcRectInfo;
+
+using HwcOutputType = ::android::OutputType;
+#if __ANDROID_API__ >= 36
+using AidlOutputType = aidl::android::hardware::graphics::composer3::OutputType;
+#endif
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 namespace {
@@ -171,9 +176,7 @@ bool IsSupportedCompositionType(
     // DisplayCommand and return.
     case Composition::DISPLAY_DECORATION:
     case Composition::SIDEBAND:
-#if __ANDROID_API__ >= 34
     case Composition::REFRESH_RATE_INDICATOR:
-#endif
       return false;
   }
 }
@@ -214,7 +217,7 @@ std::optional<std::array<float, kCtmSize>> AidlToColorTransformMatrix(
   return color_transform_matrix;
 }
 
-std::optional<HwcLayer::CompositionType> AidlToCompositionType(
+std::optional<CompositionType> AidlToCompositionType(
     const std::optional<ParcelableComposition> composition) {
   if (!composition) {
     return std::nullopt;
@@ -222,48 +225,41 @@ std::optional<HwcLayer::CompositionType> AidlToCompositionType(
 
   switch (composition->composition) {
     case Composition::INVALID:
-      return HwcLayer::CompositionType::kInvalid;
+      return CompositionType::kInvalid;
     case Composition::CLIENT:
-      return HwcLayer::CompositionType::kClient;
+      return CompositionType::kClient;
     case Composition::DEVICE:
-      return HwcLayer::CompositionType::kDevice;
+      return CompositionType::kDevice;
     case Composition::SOLID_COLOR:
-      return HwcLayer::CompositionType::kSolidColor;
+      return CompositionType::kSolidColor;
     case Composition::CURSOR:
-      return HwcLayer::CompositionType::kCursor;
+      return CompositionType::kCursor;
 
     // Unsupported composition types.
     case Composition::DISPLAY_DECORATION:
     case Composition::SIDEBAND:
-#if __ANDROID_API__ >= 34
     case Composition::REFRESH_RATE_INDICATOR:
-#endif
       ALOGE("Unsupported composition type: %s",
             toString(composition->composition).c_str());
       return std::nullopt;
   }
 }
 
-#if __ANDROID_API__ < 35
-
-class DisplayConfiguration {
- public:
-  class Dpi {
-   public:
-    float x = 0.000000F;
-    float y = 0.000000F;
-  };
-  // NOLINTNEXTLINE(readability-identifier-naming)
-  int32_t configId = 0;
-  int32_t width = 0;
-  int32_t height = 0;
-  std::optional<Dpi> dpi;
-  // NOLINTNEXTLINE(readability-identifier-naming)
-  int32_t configGroup = 0;
-  // NOLINTNEXTLINE(readability-identifier-naming)
-  int32_t vsyncPeriod = 0;
-};
-
+#if __ANDROID_API__ >= 36
+AidlOutputType OutputTypeToAidl(const HwcOutputType output_type) {
+  switch (output_type) {
+    case HwcOutputType::kSystem:
+      return AidlOutputType::SYSTEM;
+    case HwcOutputType::kSdr:
+      return AidlOutputType::SDR;
+    case HwcOutputType::kHdr10:
+      return AidlOutputType::HDR10;
+    case HwcOutputType::kInvalid:
+      [[fallthrough]];
+    default:
+      return AidlOutputType::INVALID;
+  }
+}
 #endif
 
 DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
@@ -276,8 +272,7 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
        .vsyncPeriod = config.mode.GetVSyncPeriodNs()};
 
 #if __ANDROID_API__ >= 36
-  aidl_configuration.hdrOutputType = static_cast<OutputType>(
-      config.output_type);
+  aidl_configuration.hdrOutputType = OutputTypeToAidl(config.output_type);
 #endif
 
   if (width > 0) {
@@ -598,7 +593,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
     return;
   }
 
-#if __ANDROID_API__ >= 35
   auto batch_command = command.layerLifecycleBatchCommandType;
   if (batch_command == LayerLifecycleBatchCommandType::CREATE) {
     if (!display->CreateLayer(command.layer)) {
@@ -614,7 +608,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
 
     return;
   }
-#endif
 
   auto* layer = display->get_layer(command.layer);
   if (layer == nullptr) {
@@ -636,7 +629,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
     return;
   }
 
-#if __ANDROID_API__ >= 34
   /* https://source.android.com/docs/core/graphics/reduce-consumption */
   if (command.bufferSlotsToClear) {
     auto hwc3_layer = GetHwc3Layer(*layer);
@@ -650,7 +642,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
       layer->SetLayerProperties(lp.value());
     }
   }
-#endif
 
   HwcLayer::LayerProperties properties;
   if (command.buffer) {
@@ -885,17 +876,15 @@ ndk::ScopedAStatus ComposerClient::getDisplayAttribute(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
-  auto config = configs.hwc_configs.find(config_id);
-  if (config == configs.hwc_configs.end()) {
+  const auto* config = display->GetConfig(config_id);
+  if (config == nullptr) {
     return ToBinderStatus(hwc3::Error::kBadConfig);
   }
 
   const auto bounds = display->GetDisplayBoundsMm();
-  DisplayConfiguration aidl_configuration =
-      HwcDisplayConfigToAidlConfiguration(/*width =*/ bounds.first,
-                                          /*height =*/bounds.second,
-                                          config->second);
+  DisplayConfiguration aidl_configuration = HwcDisplayConfigToAidlConfiguration(
+      /*width =*/bounds.first,
+      /*height =*/bounds.second, *config);
   // Legacy API for querying DPI uses units of dots per 1000 inches.
   static const int kLegacyDpiUnit = 1000;
   switch (attribute) {
@@ -909,16 +898,14 @@ ndk::ScopedAStatus ComposerClient::getDisplayAttribute(
       *value = aidl_configuration.vsyncPeriod;
       break;
     case DisplayAttribute::DPI_X:
-      *value = aidl_configuration.dpi
-                   ? static_cast<int>(aidl_configuration.dpi->x *
-                                      kLegacyDpiUnit)
-                   : -1;
+      if (!aidl_configuration.dpi)
+        return ToBinderStatus(hwc3::Error::kUnsupported);
+      *value = static_cast<int>(aidl_configuration.dpi->x * kLegacyDpiUnit);
       break;
     case DisplayAttribute::DPI_Y:
-      *value = aidl_configuration.dpi
-                   ? static_cast<int>(aidl_configuration.dpi->y *
-                                      kLegacyDpiUnit)
-                   : -1;
+      if (!aidl_configuration.dpi)
+        return ToBinderStatus(hwc3::Error::kUnsupported);
+      *value = static_cast<int>(aidl_configuration.dpi->y * kLegacyDpiUnit);
       break;
     case DisplayAttribute::CONFIG_GROUP:
       *value = aidl_configuration.configGroup;
@@ -954,9 +941,8 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigs(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
-  for (const auto& [id, config] : configs.hwc_configs) {
-    out_configs->push_back(static_cast<int32_t>(id));
+  for (const auto& config : display->GetDisplayConfigs()) {
+    out_configs->push_back(config.id);
   }
   return ndk::ScopedAStatus::ok();
 }
@@ -1250,14 +1236,8 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
     return ToBinderStatus(hwc3::Error::kSeamlessNotAllowed);
   }
 
-  const bool future_config = constraints.desiredTimeNanos >
-                             ::android::ResourceManager::GetTimeMonotonicNs();
   const HwcDisplayConfig* current_config = display->GetCurrentConfig();
   const HwcDisplayConfig* next_config = display->GetConfig(config);
-  const bool same_config_group = current_config != nullptr &&
-                                 next_config != nullptr &&
-                                 current_config->group_id ==
-                                     next_config->group_id;
   const bool same_resolution = current_config != nullptr &&
                                next_config != nullptr &&
                                current_config->mode.SameSize(next_config->mode);
@@ -1265,39 +1245,48 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
   /* Client framebuffer management:
    * https://source.android.com/docs/core/graphics/framebuffer-mgmt
    */
-  if (!same_resolution && !future_config) {
+  if (!same_resolution) {
     auto& client_layer = display->GetClientLayer();
     auto hwc3_layer = GetHwc3Layer(client_layer);
     hwc3_layer->ClearSlots();
     client_layer.ClearSlots();
   }
 
-  // If the constraints dictate that this is to be applied in the future, it
-  // must be queued. If the new config is in the same config group as the
-  // current one, then queue it to reduce jank.
-  HwcDisplay::ConfigError result{};
-  if (future_config || same_config_group) {
-    QueuedConfigTiming timing = {};
-    result = display->QueueConfig(config, constraints.desiredTimeNanos,
-                                  constraints.seamlessRequired, &timing);
+  // Always try to queue a seamless commit to reduce jank and flicker artifacts.
+  // Fall-back to a full blocking commit otherwise.
+  QueuedConfigTiming timing{};
+  auto error = display->QueueConfig(config, constraints.desiredTimeNanos,
+                                    &timing);
+  if (error == HwcDisplay::kNone) {
     timeline->newVsyncAppliedTimeNanos = timing.new_vsync_time_ns;
     timeline->refreshTimeNanos = timing.refresh_time_ns;
     timeline->refreshRequired = true;
-  } else {
-    // Fall back to a blocking commit, which may modeset.
-    result = display->SetConfig(config);
+  } else if (error == HwcDisplay::kSeamlessNotAllowed) {
+    ALOGE_IF(constraints.seamlessRequired,
+             "Seamless modeset not possible with requested config=%d. Falling "
+             "back to a blocking full modeset.",
+             config);
+
+    error = display->SetConfig(config);
     timeline->newVsyncAppliedTimeNanos = ::android::ResourceManager::
         GetTimeMonotonicNs();
     timeline->refreshRequired = false;
   }
 
-  switch (result) {
+  switch (error) {
     case HwcDisplay::ConfigError::kBadConfig:
       return ToBinderStatus(hwc3::Error::kBadConfig);
     case HwcDisplay::ConfigError::kSeamlessNotAllowed:
       return ToBinderStatus(hwc3::Error::kSeamlessNotAllowed);
     case HwcDisplay::ConfigError::kSeamlessNotPossible:
       return ToBinderStatus(hwc3::Error::kSeamlessNotPossible);
+#if __ANDROID_API__ >= 36
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return ToBinderStatus(hwc3::Error::kConfigFailed);
+#else
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return ToBinderStatus(hwc3::Error::kBadConfig);
+    #endif
     case HwcDisplay::ConfigError::kNone:
       return ndk::ScopedAStatus::ok();
   }
@@ -1491,8 +1480,6 @@ ndk::ScopedAStatus ComposerClient::setIdleTimerEnabled(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-#if __ANDROID_API__ >= 34
-
 ndk::ScopedAStatus ComposerClient::getOverlaySupport(
     OverlayProperties* /*out_overlay_properties*/) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
@@ -1514,10 +1501,6 @@ ndk::ScopedAStatus ComposerClient::setRefreshRateChangedCallbackDebugEnabled(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-#endif
-
-#if __ANDROID_API__ >= 35
-
 ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
     int64_t display_handle, int32_t /*max_frame_interval_ns*/,
     std::vector<DisplayConfiguration>* configurations) {
@@ -1528,13 +1511,11 @@ ndk::ScopedAStatus ComposerClient::getDisplayConfigurations(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  const HwcDisplayConfigs& configs = display->GetDisplayConfigs();
   const auto bounds = display->GetDisplayBoundsMm();
-  for (const auto& [id, config] : configs.hwc_configs) {
+  for (const auto& config : display->GetDisplayConfigs()) {
     configurations->push_back(
-        HwcDisplayConfigToAidlConfiguration(/*width =*/ bounds.first, 
-                                            /*height =*/ bounds.second,
-                                            config));
+        HwcDisplayConfigToAidlConfiguration(/*width =*/bounds.first,
+                                            /*height =*/bounds.second, config));
   }
   return ndk::ScopedAStatus::ok();
 }
@@ -1546,8 +1527,6 @@ ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-#endif
-
 #if __ANDROID_API__ >= 36
 
 ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
@@ -1555,13 +1534,14 @@ ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t,
-                                                              int32_t*) {
+ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t /* display */,
+                                                              int32_t* /* max_profiles */) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-ndk::ScopedAStatus ComposerClient::getLuts(int64_t, const std::vector<Buffer>&,
-                                           std::vector<Luts>*) {
+ndk::ScopedAStatus ComposerClient::getLuts(int64_t /* display */,
+                                           const std::vector<Buffer>& /* buffers */,
+                                           std::vector<Luts>* /* out_luts */) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 

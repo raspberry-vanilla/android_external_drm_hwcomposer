@@ -38,6 +38,9 @@ enum class Error : int32_t {
   kUnsupported = IComposerClient::EX_UNSUPPORTED,
   kSeamlessNotAllowed = IComposerClient::EX_SEAMLESS_NOT_ALLOWED,
   kSeamlessNotPossible = IComposerClient::EX_SEAMLESS_NOT_POSSIBLE,
+  #if __ANDROID_API__ >= 36
+  kConfigFailed = IComposerClient::EX_CONFIG_FAILED,
+  #endif
 };
 }  // namespace hwc3
 

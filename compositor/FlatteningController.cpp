@@ -48,8 +48,7 @@ auto FlatteningController::CreateInstance(FlatConCallbacks &cbks)
    */
   fc->Disable();
   fc->cbks_ = cbks;
-
-  std::thread(&FlatteningController::ThreadFn, fc).detach();
+  fc->thread_ = std::thread(&FlatteningController::ThreadFn, fc.get());
 
   return fc;
 }
@@ -76,27 +75,25 @@ bool FlatteningController::NewFrame() {
   return false;
 }
 
-void FlatteningController::ThreadFn(
-    const std::shared_ptr<FlatteningController> &fc) {
+void FlatteningController::ThreadFn() {
   for (;;) {
-    std::unique_lock<std::mutex> lock(fc->mutex_);
-    if (fc.use_count() == 1 || !fc->cbks_.trigger)
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!cbks_.trigger)
       break;
 
-    if (fc->sleep_until_ <= std::chrono::system_clock::now() &&
-        !fc->disabled_) {
-      fc->disabled_ = true;
-      fc->flatten_next_frame_ = true;
+    if (sleep_until_ <= std::chrono::system_clock::now() && !disabled_) {
+      disabled_ = true;
+      flatten_next_frame_ = true;
       ALOGV("Timeout. Sending an event to compositor");
-      fc->cbks_.trigger();
+      cbks_.trigger();
     }
 
-    if (fc->disabled_) {
+    if (disabled_) {
       ALOGV("Wait");
-      fc->cv_.wait(lock);
+      cv_.wait(lock);
     } else {
       ALOGV("Wait_until");
-      fc->cv_.wait_until(lock, fc->sleep_until_);
+      cv_.wait_until(lock, sleep_until_);
     }
   }
 }

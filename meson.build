@@ -32,6 +32,7 @@ srcs_hwc2_device = [
 ]
 
 deps = [
+    dependency('base'),
     dependency('cutils'),
     dependency('drm'),
     dependency('hardware'),
@@ -45,8 +46,12 @@ deps = [
     dependency('android.hardware.graphics.composer@2.2-resources'),
 ]
 
+android_sdk_version = get_option('android_sdk_version')
+message('ANDROID_SDK_VERSION = ' + android_sdk_version)
+
 common_cpp_flags = [
     '-DUSE_IMAPPER4_METADATA_API',
+    '-D__ANDROID_API__=' + android_sdk_version,
 ]
 
 dep_libdisplay_info = dependency('display_info', required : false)

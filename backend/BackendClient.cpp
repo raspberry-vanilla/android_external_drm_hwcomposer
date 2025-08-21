@@ -17,13 +17,16 @@
 #include "BackendClient.h"
 
 #include "BackendManager.h"
+#include "hwc/HwcDisplay.h"
 
 namespace android {
 
-void BackendClient::ValidateDisplay(HwcDisplay *display) {
-  for (auto &[layer_handle, layer] : display->layers()) {
-    layer.SetValidatedType(HwcLayer::CompositionType::kClient);
+auto BackendClient::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
+  CompositionTypeMap composition_types;
+  for (const auto& [layer_handle, layer] : display->layers()) {
+    composition_types.emplace(&layer, CompositionType::kClient);
   }
+  return composition_types;
 }
 
 // clang-format off

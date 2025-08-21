@@ -17,6 +17,7 @@
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 // #define LOG_NDEBUG 0 // Uncomment to see HWC2 API calls in logcat
 
+#include "hardware/hwcomposer2.h"
 #include "system/graphics-base-v1.1.h"
 #define LOG_TAG "drmhwc"
 
@@ -43,6 +44,8 @@ static int32_t ConfigErrorToHWC2(HwcDisplay::ConfigError result) {
       return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
     case HwcDisplay::ConfigError::kSeamlessNotPossible:
       return static_cast<int32_t>(HWC2::Error::SeamlessNotPossible);
+    case HwcDisplay::ConfigError::kConfigFailed:
+      return static_cast<int32_t>(HWC2::Error::BadConfig);
     case HwcDisplay::ConfigError::kNone:
       return static_cast<int32_t>(HWC2::Error::None);
   }
@@ -538,13 +541,11 @@ static int32_t GetDisplayAttribute(hwc2_device_t *device,
       *value = dpi_inches ? static_cast<int>(dpi_inches->first * kLegacyDpiUnit)
                           : -1;
       break;
-#if __ANDROID_API__ > 29
     case HWC2::Attribute::ConfigGroup:
       /* Dispite ConfigGroup is a part of HWC2.4 API, framework
        * able to request it even if service @2.1 is used */
       *value = int(hwc_config->group_id);
       break;
-#endif
     default:
       *value = -1;
       return static_cast<int32_t>(HWC2::Error::BadConfig);
@@ -560,8 +561,8 @@ static int32_t GetDisplayConfigs(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
 
   uint32_t idx = 0;
-  for (const auto &hwc_config : idisplay->GetDisplayConfigs().hwc_configs) {
-    if (hwc_config.second.disabled) {
+  for (const auto &hwc_config : idisplay->GetDisplayConfigs()) {
+    if (hwc_config.disabled) {
       continue;
     }
 
@@ -570,7 +571,7 @@ static int32_t GetDisplayConfigs(hwc2_device_t *device, hwc2_display_t display,
         break;
       }
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic):
-      configs[idx] = hwc_config.second.id;
+      configs[idx] = hwc_config.id;
     }
 
     idx++;
@@ -875,13 +876,18 @@ static int32_t SetActiveConfig(hwc2_device_t *device, hwc2_display_t display,
   GET_DISPLAY(display);
 
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
-                                      ResourceManager::GetTimeMonotonicNs(),
-                                      false, &out_timing);
-  return ConfigErrorToHWC2(result);
-}
+  const auto config_id = static_cast<ConfigId>(config);
+  auto error = idisplay->QueueConfig(config_id,
+                                     ResourceManager::GetTimeMonotonicNs(),
+                                     &out_timing);
 
-#if __ANDROID_API__ >= 28
+  if (error == HwcDisplay::kSeamlessNotAllowed) {
+    // Fallback to a full blocking modeset.
+    error = idisplay->SetConfig(config_id);
+  }
+
+  return ConfigErrorToHWC2(error);
+}
 
 static int32_t GetDisplayBrightnessSupport(hwc2_device_t * /*device*/,
                                            hwc2_display_t /*display*/,
@@ -978,9 +984,6 @@ static int32_t GetDisplayCapabilities(hwc2_device_t *device,
   return static_cast<int32_t>(HWC2::Error::None);
 }
 
-#endif
-
-#if __ANDROID_API__ >= 29
 static int32_t GetDisplayConnectionType(hwc2_device_t *device,
                                         hwc2_display_t display,
                                         int32_t *out_connection_type) {
@@ -1033,17 +1036,25 @@ static int32_t SetActiveConfigWithConstraints(
     return static_cast<int32_t>(HWC2::Error::SeamlessNotAllowed);
   }
 
+  const auto config_id = static_cast<ConfigId>(config);
   QueuedConfigTiming out_timing{};
-  auto result = idisplay->QueueConfig(static_cast<ConfigId>(config),
-                                      vsync_period_change_constraints
-                                          ->desiredTimeNanos,
-                                      false, &out_timing);
+  auto error = idisplay->QueueConfig(config_id,
+                                     vsync_period_change_constraints
+                                         ->desiredTimeNanos,
+                                     &out_timing);
 
-  out_timeline->newVsyncAppliedTimeNanos = out_timing.new_vsync_time_ns;
-  out_timeline->refreshTimeNanos = out_timing.refresh_time_ns;
-  out_timeline->refreshRequired = 1;
+  if (error == HwcDisplay::kNone) {
+    out_timeline->newVsyncAppliedTimeNanos = out_timing.new_vsync_time_ns;
+    out_timeline->refreshTimeNanos = out_timing.refresh_time_ns;
+    out_timeline->refreshRequired = 1U;
+  } else if (error == HwcDisplay::kSeamlessNotAllowed) {
+    error = idisplay->SetConfig(config_id);
+    out_timeline
+        ->newVsyncAppliedTimeNanos = ResourceManager::GetTimeMonotonicNs();
+    out_timeline->refreshRequired = 0U;
+  }
 
-  return ConfigErrorToHWC2(result);
+  return ConfigErrorToHWC2(error);
 }
 
 static int32_t SetAutoLowLatencyMode(hwc2_device_t * /*device*/,
@@ -1076,7 +1087,6 @@ static int32_t SetContentType(hwc2_device_t *device, hwc2_display_t display,
 
   return static_cast<int32_t>(HWC2::Error::None);
 }
-#endif
 
 /* Layer functions */
 
@@ -1180,17 +1190,16 @@ static int32_t SetLayerCompositionType(hwc2_device_t *device,
   HwcLayer::LayerProperties layer_properties;
   switch (static_cast<HWC2::Composition>(type)) {
     case HWC2::Composition::Client:
-      layer_properties.composition_type = HwcLayer::CompositionType::kClient;
+      layer_properties.composition_type = CompositionType::kClient;
       break;
     case HWC2::Composition::Device:
-      layer_properties.composition_type = HwcLayer::CompositionType::kDevice;
+      layer_properties.composition_type = CompositionType::kDevice;
       break;
     case HWC2::Composition::SolidColor:
-      layer_properties
-          .composition_type = HwcLayer::CompositionType::kSolidColor;
+      layer_properties.composition_type = CompositionType::kSolidColor;
       break;
     case HWC2::Composition::Cursor:
-      layer_properties.composition_type = HwcLayer::CompositionType::kCursor;
+      layer_properties.composition_type = CompositionType::kCursor;
       break;
     default:
       ALOGE("Unsupported composition type t=%d", type);
@@ -1393,13 +1402,10 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)SetVsyncEnabled;
     case HWC2::FunctionDescriptor::ValidateDisplay:
       return (hwc2_function_pointer_t)ValidateDisplay;
-#if __ANDROID_API__ > 27
     case HWC2::FunctionDescriptor::GetRenderIntents:
       return (hwc2_function_pointer_t)GetRenderIntents;
     case HWC2::FunctionDescriptor::SetColorModeWithRenderIntent:
       return (hwc2_function_pointer_t)SetColorModeWithRenderIntent;
-#endif
-#if __ANDROID_API__ > 28
     case HWC2::FunctionDescriptor::GetDisplayIdentificationData:
       return (hwc2_function_pointer_t)GetDisplayIdentificationData;
     case HWC2::FunctionDescriptor::GetDisplayCapabilities:
@@ -1408,8 +1414,6 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)GetDisplayBrightnessSupport;
     case HWC2::FunctionDescriptor::SetDisplayBrightness:
       return (hwc2_function_pointer_t)SetDisplayBrightness;
-#endif /* __ANDROID_API__ > 28 */
-#if __ANDROID_API__ > 29
     case HWC2::FunctionDescriptor::GetDisplayConnectionType:
       return (hwc2_function_pointer_t)GetDisplayConnectionType;
     case HWC2::FunctionDescriptor::GetDisplayVsyncPeriod:
@@ -1422,7 +1426,7 @@ static hwc2_function_pointer_t HookDevGetFunction(struct hwc2_device * /*dev*/,
       return (hwc2_function_pointer_t)GetSupportedContentTypes;
     case HWC2::FunctionDescriptor::SetContentType:
       return (hwc2_function_pointer_t)SetContentType;
-#endif
+
     // Layer functions
     case HWC2::FunctionDescriptor::SetCursorPosition:
       return (hwc2_function_pointer_t)SetCursorPosition;

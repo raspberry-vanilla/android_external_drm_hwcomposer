@@ -17,10 +17,7 @@
 #define LOG_TAG "drmhwc"
 
 #include "BufferInfoGetter.h"
-
-#if __ANDROID_API__ >= 30
 #include "BufferInfoMapperMetadata.h"
-#endif
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -38,7 +35,7 @@ namespace android {
 BufferInfoGetter *BufferInfoGetter::GetInstance() {
   static std::unique_ptr<BufferInfoGetter> inst;
   if (!inst) {
-#if __ANDROID_API__ >= 30 && defined(USE_IMAPPER4_METADATA_API)
+#if defined(USE_IMAPPER4_METADATA_API)
     inst.reset(BufferInfoMapperMetadata::CreateInstance());
     if (!inst) {
       ALOGW(

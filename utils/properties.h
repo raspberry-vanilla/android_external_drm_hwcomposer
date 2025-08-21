@@ -29,7 +29,6 @@ enum class CtmHandling {
 class Properties {
  public:
   static auto IsPresentFenceNotReliable() -> bool;
-  static auto UseConfigGroups() -> bool;
   static auto InternalDisplayNames() -> std::string;
   static auto UseOverlayPlanes() -> bool;
   static auto ScaleWithGpu() -> bool;

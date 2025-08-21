@@ -22,9 +22,7 @@
 
 #include "Utils.h"
 #include "aidl/android/hardware/graphics/common/Dataspace.h"
-#if __ANDROID_API__ >= 35
 #include "aidl/android/hardware/graphics/common/DisplayHotplugEvent.h"
-#endif
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
@@ -76,8 +74,6 @@ void DrmHwcThree::SendVsyncEventToClient(
                               static_cast<int32_t>(vsync_period));
 }
 
-#if __ANDROID_API__ >= 35
-
 void DrmHwcThree::SendHotplugEventToClient(
     ::android::DisplayHandle display_handle,
     DrmHwc::DisplayStatus display_status) {
@@ -99,21 +95,6 @@ void DrmHwcThree::SendHotplugEventToClient(
   composer_callback_->onHotplugEvent(static_cast<int64_t>(display_handle),
                                      event);
 }
-
-#else
-
-void DrmHwcThree::SendHotplugEventToClient(
-    ::android::DisplayHandle display_handle,
-    DrmHwc::DisplayStatus display_status) {
-  bool connected = display_status != DrmHwc::kDisconnected;
-  if (!connected) {
-    ClearMustValidateDisplay(display_handle);
-  }
-  composer_callback_->onHotplug(static_cast<int64_t>(display_handle),
-                                connected);
-}
-
-#endif
 
 auto DrmHwcThree::GetMustValidateDisplay(
     ::android::DisplayHandle display_handle) -> bool {

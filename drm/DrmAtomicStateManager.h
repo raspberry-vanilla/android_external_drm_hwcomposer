@@ -31,11 +31,30 @@
 
 namespace android {
 
+// Collection of kms objects that were committed to the kernel. There must be
+// a userspace handle to keep these from being removed/unregistered until the
+// commit that used them is no longer being presented.
+struct KmsObjects {
+  /* We have to hold a reference to framebuffer while displaying it ,
+   * otherwise picture will blink */
+  std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
+  std::vector<DrmModeUserPropertyBlobUnique> blobs;
+};
+
+struct KmsState {
+  /* Required to cleanup unused planes */
+  std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
+
+  /* To avoid setting the inactive state twice, which will fail the commit */
+  bool crtc_active_state{};
+};
+
 struct AtomicCommitArgs {
   /* inputs. All fields are optional, but at least one has to be specified */
   bool test_only = false;
   bool blocking = false;
   bool teardown = false;
+  bool seamless = false;
   std::optional<DrmMode> display_mode;
   std::optional<bool> active;
   std::shared_ptr<DrmKmsPlan> composition;
@@ -49,8 +68,15 @@ struct AtomicCommitArgs {
   SharedFd writeback_release_fence;
 
   /* out */
+  KmsState new_frame_state;
+  KmsObjects used_kms_objects;
   SharedFd out_writeback_complete_fence;
   SharedFd out_fence;
+  // Shared FD can't be initiallized to an invalid value, for now we keep
+  // the address separate from the FD for initialization.
+  // TODO: look into adding support for invalid fences.
+  int wb_fence_address = -1;
+  int out_fence_address = -1;
 
   /* helpers */
   auto HasInputs() const -> bool {
@@ -65,8 +91,10 @@ class DrmAtomicStateManager {
 
   ~DrmAtomicStateManager();
 
-  auto ExecuteAtomicCommit(AtomicCommitArgs &args) -> int;
+  bool ExecuteAtomicCommit(AtomicCommitArgs &args);
   auto ActivateDisplayUsingDPMS() -> int;
+
+  void CleanFailedCommit();
 
   void StopThread() {
     {
@@ -80,37 +108,38 @@ class DrmAtomicStateManager {
   void ThreadFn();
 
   DrmAtomicStateManager() = default;
-  int CommitFrame(AtomicCommitArgs &args);
-
-  // Collection of kms objects that were committed to the kernel. There must be
-  // a userspace handle to keep these from being removed/unregistered until the
-  // commit that used them is no longer being presented.
-  struct KmsObjects {
-    /* We have to hold a reference to framebuffer while displaying it ,
-     * otherwise picture will blink */
-    std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
-    std::vector<DrmModeUserPropertyBlobUnique> blobs;
-  };
-
-  struct KmsState {
-    /* Required to cleanup unused planes */
-    std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
-
-    /* To avoid setting the inactive state twice, which will fail the commit */
-    bool crtc_active_state{};
-  };
+  bool CommitFrame(AtomicCommitArgs &args);
 
   // Only accessed from main thread.
   DrmDisplayPipeline *pipe_{};
+
+  // The following members must only be updated after a successful commit to
+  // reflect the current state of DRM for the display.
   KmsState committed_frame_state_;
   DstRectInfo whole_display_rect_{};
+
+  void WaitLastFrame();
+  bool SetWriteBackFenceIfNeeded(drmModeAtomicReq *pset,
+                                 AtomicCommitArgs &args);
+  bool SetOutputFence(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetActiveIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetDisplayModeIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetCtmIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetColorSpaceIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetContentTypeIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetHdrMetadataIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetMinBpcIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  bool SetCompositionIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+
+  DrmModeAtomicReqUnique GetAtomicModeReqForArgs(AtomicCommitArgs &args);
+  static void CheckDoubleSettingState(AtomicCommitArgs &args,
+                                      bool crtc_is_active);
 
   std::thread thread_;
   std::condition_variable cv_;
   std::mutex mutex_;
 
   // Accessed from both threads.
-  //
   void CleanupPriorFrameResources() REQUIRES(mutex_);
 
   bool exit_thread_ GUARDED_BY(mutex_){};

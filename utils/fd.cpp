@@ -37,7 +37,7 @@ auto MakeUniqueFd(int fd) -> UniqueFd {
 
 auto MakeSharedFd(int fd) -> SharedFd {
   if (fd < 0)
-    return {};
+    return {nullptr, CloseFd};
 
   return {new int(fd), CloseFd};
 }

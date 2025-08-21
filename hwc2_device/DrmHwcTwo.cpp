@@ -51,7 +51,6 @@ HWC2::Error DrmHwcTwo::RegisterCallback(int32_t descriptor,
       vsync_callback_ = std::make_pair(HWC2_PFN_VSYNC(function), data);
       break;
     }
-#if __ANDROID_API__ > 29
     case HWC2::Callback::Vsync_2_4: {
       vsync_2_4_callback_ = std::make_pair(HWC2_PFN_VSYNC_2_4(function), data);
       break;
@@ -61,7 +60,6 @@ HWC2::Error DrmHwcTwo::RegisterCallback(int32_t descriptor,
           make_pair(HWC2_PFN_VSYNC_PERIOD_TIMING_CHANGED(function), data);
       break;
     }
-#endif
     default:
       break;
   }
@@ -86,15 +84,12 @@ void DrmHwcTwo::SendVsyncEventToClient(
     DisplayHandle display_handle, int64_t timestamp,
     [[maybe_unused]] uint32_t vsync_period) const {
   /* vsync callback */
-#if __ANDROID_API__ > 29
   if (vsync_2_4_callback_.first != nullptr &&
       vsync_2_4_callback_.second != nullptr) {
     vsync_2_4_callback_.first(vsync_2_4_callback_.second, display_handle,
                               timestamp, vsync_period);
-  } else
-#endif
-      if (vsync_callback_.first != nullptr &&
-          vsync_callback_.second != nullptr) {
+  } else if (vsync_callback_.first != nullptr &&
+             vsync_callback_.second != nullptr) {
     vsync_callback_.first(vsync_callback_.second, display_handle, timestamp);
   }
 }
@@ -102,7 +97,6 @@ void DrmHwcTwo::SendVsyncEventToClient(
 void DrmHwcTwo::SendVsyncPeriodTimingChangedEventToClient(
     [[maybe_unused]] DisplayHandle display_handle,
     [[maybe_unused]] int64_t timestamp) const {
-#if __ANDROID_API__ > 29
   hwc_vsync_period_change_timeline_t timeline = {
       .newVsyncAppliedTimeNanos = timestamp,
       .refreshRequired = false,
@@ -114,7 +108,6 @@ void DrmHwcTwo::SendVsyncPeriodTimingChangedEventToClient(
         .first(period_timing_changed_callback_.second, display_handle,
                &timeline);
   }
-#endif
 }
 
 void DrmHwcTwo::SendRefreshEventToClient(DisplayHandle display_handle) {
