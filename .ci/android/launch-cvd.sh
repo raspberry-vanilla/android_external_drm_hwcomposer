@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091 # no need to follow references to other shell scripts
+# shellcheck disable=SC1090 # no need to follow references to other shell scripts
 
 set -e
 
@@ -41,12 +41,11 @@ pushd /cuttlefish
 VSOCK_BASE=10000 # greater than all the default vsock ports
 VSOCK_CID=$((VSOCK_BASE + (CI_JOB_ID & 0xfff)))
 
-ulimit -S -n 1048576
+ulimit -S unlimited
 HOME=/cuttlefish launch_cvd \
   -daemon \
   -verbosity=VERBOSE \
   -file_verbosity=VERBOSE \
-  -use_overlay=false \
   -enable_bootanimation=false \
   -guest_enforce_security=false \
   -report_anonymous_usage_stats=no \
@@ -60,11 +59,19 @@ HOME=/cuttlefish launch_cvd \
   -enable-sandbox=false \
   -enable_modem_simulator=false \
   -vsock_guest_cid=$VSOCK_CID \
-  -cpus="${FDO_CI_CONCURRENT:-4}"
+  -cpus="${FDO_CI_CONCURRENT:-4}" \
+  -extra_bootconfig_args="androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer"
 
 while [ "$(adb shell dumpsys -l | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
 adb shell dumpsys SurfaceFlinger | grep GLES
 
+# Wait for drmhwc to start up
+while [ "$(adb logcat -d | grep -i hwc | grep -i ActivityManager)" = "" ] ; do sleep 1; done
+adb logcat -d | grep -i hwc
+
+adb logcat -d | grep -i vkms
+echo "Running ro.build.version.sdk: $(adb shell getprop ro.build.version.sdk)"
+echo "Running ro.build.version.release: $(adb shell getprop ro.build.version.release)"
 popd
 fdo_log_section_end launch_cvd
 
@@ -97,12 +104,12 @@ mkdir /new_apex
 cp /old_apex/apex_manifest.pb /new_apex/
 cp /old_apex/apex_build_info.pb /new_apex/
 
-mkdir -p $PWD/prebuilts/sdk/current/public/
-cp /android.jar $PWD/prebuilts/sdk/current/public/
+mkdir -p "${PWD}"/prebuilts/sdk/current/public/
+cp /android.jar "${PWD}"/prebuilts/sdk/current/public/
 
 apexer \
   --build_info /new_apex/apex_build_info.pb \
-  --apexer_tool_path $PATH \
+  --apexer_tool_path "${PATH}" \
   --manifest /new_apex/apex_manifest.pb \
   --force \
   --key /cuttlefish/com.android.hardware.pem \
@@ -127,7 +134,14 @@ mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex \
 
 adb install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
 
+# Reboot and wait for drmhwc to start up again with new apex
+adb logcat -c
+adb reboot
+adb wait-for-device devices
+while [ "$(adb logcat -d | grep -i hwc | grep -i ActivityManager)" = "" ] ; do sleep 1; done
 adb logcat -d | grep -i hwc
+
+fdo_log_section_end push_new_apex
 
 # If this service is missing, cts-tradefed will fail device pretests
 while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
@@ -145,7 +159,9 @@ echo "input ok"
 while [ "$(adb shell dumpsys -l | grep logcat)" = "" ] ; do sleep 1; done
 echo "logcat ok"
 
+# package manager is needed before CTS can install APKs
+while [ "$(adb shell dumpsys -l | grep package)" = "" ]; do sleep 1; done
+echo "package ok"
+
 # Look for other missing services
 adb shell dumpsys > /dev/null
-
-fdo_log_section_end push_new_apex

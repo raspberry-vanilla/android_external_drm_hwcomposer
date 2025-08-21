@@ -34,7 +34,7 @@ class Backend {
 
   virtual ~Backend() = default;
   virtual CompositionTypeMap ValidateDisplay(HwcDisplay* display);
-  virtual std::tuple<int, size_t> GetClientLayers(
+  virtual std::tuple<size_t, size_t> GetClientLayers(
       HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       bool use_cursor_plane);
   virtual bool IsClientLayer(HwcDisplay* display, const HwcLayer* layer);
@@ -47,8 +47,8 @@ class Backend {
   static CompositionTypeMap GetCompositionTypes(
       const std::vector<const HwcLayer*>& layers, size_t client_first_z,
       size_t client_size, bool use_cursor_plane);
-  static std::tuple<int, int> GetExtraClientRange(
+  static std::tuple<size_t, size_t> GetExtraClientRange(
       HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-      int client_start, size_t client_size, bool use_cursor_plane);
+      size_t client_start, size_t client_size, bool use_cursor_plane);
 };
 }  // namespace android

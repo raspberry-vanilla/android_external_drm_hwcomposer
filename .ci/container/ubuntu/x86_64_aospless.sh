@@ -68,21 +68,20 @@ yes n | repo init \
   -b "${ANDROID_BRANCH}" \
   --depth=1
 time repo sync --fail-fast --no-tags -j2
+fdo_log_section_end repo_init
 
-rm external/drm_hwcomposer -rf
+fdo_log_section_start_collapsed customize_repo "customize_repo"
+DRMHWC_DIR="${TOP}/external/drm_hwcomposer"
 
-git clone "${CI_REPOSITORY_URL}" external/drm_hwcomposer
+rm "${DRMHWC_DIR}" -rf
+
+git clone "${CI_REPOSITORY_URL}" "${DRMHWC_DIR}"
 if [[ "${CI_PIPELINE_SOURCE}" == "merge_request_event" ]]; then
-  git -C external/drm_hwcomposer fetch origin "${CI_MERGE_REQUEST_REF_PATH}"
+  git -C "${DRMHWC_DIR}" fetch origin "${CI_MERGE_REQUEST_REF_PATH}"
 else
-  git -C external/drm_hwcomposer fetch origin "${CI_COMMIT_REF_NAME}"
+  git -C "${DRMHWC_DIR}" fetch origin "${CI_COMMIT_REF_NAME}"
 fi
-git -C external/drm_hwcomposer checkout FETCH_HEAD
-
-sed -i "/'-DUSE_IMAPPER4_METADATA_API'/a\    '-D__ANDROID_API__=${ANDROID_SDK_VERSION}'," external/drm_hwcomposer/meson.build
-
-rm external/libdisplay_info -rf
-git clone --depth=1 https://android.googlesource.com/platform/external/libdisplay-info/ external/libdisplay_info
+git -C "${DRMHWC_DIR}" checkout FETCH_HEAD
 
 git clone https://github.com/GloDroid/aospext.git
 
@@ -90,21 +89,37 @@ cat >> "${TOP}/device/google/cuttlefish/shared/device.mk" <<EOF
 BOARD_BUILD_AOSPEXT_DRMHWCOMPOSER := true
 BOARD_DRMHWCOMPOSER_SRC_DIR := external/drm_hwcomposer
 EOF
-source build/envsetup.sh
-fdo_log_section_end repo_init
+
+ALLOW_MK_x86_64="${TOP}/device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk"
+sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| aospext/Android.mk aospext/**/Android.mk|' \
+  "${ALLOW_MK_x86_64}"
+
+ALLOW_MK_arm64="${TOP}/device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk"
+sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| aospext/Android.mk aospext/**/Android.mk|' \
+  "${ALLOW_MK_arm64}"
+
+fdo_log_section_end customize_repo
 
 fdo_log_section_start_collapsed build_aospless_x86_64 "build_aospless_x86_64"
+source build/envsetup.sh
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_slim
-export TARGET_RELEASE=trunk_staging
+export TARGET_RELEASE=bp2a
+
+# Disable LLVM Link-Time-Optimization so that the aospless artifacts will
+# have full object files for linking rather than raw bitcode
+export DISABLE_LTO=true
+
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
+
 mm
 cd "${TOP}/out/target/product/vsoc_x86_64_only/obj/AOSPEXT/DRMHWCOMPOSER/"
 make gen_aospless
 tar --no-same-owner -xf aospless.tar.gz
 # Rename and move the artifacts needed for subsequent jobs to the root directory
-cp -r "./aospless" "/aospless_x86_64"
+cp -r "${TOP}/out/target/product/vsoc_x86_64_only/obj/AOSPEXT/DRMHWCOMPOSER/aospless" \
+  "/aospless_x86_64"
 fdo_log_section_end build_aospless_x86_64
 
 
@@ -112,7 +127,7 @@ fdo_log_section_start_collapsed build_aospless_arm64 "build_aospless_arm64"
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_arm64_slim
-export TARGET_RELEASE=trunk_staging
+export TARGET_RELEASE=bp2a
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 mm
 cd "${TOP}/out/target/product/vsoc_arm64_only/obj/AOSPEXT/DRMHWCOMPOSER/"

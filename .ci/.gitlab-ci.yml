@@ -49,7 +49,7 @@ ubuntu/x86_64_android:
     - .ubuntu/x86_64_hwc
   timeout: 2h
   variables:
-    ANDROID_VERSION: 15
+    ANDROID_VERSION: 16
     ANDROID_CTS_DEVICE_ARCH: "x86"
     ANDROID_CTS_MODULES: >-
       CtsGraphicsTestCases

@@ -6,8 +6,6 @@ set -e
 source "${FDO_CI_BASH_HELPERS}"
 
 fdo_log_section_start_collapsed build_drmhwc_x86_64 "build_drmhwc_x86_64"
-sed -i "/'-DUSE_IMAPPER4_METADATA_API'/a\    '-D__ANDROID_API__=${ANDROID_SDK_VERSION}'," \
-    "${CI_PROJECT_DIR}/meson.build"
 
 ln -s "${CI_PROJECT_DIR}" "/aospless_x86_64/src"
 make -C /aospless_x86_64 install

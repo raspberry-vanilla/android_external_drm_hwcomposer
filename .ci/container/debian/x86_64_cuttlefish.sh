@@ -6,7 +6,18 @@ set -e
 function get_repo() {
   local repo_dir="$1"
   local repo_url="$2"
+  if [[ -z "${repo_url}" ]]; then
+    repo_url="${CI_REPOSITORY_URL}"
+  fi
+
   local ref="$3"
+  if [[ -z $ref ]]; then
+    if [[ "${CI_PIPELINE_SOURCE}" == "merge_request_event" ]]; then
+      ref="${CI_MERGE_REQUEST_REF_PATH}"
+    else
+      ref="${CI_COMMIT_REF_NAME}"
+    fi
+  fi
 
   echo "Fetching ${repo_url} at ref ${ref} into ${repo_dir}"
   rm --preserve-root "${repo_dir}" -rf
@@ -110,71 +121,15 @@ time repo sync --fail-fast --no-tags -j4
 fdo_log_section_end repo_init
 
 fdo_log_section_start_collapsed customize_repo "customize_repo"
-
-MESA3D_DIR="${TOP}/external/mesa3d"
-MESA3D_URL="https://gitlab.freedesktop.org/mesa/mesa.git"
-MESA3D_REF=mesa-25.1.2
-get_repo "${MESA3D_DIR}" "${MESA3D_URL}" "${MESA3D_REF}"
-
-LLVM_PROJECT_DIR="${TOP}/external/llvm-project"
-LLVM_PROJECT_URL="https://github.com/maurossi/llvm-project"
-LLVM_PROJECT_REF=release_18.x
-get_repo "${LLVM_PROJECT_DIR}" "${LLVM_PROJECT_URL}" "${LLVM_PROJECT_REF}"
-
-LIBDISPLAY_DIR="${TOP}/external/libdisplay_info"
-LIBDISPLAY_URL="https://android.googlesource.com/platform/external/libdisplay-info"
-LIBDISPLAY_REF=sdk-release
-get_repo "${LIBDISPLAY_DIR}" "${LIBDISPLAY_URL}" "${LIBDISPLAY_REF}"
-
 DRMHWC_DIR="${TOP}/external/drm_hwcomposer"
-DRMHWC_URL="https://gitlab.freedesktop.org/drm-hwcomposer/drm-hwcomposer.git"
-DRMHWC_REF=main
-get_repo "${DRMHWC_DIR}" "${DRMHWC_URL}" "${DRMHWC_REF}"
+get_repo "${DRMHWC_DIR}"
 
 # Ensure that __ANDROID_API__ is defined as ANDROID_SDK_VERSION
 sed -i "/cc_defaults[[:space:]]*{/a\    min_sdk_version: \"${ANDROID_SDK_VERSION}\"," "${DRMHWC_DIR}/Android.bp"
 
-# Build tools are restricted to approved locations in aosp
-# https://android.googlesource.com/platform/build/+/main/Changes.md#PATH_Tools
-# Don't use TEMPORARY_DISABLE_PATH_RESTRICTIONS=true as it is no longer available
-pipx install meson
-mv "${HOME}/.local/bin/meson" /usr/bin
-
-CROSVM_FILE="${TOP}/device/google/cuttlefish/host/libs/vm_manager/crosvm_manager.cpp"
-sed -i 's/\("androidboot.hardware.egl", \)"angle"/\1"mesa"/' "${CROSVM_FILE}"
-sed -i 's/\("androidboot.hardware.vulkan", \)"pastel"/\1"lvp"/' "${CROSVM_FILE}"
-sed -i '/"lvp"/a \        {"androidboot.hardware.hwcomposer.mode", "client"},' "${CROSVM_FILE}"
-
-cat >> "${TOP}/device/google/cuttlefish/shared/config/init.vendor.rc" <<EOF
-on early-init
-   setprop ro.gfx.angle.supported false
-   setprop mesa.libgl.always.software true
-   setprop mesa.android.no.kms.swrast true
-   setprop debug.hwui.renderer opengl
-   setprop debug.sf.disable_hwc_vds 1
-EOF
-
-cat >> "${TOP}/device/google/cuttlefish/shared/virgl/BoardConfig.mk" <<EOF
-BOARD_MESA3D_USES_MESON_BUILD := true
-BOARD_MESA3D_GALLIUM_DRIVERS := llvmpipe
-BOARD_MESA3D_VULKAN_DRIVERS := swrast
-BUILD_BROKEN_PLUGIN_VALIDATION := soong-llvm18
-EOF
-
-sed -i '$d' "${TOP}/device/google/cuttlefish/shared/virgl/device_vendor.mk"
-cat >>"${TOP}/device/google/cuttlefish/shared/virgl/device_vendor.mk" <<EOF
-PRODUCT_PACKAGES += \\
-  libEGL_mesa \\
-  libGLESv1_CM_mesa \\
-  libGLESv2_mesa \\
-  libgallium_dri \\
-  libglapi \\
-  vulkan.lvp
-EOF
-
-# Build drm_hwcomposer apex package
-sed -i 's/ranchu/drm_hwcomposer/' \
-  "${TOP}/device/google/cuttlefish/shared/graphics/device_vendor.mk"
+# Don't block vkms
+BLOCKLIST="${TOP}/device/google/cuttlefish/shared/modules.blocklist"
+sed -i '/vkms/d' "$BLOCKLIST"
 
 fdo_log_section_end customize_repo
 
@@ -182,7 +137,14 @@ fdo_log_section_start_collapsed build_cuttlefish "build_cuttlefish"
 source build/envsetup.sh
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_phone
-export TARGET_RELEASE=trunk_staging
+export TARGET_RELEASE=bp2a
+
+# Trusty attempts to mount a fresh /proc to run nsjail,
+# but ci-templates uses buildah which already mounts /null on /proc
+# so this conflict causes trusty to fail
+export RELEASE_AVF_ENABLE_EARLY_VM=false
+export TRUSTY_SYSTEM_VM=disabled
+
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 
 time make -j"${FDO_CI_CONCURRENT:-4}" > "/cuttlefish.log.txt" 2>&1 # Silent or job logs will exceed limit
@@ -198,7 +160,6 @@ cd "${TOP}/out/target/product/vsoc_x86_64"
 
 PHONE_FILES=(
   boot.img
-  bootloader
   fastboot-info.txt
   init_boot.img
   android-info.txt
@@ -213,6 +174,10 @@ PHONE_FILES=(
 
 for file in "${PHONE_FILES[@]}"; do cp -v "$file" "${CUTTLEFISH_DIR}/"; done;
 cp -r  "${TOP}/out/host/linux-x86/cvd-host_package/." "${CUTTLEFISH_DIR}"
+
+BOOTLOADER_DIR="${TOP}/out/soong/.intermediates/device/google/cuttlefish_prebuilts/bootloader"
+cp -r "${BOOTLOADER_DIR}/bootloader_crosvm_x86_64/linux_glibc_common/bootloader.crosvm" \
+  "${CUTTLEFISH_DIR}/bootloader"
 
 # Get keys and certificates for signing future apex packages
 cp "${TOP}/hardware/interfaces/apexkey/com.android.hardware.x509.pem" "${CUTTLEFISH_DIR}"

@@ -1534,13 +1534,14 @@ ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t,
-                                                              int32_t*) {
+ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t /* display */,
+                                                              int32_t* /* max_profiles */) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
-ndk::ScopedAStatus ComposerClient::getLuts(int64_t, const std::vector<Buffer>&,
-                                           std::vector<Luts>*) {
+ndk::ScopedAStatus ComposerClient::getLuts(int64_t /* display */,
+                                           const std::vector<Buffer>& /* buffers */,
+                                           std::vector<Luts>* /* out_luts */) {
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 

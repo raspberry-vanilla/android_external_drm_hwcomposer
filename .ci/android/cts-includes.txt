@@ -6,9 +6,9 @@ x86_64 CtsGraphicsTestCases android.graphics.cts.EGL15Test
 x86_64 CtsGraphicsTestCases android.graphics.cts.FrameRateOverrideTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.SetFrameRateTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.MatchContentFrameRateTest
-x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest0
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanPreTransformTest
-x86_64 CtsGraphicsTestCases android.graphics.cts.BasicVulkanGpuTest0
+x86_64 CtsGraphicsTestCases android.graphics.cts.BasicVulkanGpuTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.PixelFormatTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.BitmapColorSpaceTest
 x86_64 CtsGraphicsTestCases android.graphics.cts.ColorSpaceTest

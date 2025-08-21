@@ -150,8 +150,9 @@ class ComposerClient : public BnComposerClient {
   ndk::ScopedAStatus startHdcpNegotiation(
       int64_t display, const drm::HdcpLevels& levels) override;
   ndk::ScopedAStatus getMaxLayerPictureProfiles(int64_t display,
-                                                int32_t* maxProfiles) override;
-  ndk::ScopedAStatus getLuts(int64_t, const std::vector<Buffer>&,
+                                                int32_t* max_profiles) override;
+  ndk::ScopedAStatus getLuts(int64_t display,
+                             const std::vector<Buffer>& buffers,
                              std::vector<Luts>* out_luts) override;
 #endif
 

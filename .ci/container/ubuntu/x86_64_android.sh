@@ -38,7 +38,7 @@ fdo_log_section_end install_packages
 
 # Build and install Debian package for cuttlefish
 fdo_log_section_start_collapsed get_cuttlefish_packages "get_cuttlefish_packages"
-ANDROID_CUTTLEFISH_VERSION=v1.5.0
+ANDROID_CUTTLEFISH_VERSION=v1.17.0
 mkdir /android-cuttlefish
 pushd /android-cuttlefish
 git init
@@ -53,7 +53,7 @@ fdo_log_section_end get_cuttlefish_packages
 
 # Download Android CTS
 fdo_log_section_start_collapsed get_android_cts "get_android_cts"
-ANDROID_CTS_VERSION="${ANDROID_VERSION}_r3"
+ANDROID_CTS_VERSION="${ANDROID_VERSION}_r2"
 mkdir /android-tools
 cd /android-tools
 curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
@@ -98,7 +98,7 @@ fdo_log_section_start_collapsed build_vts "build_vts"
 source "${TOP}/build/envsetup.sh"
 export TARGET_BUILD_VARIANT=userdebug
 export TARGET_PRODUCT=aosp_cf_x86_64_slim
-export TARGET_RELEASE=trunk_staging
+export TARGET_RELEASE=bp2a
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 time m VtsHalGraphicsComposer3_TargetTest > "/vts.log.txt" 2>&1
 cp "${TOP}/out/target/product/vsoc_x86_64_only/data/nativetest64/VtsHalGraphicsComposer3_TargetTest/VtsHalGraphicsComposer3_TargetTest" \
