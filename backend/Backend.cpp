@@ -52,7 +52,7 @@ std::pair<uint32_t, uint32_t> GetDisplaySize(const HwcDisplay *display) {
 
 }  // namespace
 
-auto Backend::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
+auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
   auto layers = display->GetOrderLayersByZPos();
 
   auto flatcon = display->GetFlatCon();
@@ -65,8 +65,7 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
 
     if (should_flatten) {
       display->total_stats().frames_flattened++;
-      return GetCompositionTypes(layers, 0, layers.size(),
-                                 /*use_cursor_plane=*/false);
+      return GetFlattenedComposition(layers);
     }
   }
 
@@ -78,19 +77,20 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
                           !IsClientLayer(display, cursor_layer) &&
                           cursor_plane->Get()->IsValidForLayer(
                               &cursor_layer->GetLayerData());
-  CompositionTypeMap composition_types;
+  ValidatedComposition validated_composition;
 
   // Validates layers and creates a test composition, returning whether it
   // succeeded.
   auto validate_and_test = [&]() -> bool {
     std::tie(client_start, client_size) = GetClientLayers(display, layers,
                                                           use_cursor_plane);
-    composition_types = GetCompositionTypes(layers, client_start, client_size,
-                                            use_cursor_plane);
+    validated_composition
+        .composition_types = GetCompositionTypes(layers, client_start,
+                                                 client_size, use_cursor_plane);
 
     bool testing_needed = client_start != 0 || client_size != layers.size();
     if (testing_needed) {
-      return display->TestComposition(composition_types);
+      return display->TestComposition(validated_composition);
     }
 
     return true;
@@ -109,10 +109,7 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
   // Final fallback: convert all layers to client composition.
   if (!success) {
     ++display->total_stats().failed_kms_validate;
-    client_start = 0;
-    client_size = layers.size();
-    composition_types = GetCompositionTypes(layers, client_start, client_size,
-                                            use_cursor_plane);
+    validated_composition = GetFlattenedComposition(layers);
   }
 
   display->total_stats().gpu_pixops += CalcPixOps(layers, client_start,
@@ -123,7 +120,14 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
   if (use_cursor_plane) {
     ++display->total_stats().cursor_plane_frames;
   }
-  return composition_types;
+  return validated_composition;
+}
+
+Backend::ValidatedComposition Backend::GetFlattenedComposition(
+    const std::vector<const HwcLayer*>& layers) {
+  return ValidatedComposition{
+      .composition_types = GetCompositionTypes(layers, 0, layers.size(), false),
+      .composition_plan = std::make_shared<DrmKmsPlan>()};
 }
 
 std::tuple<size_t, size_t> Backend::GetClientLayers(
