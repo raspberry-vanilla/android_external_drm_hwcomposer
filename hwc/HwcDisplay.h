@@ -175,10 +175,6 @@ class HwcDisplay {
   const Backend *backend() const;
   void set_backend(std::unique_ptr<Backend> backend);
 
-  auto GetHwc() {
-    return hwc_;
-  }
-
   auto layers() -> std::map<ILayerId, HwcLayer> & {
     return layers_;
   }
@@ -195,7 +191,9 @@ class HwcDisplay {
     return *pipeline_;
   }
 
-  bool CtmByGpu();
+  bool CtmByGpu() const;
+
+  bool ForcedScalingWithGpu() const;
 
   CompositionStats &total_stats() {
     return total_stats_;

@@ -131,7 +131,7 @@ Backend::ValidatedComposition Backend::GetFlattenedComposition(
 }
 
 std::tuple<size_t, size_t> Backend::GetClientLayers(
-    HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
+    const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
     bool use_cursor_plane) {
   size_t client_start = 0;
   size_t client_size = 0;
@@ -149,11 +149,11 @@ std::tuple<size_t, size_t> Backend::GetClientLayers(
                              use_cursor_plane);
 }
 
-bool Backend::IsClientLayer(HwcDisplay* display, const HwcLayer* layer) {
+bool Backend::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) {
   return !HardwareSupportsLayerType(layer->GetSfType()) ||
          !layer->IsLayerUsableAsDevice() || display->CtmByGpu() ||
          (layer->GetLayerData().pi.RequireScalingOrPhasing() &&
-          display->GetHwc()->GetResMan().ForcedScalingWithGpu());
+          display->ForcedScalingWithGpu());
 }
 
 bool Backend::HardwareSupportsLayerType(CompositionType comp_type) {
@@ -201,7 +201,7 @@ auto Backend::GetCompositionTypes(const std::vector<const HwcLayer*>& layers,
 }
 
 std::tuple<size_t, size_t> Backend::GetExtraClientRange(
-    HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
+    const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
     size_t client_start, size_t client_size, bool use_cursor_plane) {
   size_t avail_planes = display->GetPipe().GetUsablePlanes().first.size();
   size_t layers_size = layers.size();

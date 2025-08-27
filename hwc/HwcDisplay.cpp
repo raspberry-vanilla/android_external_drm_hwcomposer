@@ -19,6 +19,8 @@
 
 #include "HwcDisplay.h"
 
+#include <cinttypes>
+
 #include <ui/ColorSpace.h>
 
 #include "backend/Backend.h"
@@ -331,7 +333,7 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     // Set the validated type
     auto it = result.composition_types.find(&layer);
     ALOGE_IF(it == result.composition_types.end(),
-             "Backend did not composite layer %ld", id);
+             "Backend did not composite layer %" PRId64 "", id);
     if (it != result.composition_types.end()) {
       layer.SetValidatedType(it->second);
     }
@@ -466,7 +468,7 @@ auto HwcDisplay::GetDisplayType() -> DisplayType {
     return kInternal;
   }
 
-  auto displays = GetHwc()->GetResMan().GetInternalDisplayNames();
+  auto displays = hwc_->GetResMan().GetInternalDisplayNames();
   if (!displays.empty()) {
     std::string name = GetPipe().connector->Get()->GetName();
     const bool is_internal = (displays.find(name) != displays.end());
@@ -971,17 +973,21 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args) {
   }
 }
 
-bool HwcDisplay::CtmByGpu() {
+bool HwcDisplay::CtmByGpu() const {
   if (color_transform_is_identity_)
     return false;
 
   if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
     return false;
 
-  if (GetHwc()->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
+  if (hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
     return false;
 
   return true;
+}
+
+bool HwcDisplay::ForcedScalingWithGpu() const {
+  return hwc_->GetResMan().ForcedScalingWithGpu();
 }
 
 bool HwcDisplay::IsWritebackSupported() {

@@ -45,9 +45,9 @@ class Backend {
   virtual ~Backend() = default;
   virtual ValidatedComposition ValidateDisplay(HwcDisplay* display);
   virtual std::tuple<size_t, size_t> GetClientLayers(
-      HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
+      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       bool use_cursor_plane);
-  virtual bool IsClientLayer(HwcDisplay* display, const HwcLayer* layer);
+  virtual bool IsClientLayer(const HwcDisplay* display, const HwcLayer* layer);
 
  protected:
   static ValidatedComposition GetFlattenedComposition(
@@ -60,7 +60,7 @@ class Backend {
       const std::vector<const HwcLayer*>& layers, size_t client_first_z,
       size_t client_size, bool use_cursor_plane);
   static std::tuple<size_t, size_t> GetExtraClientRange(
-      HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
+      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       size_t client_start, size_t client_size, bool use_cursor_plane);
 };
 }  // namespace android
