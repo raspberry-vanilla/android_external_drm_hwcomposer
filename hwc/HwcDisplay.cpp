@@ -193,6 +193,12 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
 }
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
+  if (Properties::DisableHdr()) {
+    hdr_metadata_.reset();
+    min_bpc_ = 6;
+    colorspace_ = Colorspace::kDefault;
+    return;
+  }
   switch (hdr_output_type) {
     case OutputType::kHdr10: {
       SetHdrOutputMetadata(ui::Hdr::HDR10);
