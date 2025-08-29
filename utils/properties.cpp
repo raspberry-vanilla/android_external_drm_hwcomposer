@@ -144,4 +144,8 @@ auto Properties::GetDevicePath() -> std::string {
   return {path_pattern};
 }
 
+auto Properties::DisableHdr() -> bool {
+  return (property_get_bool("vendor.hwc.drm.disable_hdr", 0) != 0);
+}
+
 }  // namespace android
