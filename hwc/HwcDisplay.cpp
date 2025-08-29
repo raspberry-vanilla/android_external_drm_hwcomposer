@@ -647,16 +647,8 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
 }
 
 auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
-  if (IsInHeadlessMode())
-    return {ColorMode::kNative};
-
-  std::vector<ColorMode> modes;
-  GetEdid()->GetColorModes(modes);
-
-  if (modes.empty())
-    modes.emplace_back(ColorMode::kNative);
-
-  return modes;
+  // disable non-native color modes until tone-mapping is supported
+  return {ColorMode::kNative};
 }
 
 void HwcDisplay::SetColorMode(ColorMode mode) {
