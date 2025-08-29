@@ -150,4 +150,8 @@ auto Properties::GetForceMode() -> std::string {
   return {force_mode};
 }
 
+auto Properties::DisableHdr() -> bool {
+  return (property_get_bool("vendor.hwc.drm.disable_hdr", 0) != 0);
+}
+
 }  // namespace android::drm_hwcomposer
