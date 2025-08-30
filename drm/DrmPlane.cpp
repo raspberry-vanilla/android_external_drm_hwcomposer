@@ -294,10 +294,21 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
   auto src = opt_src.value();
 
   if (type_ == DRM_PLANE_TYPE_CURSOR) {
+    // Panning (i.e. non-zero src position) is not permitted with cursor plane.
+    // Shift the display frame in the opposite direction to position the cursor
+    // correctly. Then clear the src position.
+    disp.left -= static_cast<int>(src.left);
+    disp.top -= static_cast<int>(src.top);
+    src.left = 0.0F;
+    src.top = 0.0F;
+    // Force the display frame to occupy the full buffer, so that its size is
+    // known to be compatible with cursor plane restrictions.
     disp.right = disp.left + static_cast<int>(layer.bi->width);
     disp.bottom = disp.top + static_cast<int>(layer.bi->height);
-    src = {0, 0, static_cast<float>(layer.bi->width),
-           static_cast<float>(layer.bi->height)};
+    // Scaling is not permitted with cursor plane. Force the src size to match
+    // the display frame.
+    src.right = static_cast<float>(disp.right - disp.left);
+    src.bottom = static_cast<float>(disp.bottom - disp.top);
   }
 
   // Clip the source crop rect to ensure it does not exceed the bounds of the
