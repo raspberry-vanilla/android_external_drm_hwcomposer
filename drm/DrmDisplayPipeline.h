@@ -42,12 +42,12 @@ class PipelineBindable {
     return bound_pipeline_;
   }
 
-  auto BindPipeline(DrmDisplayPipeline *pipeline,
+  auto BindPipeline(const DrmDisplayPipeline *pipeline,
                     bool return_object_if_bound = false)
       -> std::shared_ptr<BindingOwner<O>>;
 
  private:
-  DrmDisplayPipeline *bound_pipeline_;
+  const DrmDisplayPipeline *bound_pipeline_;
   std::weak_ptr<BindingOwner<O>> owner_object_;
 };
 
@@ -75,7 +75,7 @@ struct DrmDisplayPipeline {
   static auto CreatePipeline(DrmConnector &connector)
       -> std::unique_ptr<DrmDisplayPipeline>;
 
-  auto GetUsablePlanes() -> UsablePlanes;
+  auto GetUsablePlanes() const -> UsablePlanes;
 
   DrmConnector *FindWritebackConnectorForPipeline() const;
 

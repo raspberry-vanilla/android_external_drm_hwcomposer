@@ -21,12 +21,9 @@
 
 namespace android {
 
-auto BackendClient::ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap {
-  CompositionTypeMap composition_types;
-  for (const auto& [layer_handle, layer] : display->layers()) {
-    composition_types.emplace(&layer, CompositionType::kClient);
-  }
-  return composition_types;
+auto BackendClient::ValidateDisplay(HwcDisplay* display)
+    -> ValidatedComposition {
+  return GetFlattenedComposition(display->GetOrderLayersByZPos());
 }
 
 // clang-format off

@@ -23,9 +23,10 @@
 #include "utils/log.h"
 
 namespace android {
-auto DrmKmsPlan::CreateDrmKmsPlan(
-    DrmDisplayPipeline &pipe, std::vector<LayerData> composition,
-    std::optional<LayerData> cursor_layer) -> std::unique_ptr<DrmKmsPlan> {
+auto DrmKmsPlan::CreateDrmKmsPlan(const DrmDisplayPipeline &pipe,
+                                  std::vector<LayerData> composition,
+                                  std::optional<LayerData> cursor_layer)
+    -> std::unique_ptr<DrmKmsPlan> {
   auto plan = std::make_unique<DrmKmsPlan>();
 
   auto [avail_planes, cursor_plane] = pipe.GetUsablePlanes();

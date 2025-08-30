@@ -67,15 +67,13 @@ class HwcDisplay {
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
-  bool TestComposition(const Backend::CompositionTypeMap &composition);
+  bool TestComposition(Backend::ValidatedComposition &composition) const;
 
-  bool CreateComposition(AtomicCommitArgs &a_args,
-                         const Backend::CompositionTypeMap &composition);
   std::vector<const HwcLayer *> GetOrderLayersByZPos() const;
 
   std::string Dump();
 
-  auto GetDisplayName() -> std::string;
+  auto GetDisplayName() const -> std::string;
 
   auto GetDisplayConfigs() const -> std::vector<HwcDisplayConfig>;
 
@@ -131,7 +129,7 @@ class HwcDisplay {
   auto GetRawEdid() -> std::vector<uint8_t>;
 
   // Get the port id that this display is plugged into.
-  auto GetPort() -> uint8_t;
+  auto GetPort() const -> uint8_t;
 
   auto SetContentType(ContentType content_type) {
     content_type_ = content_type;
@@ -177,10 +175,6 @@ class HwcDisplay {
   const Backend *backend() const;
   void set_backend(std::unique_ptr<Backend> backend);
 
-  auto GetHwc() {
-    return hwc_;
-  }
-
   auto layers() -> std::map<ILayerId, HwcLayer> & {
     return layers_;
   }
@@ -189,11 +183,17 @@ class HwcDisplay {
     return layers_;
   }
 
+  const auto &GetPipe() const {
+    return *pipeline_;
+  }
+
   auto &GetPipe() {
     return *pipeline_;
   }
 
-  bool CtmByGpu();
+  bool CtmByGpu() const;
+
+  bool ForcedScalingWithGpu() const;
 
   CompositionStats &total_stats() {
     return total_stats_;
@@ -205,7 +205,7 @@ class HwcDisplay {
    * to prevent the crash. See:
    * https://source.android.com/devices/graphics/hotplug#handling-common-scenarios
    */
-  bool IsInHeadlessMode() {
+  bool IsInHeadlessMode() const {
     return !pipeline_;
   }
 
@@ -228,11 +228,26 @@ class HwcDisplay {
     virtual_disp_height_ = height;
   }
 
-  auto getDisplayPhysicalOrientation() -> std::optional<PanelOrientation>;
+  auto getDisplayPhysicalOrientation() const -> std::optional<PanelOrientation>;
 
   bool NeedsClientLayerUpdate() const;
 
  private:
+  // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if
+  // such AtomicCommitArgs cannot be created due to lack of drm resources or
+  // invalid HwcDisplay or HwcLayer state.
+  // The caller must do a test commit on the returned args to ensure that the
+  // hardware can perform the commit.
+  std::optional<AtomicCommitArgs> CreateFrameUpdateCommit(
+      const Backend::CompositionTypeMap &composition) const;
+
+  bool CommitComposition(const Backend::CompositionTypeMap &composition,
+                         SharedFd &out_present_fence);
+
+  // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
+  // This should be called after a successful commit.
+  void ApplyCommitChanges(const AtomicCommitArgs &a_args);
+
   AtomicCommitArgs CreateModesetCommit(
       const HwcDisplayConfig *config,
       const std::optional<LayerData> &modeset_layer);
@@ -298,7 +313,7 @@ class HwcDisplay {
   void SetHdrOutputMetadata(ui::Hdr hdrType);
   void SetOutputType(OutputType hdr_output_type);
 
-  auto GetEdid() -> EdidWrapperUnique & {
+  auto GetEdid() const -> EdidWrapperUnique & {
     return GetPipe().connector->Get()->GetParsedEdid();
   }
 

@@ -22,6 +22,6 @@ namespace android {
 
 class BackendClient : public Backend {
  public:
-  auto ValidateDisplay(HwcDisplay* display) -> CompositionTypeMap override;
+  auto ValidateDisplay(HwcDisplay* display) -> ValidatedComposition override;
 };
 }  // namespace android
