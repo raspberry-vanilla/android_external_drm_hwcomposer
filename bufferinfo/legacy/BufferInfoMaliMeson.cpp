@@ -26,7 +26,7 @@
 #include "gralloc_priv.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoMaliMeson);
 
@@ -89,4 +89,4 @@ auto BufferInfoMaliMeson::GetBoInfo(buffer_handle_t handle)
   return bi;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -32,7 +32,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 ResourceManager::ResourceManager(
     PipelineToFrontendBindingInterface *p2f_bind_interface)
@@ -222,4 +222,4 @@ auto ResourceManager::GetWritebackConnectorsCount() -> uint32_t {
   return count;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -23,7 +23,7 @@
 #include "compositor/LayerData.h"
 #include "utils/fd.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class HwcDisplay;
 
@@ -147,4 +147,4 @@ class HwcLayer {
   bool IsLayerUsableAsDevice() const;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

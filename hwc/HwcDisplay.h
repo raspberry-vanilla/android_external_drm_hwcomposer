@@ -30,7 +30,7 @@
 #include "drm/VSyncWorker.h"
 #include "stats/CompositionStats.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 using DisplayHandle = int64_t;
 
@@ -320,4 +320,4 @@ class HwcDisplay {
   std::shared_ptr<FrontendDisplayBase> frontend_private_data_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

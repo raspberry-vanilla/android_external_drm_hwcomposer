@@ -82,7 +82,7 @@ auto inline property_get_bool(const char *key, int8_t default_value) -> int8_t {
 }  // namespace
 #endif
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 /**
  * @brief Determine if the "Present Not Reliable" property is enabled.
@@ -148,4 +148,4 @@ auto Properties::DisableHdr() -> bool {
   return (property_get_bool("vendor.hwc.drm.disable_hdr", 0) != 0);
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

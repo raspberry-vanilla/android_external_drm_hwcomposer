@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace android::drm_hwcomposer {
+
 constexpr int kBufferMaxPlanes = 4;
 
 enum class BufferColorSpace : int32_t {
@@ -66,3 +68,5 @@ struct BufferInfo {
    * closed while the BufferInfo is still in use. */
   std::shared_ptr<PrimeFdsSharedBase> fds_shared;
 };
+
+}  // namespace android::drm_hwcomposer

@@ -28,7 +28,7 @@ using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 // Equality operator to be used by Eq, ASSERT_EQ, etc. Needs to be static rather
 // than in anonymous namespace to ensure gmock can find it.
@@ -301,4 +301,4 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsDisplayRemoved) {
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -27,7 +27,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 template <class O>
 auto PipelineBindable<O>::BindPipeline(const DrmDisplayPipeline *pipeline,
@@ -208,4 +208,4 @@ DrmDisplayPipeline::~DrmDisplayPipeline() {
     atomic_state_manager->StopThread();
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

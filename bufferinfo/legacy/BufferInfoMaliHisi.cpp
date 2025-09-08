@@ -28,7 +28,7 @@
 
 #define MALI_ALIGN(value, base) (((value) + ((base)-1)) & ~((base)-1))
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoMaliHisi);
 
@@ -122,4 +122,4 @@ auto BufferInfoMaliHisi::GetBoInfo(buffer_handle_t handle)
   return bi;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

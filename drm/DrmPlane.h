@@ -25,7 +25,7 @@
 #include "DrmProperty.h"
 #include "compositor/LayerData.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmDevice;
 struct LayerData;
@@ -108,4 +108,5 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   uint64_t transform_enum_mask_ = DRM_MODE_ROTATE_0;
   std::vector<drm_plane_size_hint_local> size_hints_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

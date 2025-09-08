@@ -28,7 +28,7 @@
 #define DRM_FORMAT_INVALID 0
 #endif
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 using BufferUniqueId = uint64_t;
 
@@ -87,4 +87,4 @@ class LegacyBufferInfoGetter : public BufferInfoGetter {
   }
 #endif
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

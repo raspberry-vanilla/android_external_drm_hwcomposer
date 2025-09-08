@@ -20,7 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoMaliMeson : public LegacyBufferInfoGetter {
  public:
@@ -30,4 +30,5 @@ class BufferInfoMaliMeson : public LegacyBufferInfoGetter {
  private:
   uint64_t ConvertGrallocFormatToDrmModifiers(uint64_t flags);
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

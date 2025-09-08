@@ -21,7 +21,7 @@
 
 #include "compositor/LayerData.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 struct DrmKmsPlan;
 class HwcDisplay;
@@ -63,4 +63,5 @@ class Backend {
       const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       size_t client_start, size_t client_size, bool use_cursor_plane);
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

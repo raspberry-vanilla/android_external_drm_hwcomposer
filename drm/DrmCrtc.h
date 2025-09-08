@@ -25,7 +25,7 @@
 #include "DrmProperty.h"
 #include "DrmUnique.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmDevice;
 
@@ -76,4 +76,5 @@ class DrmCrtc : public PipelineBindable<DrmCrtc> {
   DrmProperty mode_property_;
   DrmProperty out_fence_ptr_property_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

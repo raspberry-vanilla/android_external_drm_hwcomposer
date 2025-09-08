@@ -18,10 +18,11 @@
 
 #include "Backend.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BackendClient : public Backend {
  public:
   auto ValidateDisplay(HwcDisplay* display) -> ValidatedComposition override;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

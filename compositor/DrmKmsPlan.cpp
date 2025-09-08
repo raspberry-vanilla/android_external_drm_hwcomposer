@@ -22,7 +22,8 @@
 #include "drm/DrmPlane.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
+
 auto DrmKmsPlan::CreateDrmKmsPlan(const DrmDisplayPipeline &pipe,
                                   std::vector<LayerData> composition,
                                   std::optional<LayerData> cursor_layer)
@@ -71,4 +72,4 @@ auto DrmKmsPlan::CreateDrmKmsPlan(const DrmDisplayPipeline &pipe,
   return plan;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

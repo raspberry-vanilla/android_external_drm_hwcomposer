@@ -28,7 +28,7 @@
 #include "drm/ResourceManager.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto VSyncWorker::CreateInstance(std::shared_ptr<DrmDisplayPipeline> &pipe)
     -> std::unique_ptr<VSyncWorker> {
@@ -222,4 +222,5 @@ void VSyncWorker::ThreadFn() {
 
   ALOGI("VSyncWorker thread exit");
 }
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

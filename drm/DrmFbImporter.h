@@ -32,7 +32,7 @@
 
 using GemHandle = uint32_t;
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmFbIdHandle {
  public:
@@ -87,4 +87,4 @@ class DrmFbImporter {
   std::map<GemHandle, std::weak_ptr<DrmFbIdHandle>> drm_fb_id_handle_cache_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

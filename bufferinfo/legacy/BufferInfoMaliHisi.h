@@ -20,7 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoMaliHisi : public LegacyBufferInfoGetter {
  public:
@@ -31,4 +31,5 @@ class BufferInfoMaliHisi : public LegacyBufferInfoGetter {
  private:
   uint64_t ConvertGrallocFormatToDrmModifiers(uint64_t flags, bool is_rgb);
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

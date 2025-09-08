@@ -27,7 +27,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "utils/fd.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmFbImporter;
 class DrmPlane;
@@ -141,4 +141,4 @@ class DrmDevice {
   ResourceManager *const res_man_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

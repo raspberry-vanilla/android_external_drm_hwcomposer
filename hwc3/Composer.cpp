@@ -27,7 +27,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-using ::android::Properties;
+using ::android::drm_hwcomposer::Properties;
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 

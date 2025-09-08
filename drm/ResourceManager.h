@@ -27,7 +27,7 @@
 #include "UEventListener.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class PipelineToFrontendBindingInterface {
  public:
@@ -94,4 +94,5 @@ class ResourceManager {
 
   bool initialized_{};
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

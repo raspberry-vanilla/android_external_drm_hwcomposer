@@ -21,7 +21,7 @@
 #include <functional>
 #include <thread>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 // NOLINTNEXTLINE(misc-unused-using-decls): False positive
 using std::chrono_literals::operator""s;
@@ -73,4 +73,4 @@ class FlatteningController {
   FlatConCallbacks cbks_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

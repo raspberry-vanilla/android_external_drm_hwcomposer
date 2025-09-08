@@ -24,7 +24,7 @@
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 namespace {
 
@@ -273,4 +273,4 @@ std::tuple<size_t, size_t> Backend::GetExtraClientRange(
 REGISTER_BACKEND("generic", Backend);
 // clang-format on
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

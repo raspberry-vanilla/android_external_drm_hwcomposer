@@ -26,7 +26,7 @@
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
-auto DrmHwcThree::GetHwc3Display(::android::HwcDisplay& display)
+auto DrmHwcThree::GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
     -> std::shared_ptr<Hwc3Display> {
   auto frontend_private_data = display.GetFrontendPrivateData();
   if (!frontend_private_data) {
@@ -47,7 +47,8 @@ void DrmHwcThree::Init(std::shared_ptr<IComposerCallback> callback) {
 }
 
 void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
-    ::android::DisplayHandle display_handle, int64_t timestamp) const {
+    ::android::drm_hwcomposer::DisplayHandle display_handle,
+    int64_t timestamp) const {
   VsyncPeriodChangeTimeline timeline;
   timeline.newVsyncAppliedTimeNanos = timestamp;
   timeline.refreshRequired = false;
@@ -59,7 +60,7 @@ void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
 }
 
 void DrmHwcThree::SendRefreshEventToClient(
-    ::android::DisplayHandle display_handle) {
+    ::android::drm_hwcomposer::DisplayHandle display_handle) {
   {
     const std::scoped_lock lock(must_validate_lock_);
     must_validate_.insert(display_handle);
@@ -68,14 +69,14 @@ void DrmHwcThree::SendRefreshEventToClient(
 }
 
 void DrmHwcThree::SendVsyncEventToClient(
-    ::android::DisplayHandle display_handle, int64_t timestamp,
+    ::android::drm_hwcomposer::DisplayHandle display_handle, int64_t timestamp,
     uint32_t vsync_period) const {
   composer_callback_->onVsync(static_cast<int64_t>(display_handle), timestamp,
                               static_cast<int32_t>(vsync_period));
 }
 
 void DrmHwcThree::SendHotplugEventToClient(
-    ::android::DisplayHandle display_handle,
+    ::android::drm_hwcomposer::DisplayHandle display_handle,
     DrmHwc::DisplayStatus display_status) {
   common::DisplayHotplugEvent event = common::DisplayHotplugEvent::DISCONNECTED;
   switch (display_status) {
@@ -97,13 +98,13 @@ void DrmHwcThree::SendHotplugEventToClient(
 }
 
 auto DrmHwcThree::GetMustValidateDisplay(
-    ::android::DisplayHandle display_handle) -> bool {
+    ::android::drm_hwcomposer::DisplayHandle display_handle) -> bool {
   std::scoped_lock lock(must_validate_lock_);
   return must_validate_.find(display_handle) != must_validate_.end();
 }
 
 void DrmHwcThree::ClearMustValidateDisplay(
-    ::android::DisplayHandle display_handle) {
+    ::android::drm_hwcomposer::DisplayHandle display_handle) {
   std::scoped_lock lock(must_validate_lock_);
   must_validate_.erase(display_handle);
 }

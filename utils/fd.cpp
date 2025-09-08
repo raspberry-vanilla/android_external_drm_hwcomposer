@@ -16,7 +16,7 @@
 
 #include "fd.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 static void CloseFd(const int *fd) {
   if (fd != nullptr) {
@@ -49,4 +49,4 @@ auto DupFd(SharedFd const &fd) -> int {
   return fcntl(*fd, F_DUPFD_CLOEXEC, 0);
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

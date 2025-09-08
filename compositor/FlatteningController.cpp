@@ -35,7 +35,7 @@
 
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto FlatteningController::CreateInstance(FlatConCallbacks &cbks)
     -> std::shared_ptr<FlatteningController> {
@@ -98,4 +98,4 @@ void FlatteningController::ThreadFn() {
   }
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

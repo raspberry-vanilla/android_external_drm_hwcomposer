@@ -34,7 +34,7 @@
 #include "hwc/HwcLayer.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 static int32_t ConfigErrorToHWC2(HwcDisplay::ConfigError result) {
   switch (result) {
@@ -1490,11 +1490,11 @@ static int HookDevOpen(const struct hw_module_t *module, const char *name,
   return 0;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static struct hw_module_methods_t hwc2_module_methods = {
-    .open = android::HookDevOpen,
+    .open = android::drm_hwcomposer::HookDevOpen,
 };
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)

@@ -22,7 +22,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 // NOLINTNEXTLINE(cert-err58-cpp)
 const std::vector<std::string> BackendManager::kClientDevices = {
@@ -81,4 +81,5 @@ std::unique_ptr<Backend> BackendManager::GetBackendByName(std::string &name) {
 
   return available_backends_[name]();
 }
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

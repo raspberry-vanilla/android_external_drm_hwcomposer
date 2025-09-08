@@ -21,7 +21,7 @@
 #include "hwc/HwcDisplay.h"
 #include "stats/CompositionStatsAtomReporter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 CompositionStatsPoller::CompositionStatsPoller(
     std::unique_ptr<CompositionStatsAtomReporter> reporter,
@@ -63,4 +63,4 @@ void CompositionStatsPoller::PollFunc() {
   }
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

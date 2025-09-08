@@ -28,7 +28,7 @@
 #include "gralloc_priv.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoMaliMediatek);
 
@@ -54,4 +54,4 @@ auto BufferInfoMaliMediatek::GetBoInfo(buffer_handle_t handle)
   return bi;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

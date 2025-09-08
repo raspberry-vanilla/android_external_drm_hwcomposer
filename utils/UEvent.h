@@ -29,7 +29,7 @@
 #include "fd.h"
 #include "log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class UEvent {
  public:
@@ -143,4 +143,4 @@ class UEvent {
   UniqueFd stop_event_fd_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

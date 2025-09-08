@@ -26,7 +26,7 @@
 #include "drm/DrmFbImporter.h"
 #include "utils/fd.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmFbIdHandle;
 
@@ -107,4 +107,4 @@ struct LayerData {
   SharedFd acquire_fence;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -19,7 +19,7 @@
 #include <optional>
 #include <string>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 enum class CtmHandling {
   kDrmOrGpu,    /* Handled by DRM is possible, otherwise by GPU */
@@ -39,4 +39,4 @@ class Properties {
   static auto DisableHdr() -> bool;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

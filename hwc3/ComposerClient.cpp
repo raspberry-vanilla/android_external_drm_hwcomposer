@@ -50,20 +50,23 @@
 #include "stats/CompositionStatsAtomReporter.h"
 #include "stats/CompositionStatsPoller.h"
 
-using ::android::CompositionStatsAtomReporter;
-using ::android::CompositionStatsPoller;
-using ::android::CompositionType;
-using ::android::DamageInfo;
-using ::android::DisplayHandle;
-using ::android::DstRectInfo;
-using ::android::HwcDisplay;
-using ::android::HwcDisplayConfig;
-using ::android::HwcLayer;
-using ::android::IRect;
-using ::android::LayerTransform;
-using ::android::SrcRectInfo;
+using ::android::drm_hwcomposer::BufferBlendMode;
+using ::android::drm_hwcomposer::BufferColorSpace;
+using ::android::drm_hwcomposer::BufferSampleRange;
+using ::android::drm_hwcomposer::CompositionStatsPoller;
+using ::android::drm_hwcomposer::CompositionType;
+using ::android::drm_hwcomposer::DamageInfo;
+using ::android::drm_hwcomposer::DisplayHandle;
+using ::android::drm_hwcomposer::DstRectInfo;
+using ::android::drm_hwcomposer::HwcDisplay;
+using ::android::drm_hwcomposer::HwcDisplayConfig;
+using ::android::drm_hwcomposer::HwcLayer;
+using ::android::drm_hwcomposer::IRect;
+using ::android::drm_hwcomposer::LayerTransform;
+using ::android::drm_hwcomposer::PanelOrientation;
+using ::android::drm_hwcomposer::SrcRectInfo;
 
-using HwcOutputType = ::android::OutputType;
+using HwcOutputType = ::android::drm_hwcomposer::OutputType;
 #if __ANDROID_API__ >= 36
 using AidlOutputType = aidl::android::hardware::graphics::composer3::OutputType;
 #endif
@@ -211,7 +214,8 @@ std::optional<std::array<float, kCtmSize>> AidlToColorTransformMatrix(
     return std::nullopt;
   }
 
-  std::array<float, kCtmSize> color_transform_matrix = kIdentityMatrix;
+  std::array<float, kCtmSize>
+      color_transform_matrix = ::android::drm_hwcomposer::kIdentityMatrix;
   std::copy(aidl_color_transform_matrix->begin(),
             aidl_color_transform_matrix->end(), color_transform_matrix.begin());
   return color_transform_matrix;
@@ -371,7 +375,7 @@ std::optional<DamageInfo> AidlToDamage(
 
 }  // namespace
 
-class Hwc3BufferHandle : public PrimeFdsSharedBase {
+class Hwc3BufferHandle : public ::android::drm_hwcomposer::PrimeFdsSharedBase {
  public:
   static auto Create(buffer_handle_t handle)
       -> std::shared_ptr<Hwc3BufferHandle> {
@@ -401,10 +405,11 @@ class Hwc3BufferHandle : public PrimeFdsSharedBase {
   buffer_handle_t imported_handle_{};
 };
 
-class Hwc3Layer : public ::android::FrontendLayerBase {
+class Hwc3Layer : public ::android::drm_hwcomposer::FrontendLayerBase {
  public:
   auto HandleNextBuffer(std::optional<buffer_handle_t> raw_handle,
-                        ::android::SharedFd fence_fd, int32_t slot_id)
+                        ::android::drm_hwcomposer::SharedFd fence_fd,
+                        int32_t slot_id)
       -> std::optional<HwcLayer::LayerProperties> {
     HwcLayer::LayerProperties lp;
     if (!raw_handle && slots_.count(slot_id) != 0) {
@@ -426,8 +431,8 @@ class Hwc3Layer : public ::android::FrontendLayerBase {
       return std::nullopt;
     }
 
-    auto bi = ::android::BufferInfoGetter::GetInstance()->GetBoInfo(
-        hwc3->GetHandle());
+    auto bi = ::android::drm_hwcomposer::BufferInfoGetter::GetInstance()
+                  ->GetBoInfo(hwc3->GetHandle());
     if (bi) {
       bi->fds_shared = hwc3;
 
@@ -490,7 +495,8 @@ void ComposerClient::Init() {
   DEBUG_FUNC();
   hwc_ = std::make_unique<DrmHwcThree>();
 
-  auto reporter = CompositionStatsAtomReporter::Create();
+  auto reporter = ::android::drm_hwcomposer::CompositionStatsAtomReporter::
+      Create();
   if (reporter) {
     stats_poller_ = std::make_unique<CompositionStatsPoller>(std::move(
                                                                  reporter),
@@ -581,7 +587,7 @@ ndk::ScopedAStatus ComposerClient::destroyVirtualDisplay(
   return ndk::ScopedAStatus::ok();
 }
 
-::android::HwcDisplay* ComposerClient::GetDisplay(int64_t display_handle) {
+HwcDisplay* ComposerClient::GetDisplay(int64_t display_handle) {
   return hwc_->GetDisplay(static_cast<DisplayHandle>(display_handle));
 }
 
@@ -655,9 +661,11 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
     auto fence = const_cast<::ndk::ScopedFileDescriptor&>(command.buffer->fence)
                      .release();
 
-    auto lp = hwc3_layer->HandleNextBuffer(buffer_handle,
-                                           ::android::MakeSharedFd(fence),
-                                           command.buffer->slot);
+    auto lp = hwc3_layer
+                  ->HandleNextBuffer(buffer_handle,
+                                     ::android::drm_hwcomposer::MakeSharedFd(
+                                         fence),
+                                     command.buffer->slot);
 
     if (!lp) {
       cmd_result_writer_->AddError(hwc3::Error::kBadLayer);
@@ -780,7 +788,7 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
       return;
     }
 
-    ::android::SharedFd present_fence;
+    ::android::drm_hwcomposer::SharedFd present_fence;
     std::vector<HwcDisplay::ReleaseFence> release_fences;
     bool ret = display->PresentStagedComposition(hwc3_display
                                                      ->desired_present_time,
@@ -793,11 +801,13 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
 
     using ::android::base::unique_fd;
     cmd_result_writer_->AddPresentFence(  //
-        display_handle, unique_fd(::android::DupFd(present_fence)));
+        display_handle,
+        unique_fd(::android::drm_hwcomposer::DupFd(present_fence)));
 
     std::unordered_map<int64_t, unique_fd> hal_release_fences;
     for (const auto& [layer_id, release_fence] : release_fences) {
-      hal_release_fences[layer_id] = unique_fd(::android::DupFd(release_fence));
+      hal_release_fences[layer_id] = unique_fd(
+          ::android::drm_hwcomposer::DupFd(release_fence));
     }
     cmd_result_writer_->AddReleaseFence(display_handle, hal_release_fences);
   }
@@ -860,8 +870,9 @@ ndk::ScopedAStatus ComposerClient::getDataspaceSaturationMatrix(
   }
 
   matrix->clear();
-  matrix->insert(matrix->begin(), kIdentityMatrix.begin(),
-                 kIdentityMatrix.end());
+  matrix->insert(matrix->begin(),
+                 ::android::drm_hwcomposer::kIdentityMatrix.begin(),
+                 ::android::drm_hwcomposer::kIdentityMatrix.end());
 
   return ndk::ScopedAStatus::ok();
 }
@@ -926,7 +937,7 @@ ndk::ScopedAStatus ComposerClient::getDisplayCapabilities(
 
   // Skip color transform altogether if device/drm cannot support it.
   if (hwc_->GetResMan().GetCtmHandling() ==
-      ::android::CtmHandling::kDrmOrIgnore) {
+      ::android::drm_hwcomposer::CtmHandling::kDrmOrIgnore) {
     caps->emplace_back(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
   }
   return ndk::ScopedAStatus::ok();
@@ -1142,7 +1153,8 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
     return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
-  ::android::SharedFd fence = display->GetWritebackBufferFence();
+  ::android::drm_hwcomposer::SharedFd fence = display
+                                                  ->GetWritebackBufferFence();
   display->SetWritebackEnabled(false);
   display->GetWritebackLayer()->ClearSlots();
   if (!fence) {
@@ -1151,7 +1163,8 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
   }
 
   if (fence && *fence >= 0) {
-    *acquire_fence = ndk::ScopedFileDescriptor(::android::DupFd(fence));
+    *acquire_fence = ndk::ScopedFileDescriptor(
+        ::android::drm_hwcomposer::DupFd(fence));
   }
 
   return ndk::ScopedAStatus::ok();
@@ -1214,7 +1227,8 @@ ndk::ScopedAStatus ComposerClient::setActiveConfig(int64_t display_handle,
 
   VsyncPeriodChangeTimeline timeline;
   VsyncPeriodChangeConstraints constraints = {
-      .desiredTimeNanos = ::android::ResourceManager::GetTimeMonotonicNs(),
+      .desiredTimeNanos = ::android::drm_hwcomposer::ResourceManager::
+          GetTimeMonotonicNs(),
       .seamlessRequired = false,
   };
   return setActiveConfigWithConstraints(display_handle, config, constraints,
@@ -1254,7 +1268,7 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
 
   // Always try to queue a seamless commit to reduce jank and flicker artifacts.
   // Fall-back to a full blocking commit otherwise.
-  QueuedConfigTiming timing{};
+  ::android::drm_hwcomposer::QueuedConfigTiming timing{};
   auto error = display->QueueConfig(config, constraints.desiredTimeNanos,
                                     &timing);
   if (error == HwcDisplay::kNone) {
@@ -1268,8 +1282,8 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
              config);
 
     error = display->SetConfig(config);
-    timeline->newVsyncAppliedTimeNanos = ::android::ResourceManager::
-        GetTimeMonotonicNs();
+    timeline->newVsyncAppliedTimeNanos = ::android::drm_hwcomposer::
+        ResourceManager::GetTimeMonotonicNs();
     timeline->refreshRequired = false;
   }
 
@@ -1348,7 +1362,8 @@ ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_handle,
   if (intent != RenderIntent::COLORIMETRIC)
     return ToBinderStatus(hwc3::Error::kUnsupported);
 
-  display->SetColorMode(static_cast<::ColorMode>(mode));
+  display->SetColorMode(
+      static_cast<::android::drm_hwcomposer::ColorMode>(mode));
   return ToBinderStatus(hwc3::Error::kNone);
 }
 
@@ -1440,14 +1455,14 @@ ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
   HwcLayer::LayerProperties properties;
   properties.slot_buffer = {
       .slot_id = 0,
-      .bi = ::android::BufferInfoGetter::GetInstance()->GetBoInfo(
-          imported_handle),
+      .bi = ::android::drm_hwcomposer::BufferInfoGetter::GetInstance()
+                ->GetBoInfo(imported_handle),
   };
   ndk::ScopedFileDescriptor release_fence = ndk::ScopedFileDescriptor(
       release_fence_in.get());
   properties.active_slot = {
       .slot_id = 0,
-      .fence = ::android::MakeSharedFd(release_fence.release()),
+      .fence = ::android::drm_hwcomposer::MakeSharedFd(release_fence.release()),
   };
   properties.blend_mode = BufferBlendMode::kNone;
 
@@ -1578,7 +1593,8 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
                    .release();
 
   auto properties = hwc3layer->HandleNextBuffer(raw_buffer,
-                                                ::android::MakeSharedFd(fence),
+                                                ::android::drm_hwcomposer::
+                                                    MakeSharedFd(fence),
                                                 command.buffer.slot);
 
   if (!properties) {
@@ -1621,7 +1637,8 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(int64_t display_handle,
   auto fence = const_cast<::ndk::ScopedFileDescriptor&>(buffer.fence).release();
 
   auto properties = hwc3layer->HandleNextBuffer(raw_buffer,
-                                                ::android::MakeSharedFd(fence),
+                                                ::android::drm_hwcomposer::
+                                                    MakeSharedFd(fence),
                                                 buffer.slot);
 
   if (!properties) {

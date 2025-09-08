@@ -20,7 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoLibdrm : public LegacyBufferInfoGetter {
  public:
@@ -33,4 +33,4 @@ class BufferInfoLibdrm : public LegacyBufferInfoGetter {
                        BufferInfo *bo);
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

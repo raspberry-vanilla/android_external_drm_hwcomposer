@@ -25,7 +25,7 @@
 
 #include <android-base/thread_annotations.h>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class CompositionStatsAtomReporter;
 
@@ -53,4 +53,4 @@ class CompositionStatsPoller {
   std::unique_ptr<CompositionStatsAtomReporter> reporter_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

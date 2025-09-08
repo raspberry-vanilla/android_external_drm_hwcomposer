@@ -32,7 +32,7 @@ using aidl::android::frameworks::stats::IStats;
 using aidl::android::frameworks::stats::VendorAtom;
 namespace DesktopAtoms = android::vendor::google::desktop::stats::DesktopAtoms;
 
-namespace android {
+namespace android::drm_hwcomposer {
 namespace {
 
 const std::string kStatsServiceName = std::string(IStats::descriptor)
@@ -80,4 +80,4 @@ CompositionStatsAtomReporter::Create() {
   return std::make_unique<CompositionStatsReporterDesktop>();
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

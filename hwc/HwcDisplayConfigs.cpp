@@ -32,7 +32,7 @@ constexpr uint32_t kBackPorch = 10;
 constexpr uint32_t kFrontPorch = 10;
 constexpr uint32_t kHzInKHz = 1000;
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
   char value[PROPERTY_VALUE_MAX];
@@ -191,4 +191,4 @@ bool HwcDisplayConfigs::SanitizeGroups() {
   return true;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

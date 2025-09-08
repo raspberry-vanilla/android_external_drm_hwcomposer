@@ -19,7 +19,7 @@
 #include <memory>
 #include <vector>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmConnector;
 class DrmDevice;
@@ -92,4 +92,4 @@ struct DrmDisplayPipeline {
   std::shared_ptr<DrmAtomicStateManager> atomic_state_manager;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

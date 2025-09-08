@@ -20,7 +20,7 @@
 #include <functional>
 #include <map>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 struct CompositionStats {
   uint32_t total_frames = 0;
@@ -70,4 +70,4 @@ class CompositionStatsTracker {
   std::map<int64_t, CompositionStats> previous_stats_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

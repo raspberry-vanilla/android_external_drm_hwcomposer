@@ -25,7 +25,8 @@
 #include <cstring>
 
 #include "utils/log.h"
-namespace android {
+
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoMinigbm);
 
@@ -122,4 +123,4 @@ int BufferInfoMinigbm::ValidateGralloc() {
   return 0;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -25,7 +25,7 @@
 #include "img_gralloc1_public.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoImagination);
 
@@ -65,4 +65,4 @@ auto BufferInfoImagination::GetBoInfo(buffer_handle_t handle)
   return bi;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

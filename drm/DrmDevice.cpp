@@ -33,7 +33,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto DrmDevice::CreateInstance(std::string const &path,
                                ResourceManager *res_man, uint32_t index)
@@ -401,4 +401,4 @@ done:
 }
 // NOLINTEND(cppcoreguidelines-avoid-goto)
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

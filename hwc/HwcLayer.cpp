@@ -22,7 +22,7 @@
 #include "bufferinfo/BufferInfoGetter.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.slot_buffer) {
@@ -132,4 +132,4 @@ bool HwcLayer::IsLayerUsableAsDevice() const {
   return it->second.fb != nullptr;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

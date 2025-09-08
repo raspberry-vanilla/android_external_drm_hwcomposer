@@ -28,7 +28,7 @@
 #include "compositor/LayerData.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 namespace {
 // Ensure that |src| does not exceed the bounds of the buffer.
@@ -414,4 +414,4 @@ auto DrmPlane::GetPlaneProperty(const char *prop_name, DrmProperty &property,
   return true;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer
