@@ -19,7 +19,7 @@
 #include "BackendManager.h"
 #include "drm_fourcc.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 bool BackendRpi5::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) {
   LayerData layer_data = layer->GetLayerData();
@@ -35,4 +35,4 @@ bool BackendRpi5::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer
 REGISTER_BACKEND("rpi5", BackendRpi5);
 // clang-format on
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer
