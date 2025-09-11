@@ -132,4 +132,12 @@ bool HwcLayer::IsLayerUsableAsDevice() const {
   return it->second.fb != nullptr;
 }
 
+uint32_t HwcLayer::GetPixOps() const {
+  const auto& df = GetLayerData().pi.display_frame;
+  if (df.i_rect.has_value()) {
+    return df.i_rect->Width() * df.i_rect->Height();
+  }
+  return parent_->GetSize().first * parent_->GetSize().second;
+}
+
 }  // namespace android::drm_hwcomposer

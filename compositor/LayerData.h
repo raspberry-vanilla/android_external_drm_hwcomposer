@@ -42,22 +42,28 @@ struct LayerTransform {
   bool rotate90;
 };
 
-struct SrcRectInfo {
-  struct FRect {
-    float left;
-    float top;
-    float right;
-    float bottom;
-  };
-  /* nullopt means the whole buffer */
-  std::optional<FRect> f_rect;
+template <typename T>
+struct Rect {
+  T left;
+  T top;
+  T right;
+  T bottom;
+
+  T Width() const {
+    return right - left;
+  }
+
+  T Height() const {
+    return bottom - top;
+  }
 };
 
-struct IRect {
-  int32_t left;
-  int32_t top;
-  int32_t right;
-  int32_t bottom;
+using IRect = Rect<int32_t>;
+using FRect = Rect<float>;
+
+struct SrcRectInfo {
+  /* nullopt means the whole buffer */
+  std::optional<FRect> f_rect;
 };
 
 struct DstRectInfo {
@@ -87,13 +93,8 @@ struct PresentInfo {
     const auto &src = *source_crop.f_rect;
     const auto &dst = *display_frame.i_rect;
 
-    const float src_width = src.right - src.left;
-    const float src_height = src.bottom - src.top;
-
-    auto dest_width = float(dst.right - dst.left);
-    auto dest_height = float(dst.bottom - dst.top);
-
-    auto scaling = src_width != dest_width || src_height != dest_height;
+    auto scaling = src.Width() != static_cast<float>(dst.Width()) ||
+                   src.Height() != static_cast<float>(dst.Height());
     auto phasing = (src.left - std::floor(src.left) != 0) ||
                    (src.top - std::floor(src.top) != 0);
     return scaling || phasing;

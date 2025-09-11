@@ -1078,7 +1078,7 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
       m->eotf = 3;  // HLG
       break;
     default:
-      ALOGW("HDR type %d is not supported.", type);
+      ALOGW("HDR type %d is not supported.", static_cast<int>(type));
       return;
   }
 
@@ -1183,6 +1183,15 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
   }
 
   configs_.SanitizeGroups();
+}
+
+std::pair<uint32_t, uint32_t> HwcDisplay::GetSize() const {
+  const auto *config = GetNextConfig();
+  if (config == nullptr) {
+    return std::make_pair(0, 0);
+  }
+  return std::make_pair(config->mode.GetRawMode().hdisplay,
+                        config->mode.GetRawMode().vdisplay);
 }
 
 }  // namespace android::drm_hwcomposer

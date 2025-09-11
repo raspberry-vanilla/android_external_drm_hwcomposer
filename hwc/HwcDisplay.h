@@ -232,6 +232,8 @@ class HwcDisplay {
 
   bool NeedsClientLayerUpdate() const;
 
+  std::pair<uint32_t, uint32_t> GetSize() const;
+
  private:
   // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if
   // such AtomicCommitArgs cannot be created due to lack of drm resources or

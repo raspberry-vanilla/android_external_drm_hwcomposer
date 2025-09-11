@@ -1258,11 +1258,10 @@ static int32_t SetLayerSourceCrop(hwc2_device_t *device, hwc2_display_t display,
   GET_LAYER(layer);
 
   HwcLayer::LayerProperties layer_properties;
-  layer_properties.source_crop = {
-      .f_rect = SrcRectInfo::FRect{.left = crop.left,
-                                   .top = crop.top,
-                                   .right = crop.right,
-                                   .bottom = crop.bottom}};
+  layer_properties.source_crop = {.f_rect = FRect{.left = crop.left,
+                                                  .top = crop.top,
+                                                  .right = crop.right,
+                                                  .bottom = crop.bottom}};
   ilayer->SetLayerProperties(layer_properties);
 
   return 0;
