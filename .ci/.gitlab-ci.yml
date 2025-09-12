@@ -44,26 +44,39 @@ ubuntu/x86_64_aospless:
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_aospless.sh'
     HWC_TAG: $UBUNTU_AOSPLESS_TAG
 
-ubuntu/x86_64_android:
+ubuntu/x86_64_android_binaries:
+  extends:
+    - .ubuntu/x86_64_hwc
+  timeout: 2h
+  variables:
+    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android_binaries.sh'
+    HWC_TAG: $UBUNTU_ANDROID_BINARIES_TAG
+
+ubuntu/x86_64_android_tools:
   extends:
     - .ubuntu/x86_64_hwc
   timeout: 2h
   variables:
     ANDROID_VERSION: 16
-    ANDROID_CTS_DEVICE_ARCH: "x86"
     ANDROID_CTS_MODULES: >-
       CtsGraphicsTestCases
       CtsDisplayTestCases
     FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android_tools.sh'
+    HWC_TAG: $UBUNTU_ANDROID_TOOLS_TAG
+
+ubuntu/x86_64_android:
+  extends:
+    - .ubuntu/x86_64_hwc
+  variables:
+    FDO_DISTRIBUTION_VERSION: "22.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android.sh'
     HWC_TAG: $UBUNTU_ANDROID_TAG
-  after_script:
-    - cp /vts.log.txt "${CI_PROJECT_DIR}/vts.log.txt"
-  artifacts:
-    when: always
-    paths:
-      - "${CI_PROJECT_DIR}/vts.log.txt"
-    expire_in: 1 week
+  needs:
+  - job: debian/x86_64_cuttlefish
+  - job: ubuntu/x86_64_android_binaries
+  - job: ubuntu/x86_64_android_tools
 
 .set-image:
   extends:
@@ -78,7 +91,7 @@ ubuntu/x86_64_android:
     HWC_IMAGE: $UBUNTU_AOSPLESS_IMAGE
     HWC_TAG: $UBUNTU_AOSPLESS_TAG
   needs:
-    - ubuntu/x86_64_aospless
+    - job: ubuntu/x86_64_aospless
 
 .use-ubuntu/x86_64_android:
   extends:
@@ -88,21 +101,4 @@ ubuntu/x86_64_android:
     HWC_IMAGE: $UBUNTU_ANDROID_IMAGE
     HWC_TAG: $UBUNTU_ANDROID_TAG
   needs:
-    - ubuntu/x86_64_android
-
-use-debian/x86_64_cuttlefish:
-  extends:
-    - .fdo.container-build@debian
-    - .set-image
-  variables:
-    HWC_IMAGE: $DEBIAN_CUTTLEFISH_IMAGE
-    HWC_TAG: $DEBIAN_CUTTLEFISH_TAG
-  needs:
-    - debian/x86_64_cuttlefish
-  script:
-    - cp -a "/${CUTTLEFISH_TARBALL}" "${CI_PROJECT_DIR}"
-  artifacts:
-    when: always
-    paths:
-      - "${CI_PROJECT_DIR}/${CUTTLEFISH_TARBALL}"
-    expire_in: 1 week
+    - job: ubuntu/x86_64_android

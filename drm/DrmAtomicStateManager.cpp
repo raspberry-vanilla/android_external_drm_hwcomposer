@@ -442,6 +442,10 @@ DrmAtomicStateManager::GetAtomicModeReqForArgs(AtomicCommitArgs &args) {
     return nullptr;
   }
 
+  // Initialize to the current state, and update as needed with the below
+  // helpers.
+  atomic_request->new_frame_state = committed_frame_state_;
+
   if (!SetWriteBackFenceIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set writeback fence");
     return nullptr;

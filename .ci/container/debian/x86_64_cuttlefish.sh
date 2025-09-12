@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091 # no need to follow references to other shell scripts
-# Bump the DEBIAN_CUTTLEFISH_TAG for changes in this file to take effect.
+# For changes in this file to take effect, bump both:
+# DEBIAN_CUTTLEFISH_TAG and UBUNTU_ANDROID_TAG
 set -e
 
 function get_repo() {
@@ -33,18 +34,23 @@ function get_repo() {
 
 function my_atexit()
 {
+  set +e
   # This directory survives outside of the container, so use it for job artifacts
   mkdir -p "/cache/${CI_PROJECT_PATH}"
   gzip -c "/cuttlefish.log.txt" > "/cache/${CI_PROJECT_PATH}/cuttlefish.log.txt.gz" || true
   cp "/${CUTTLEFISH_TARBALL}" "/cache/${CI_PROJECT_PATH}/${CUTTLEFISH_TARBALL}" || true
 
-  apt remove -y "${EPHEMERAL_DEPS[@]}"
+  apt-get purge -y "${EPHEMERAL_DEPS[@]}"
+  apt-get autoremove -y
+  apt-get clean
 
   # clean up the container to avoid storing > 200GB
   rm --preserve-root "${TOP}" -rf
 
   # also remove uncompressed CUTTLEFISH_DIR to reduce container size by ~ 3GB
   rm --preserve-root "${CUTTLEFISH_DIR}" -rf
+  rm --preserve-root /root/\.* -rf
+  rm --preserve-root /tmp/* -rf
 }
 
 trap my_atexit EXIT
@@ -59,10 +65,18 @@ source "${FDO_CI_BASH_HELPERS}"
 EPHEMERAL_DEPS=(
   binutils
   bison
+  curl
   flex
+  git
   glslang-tools
+  gpg
+  gpg-agent
   libncurses5
   ninja-build
+  openssl
+  openssh-client
+  openssh-server
+  perl
   pkg-config
   pipx
   python3
@@ -72,6 +86,7 @@ EPHEMERAL_DEPS=(
   ssh
   time
   unzip
+  vim
   wget
   xz-utils
   zip
@@ -80,12 +95,7 @@ EPHEMERAL_DEPS=(
 
 DEPS=(
   ca-certificates
-  curl
-  git
-  gpg
-  gpg-agent
   sudo
-  vim
 )
 
 export DEBIAN_FRONTEND=noninteractive

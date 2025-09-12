@@ -14,7 +14,7 @@ source "${CI_PROJECT_DIR}/.ci/android/launch-cvd.sh"
 fdo_log_section_start_collapsed run_android_vts "run_android_vts"
 adb wait-for-device devices
 adb root
-adb push /VtsHalGraphicsComposer3_TargetTest /data/local/tmp/
+adb push "/${BINARIES_DIR}/VtsHalGraphicsComposer3_TargetTest" /data/local/tmp/
 adb shell stop surfaceflinger
 
 SKIP_FILE="${CI_PROJECT_DIR}/.ci/android/vts-skips.txt"

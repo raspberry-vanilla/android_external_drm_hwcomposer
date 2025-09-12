@@ -26,8 +26,21 @@ function my_atexit()
   exit $EXIT_CODE
 }
 
-# Cuttlefish is an artifact built earlier in the pipeline
-tar xf "${CI_PROJECT_DIR}/${CUTTLEFISH_TARBALL}" -C /
+fdo_log_section_start_collapsed get_cuttlefish "get_cuttlefish"
+tar xf "/${CUTTLEFISH_TARBALL}" -C /
+fdo_log_section_end get_cuttlefish
+
+fdo_log_section_start_collapsed get_tools "get_tools"
+tar xf "/${ANDROID_TOOLS_TARBALL}" -C /
+mv "/${BINARIES_DIR}/apexer" "/${TOOLS_DIR}/build-tools"
+fdo_log_section_end get_tools
+
+fdo_log_section_start_collapsed install_packages "install_packages"
+apt-get update
+apt-get upgrade -y
+apt-get install -y --allow-downgrades /"${TOOLS_DIR}"/cuttlefish-base_*.deb
+apt-get install -y --allow-downgrades /"${TOOLS_DIR}"/cuttlefish-user_*.deb
+fdo_log_section_end install_packages
 
 export PATH=/cuttlefish/bin:/android-tools/android-cts/jdk/bin/:/android-tools/build-tools:$PATH
 
@@ -105,7 +118,7 @@ cp /old_apex/apex_manifest.pb /new_apex/
 cp /old_apex/apex_build_info.pb /new_apex/
 
 mkdir -p "${PWD}"/prebuilts/sdk/current/public/
-cp /android.jar "${PWD}"/prebuilts/sdk/current/public/
+cp "/${BINARIES_DIR}/android.jar" "${PWD}"/prebuilts/sdk/current/public/
 
 apexer \
   --build_info /new_apex/apex_build_info.pb \
