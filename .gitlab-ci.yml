@@ -96,7 +96,7 @@ android-vts:
   extends:
     .use-ubuntu/x86_64_android
   script:
-    - "${CI_PROJECT_DIR}/.ci/android/vts-runner.sh"
+    - "${CI_PROJECT_DIR}/.ci/android/android-vts.sh"
   needs:
     - job: build_x86_64
       artifacts: true
@@ -115,6 +115,60 @@ vkms-hotplugs:
     .use-ubuntu/x86_64_android
   script:
     - "${CI_PROJECT_DIR}/.ci/android/vkms-hotplugs.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-multi-display:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/multi-display.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-headless:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/headless.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-writeback:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/writeback.sh"
   needs:
     - job: build_x86_64
       artifacts: true

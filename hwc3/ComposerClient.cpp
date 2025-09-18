@@ -621,6 +621,13 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
     return;
   }
 
+  if (command.luts) {
+    ALOGI("setLayerLuts unsupported: display=%lld layer=%lld",
+          (long long)display_handle, (long long)command.layer);
+    cmd_result_writer_->AddError(hwc3::Error::kUnsupported);
+    return;
+  }
+
   // If the requested composition type is not supported, the HWC should return
   // an error and not process any further commands.
   if (!IsSupportedCompositionType(command.composition)) {
@@ -1157,9 +1164,10 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
                                                   ->GetWritebackBufferFence();
   display->SetWritebackEnabled(false);
   display->GetWritebackLayer()->ClearSlots();
+
   if (!fence) {
     ALOGE("ComposerClient: Failed to get readback buffer fence");
-    return ToBinderStatus(hwc3::Error::kBadParameter);
+    return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
   if (fence && *fence >= 0) {

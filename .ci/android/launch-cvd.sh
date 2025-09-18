@@ -70,17 +70,13 @@ HOME=/cuttlefish launch_cvd \
   -blank_data_image_mb 65536 \
   -enable_audio=false \
   -enable-sandbox=false \
-  -enable_modem_simulator=false \
+  -enable_modem_simulator=true \
   -vsock_guest_cid=$VSOCK_CID \
   -cpus="${FDO_CI_CONCURRENT:-4}" \
   -extra_bootconfig_args="androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer"
 
 while [ "$(adb shell dumpsys -l | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
 adb shell dumpsys SurfaceFlinger | grep GLES
-
-# Wait for drmhwc to start up
-while [ "$(adb logcat -d | grep -i hwc | grep -i ActivityManager)" = "" ] ; do sleep 1; done
-adb logcat -d | grep -i hwc
 
 adb logcat -d | grep -i vkms
 echo "Running ro.build.version.sdk: $(adb shell getprop ro.build.version.sdk)"
@@ -151,9 +147,6 @@ adb install --force-non-staged /new_apex/com.android.hardware.graphics.composer.
 adb logcat -c
 adb reboot
 adb wait-for-device devices
-while [ "$(adb logcat -d | grep -i hwc | grep -i ActivityManager)" = "" ] ; do sleep 1; done
-adb logcat -d | grep -i hwc
-
 fdo_log_section_end push_new_apex
 
 # If this service is missing, cts-tradefed will fail device pretests
