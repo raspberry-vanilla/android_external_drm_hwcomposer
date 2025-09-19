@@ -91,6 +91,10 @@ void ResourceManager::Init() {
     return;
   }
 
+  for (auto &drm : drms_) {
+    drm->ResetConnectorsAndCrtcs();
+  }
+
   uevent_listener_->RegisterHotplugHandler([this] {
     const std::unique_lock lock(GetMainLock());
     for (auto &drm : drms_) {

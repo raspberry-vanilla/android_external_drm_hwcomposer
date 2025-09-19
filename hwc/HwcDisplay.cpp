@@ -385,6 +385,13 @@ auto HwcDisplay::PresentStagedComposition(
 
   ++total_stats_.total_frames;
 
+  // With multiple displays configured at differet refresh rates,
+  // desired_present_time can be up to almost 2 vsync periods away for the
+  // slower display. WaitLastFrame() should be called before
+  // WaitForPresenttime(), otherwise  can lead to a situation where hwc sleeps
+  // for up to 1.25 vsync period and blocks viable presents in SurfaceFlinger.
+  GetPipe().atomic_state_manager->WaitLastFrame();
+
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
     // DRM atomic uAPI does not support specifying that a commit should be

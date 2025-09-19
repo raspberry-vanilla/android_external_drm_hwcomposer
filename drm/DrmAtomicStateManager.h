@@ -77,6 +77,8 @@ class DrmAtomicStateManager {
     cv_.notify_all();
   }
 
+  void WaitLastFrame();
+
  private:
   // Collection of kms objects that were committed to the kernel. There must be
   // a userspace handle to keep these from being removed/unregistered until the
@@ -135,7 +137,6 @@ class DrmAtomicStateManager {
   KmsState committed_frame_state_;
   DstRectInfo whole_display_rect_{};
 
-  void WaitLastFrame();
   void CleanFailedCommit();
   bool SetWriteBackFenceIfNeeded(const AtomicCommitArgs &args,
                                  AtomicRequest &request);

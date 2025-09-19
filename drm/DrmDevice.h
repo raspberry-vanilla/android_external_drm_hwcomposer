@@ -114,6 +114,7 @@ class DrmDevice {
   }
 
   auto RefreshConnectors() -> void;
+  auto ResetConnectorsAndCrtcs() -> void;
 
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);

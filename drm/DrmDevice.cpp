@@ -299,6 +299,35 @@ auto DrmDevice::RefreshConnectors() -> void {
   }
 }
 
+auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
+  auto pset = MakeDrmModeAtomicReqUnique();
+  if (!pset) {
+    ALOGE("Failed to allocate property set");
+    return;
+  }
+  for (const auto &conn : connectors_) {
+    if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
+      ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
+      return;
+    }
+  }
+  for (const auto &crtc : crtcs_) {
+    if (!crtc->GetModeProperty().AtomicSet(*pset.get(), 0) ||
+        !crtc->GetActiveProperty().AtomicSet(*pset.get(), 0)) {
+      ALOGE(
+          "Failed to set Mode Property or Active Property to Null for CRTC = "
+          "%d",
+          crtc->GetId());
+      return;
+    }
+  }
+  auto err = drmModeAtomicCommit(*GetFd(), pset.get(),
+                                 DRM_MODE_ATOMIC_ALLOW_MODESET, this);
+  if (err != 0) {
+    ALOGE("Failed to commit pset ret=%d", err);
+  }
+}
+
 auto DrmDevice::GetPlanes() -> const std::vector<std::unique_ptr<DrmPlane>> & {
   return planes_;
 }
