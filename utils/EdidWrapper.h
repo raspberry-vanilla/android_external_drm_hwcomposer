@@ -28,7 +28,7 @@ extern "C" {
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmUnique.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 // Stub wrapper class for edid parsing
 class EdidWrapper {
@@ -84,4 +84,4 @@ class LibdisplayEdidWrapper final : public EdidWrapper {
 };
 #endif
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

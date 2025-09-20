@@ -21,7 +21,7 @@
 #include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmHwc : public PipelineToFrontendBindingInterface,
                public CompositionStatsProvider {
@@ -100,4 +100,5 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
   CompositionStatsTracker dump_stats_tracker_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

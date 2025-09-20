@@ -19,7 +19,7 @@
 #include "BackendManager.h"
 #include "hwc/HwcDisplay.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto BackendClient::ValidateDisplay(HwcDisplay* display)
     -> ValidatedComposition {
@@ -31,4 +31,4 @@ auto BackendClient::ValidateDisplay(HwcDisplay* display)
 REGISTER_BACKEND("client", BackendClient);
 // clang-format on
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

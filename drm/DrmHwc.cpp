@@ -24,7 +24,8 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
+
 namespace {
 // Helper functions for implementing dumpsys support.
 std::string DumpStats(const CompositionStats &stats) {
@@ -249,4 +250,4 @@ void DrmHwc::DeinitDisplays() {
   }
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

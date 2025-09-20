@@ -29,25 +29,7 @@
 #include "drm/ResourceManager.h"
 #include "drm/VSyncWorker.h"
 
-namespace android {
-
-// Collection of kms objects that were committed to the kernel. There must be
-// a userspace handle to keep these from being removed/unregistered until the
-// commit that used them is no longer being presented.
-struct KmsObjects {
-  /* We have to hold a reference to framebuffer while displaying it ,
-   * otherwise picture will blink */
-  std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
-  std::vector<DrmModeUserPropertyBlobUnique> blobs;
-};
-
-struct KmsState {
-  /* Required to cleanup unused planes */
-  std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
-
-  /* To avoid setting the inactive state twice, which will fail the commit */
-  bool crtc_active_state{};
-};
+namespace android::drm_hwcomposer {
 
 struct AtomicCommitArgs {
   /* inputs. All fields are optional, but at least one has to be specified */
@@ -68,15 +50,8 @@ struct AtomicCommitArgs {
   SharedFd writeback_release_fence;
 
   /* out */
-  KmsState new_frame_state;
-  KmsObjects used_kms_objects;
   SharedFd out_writeback_complete_fence;
   SharedFd out_fence;
-  // Shared FD can't be initiallized to an invalid value, for now we keep
-  // the address separate from the FD for initialization.
-  // TODO: look into adding support for invalid fences.
-  int wb_fence_address = -1;
-  int out_fence_address = -1;
 
   /* helpers */
   auto HasInputs() const -> bool {
@@ -94,8 +69,6 @@ class DrmAtomicStateManager {
   bool ExecuteAtomicCommit(AtomicCommitArgs &args);
   auto ActivateDisplayUsingDPMS() -> int;
 
-  void CleanFailedCommit();
-
   void StopThread() {
     {
       const std::lock_guard lock(mutex_);
@@ -104,7 +77,53 @@ class DrmAtomicStateManager {
     cv_.notify_all();
   }
 
+  void WaitLastFrame();
+
  private:
+  // Collection of kms objects that were committed to the kernel. There must be
+  // a userspace handle to keep these from being removed/unregistered until the
+  // commit that used them is no longer being presented.
+  struct KmsObjects {
+    /* We have to hold a reference to framebuffer while displaying it ,
+     * otherwise picture will blink */
+    std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
+    std::vector<DrmModeUserPropertyBlobUnique> blobs;
+  };
+
+  // State of the driver after a commit.
+  struct KmsState {
+    /* Required to cleanup unused planes */
+    std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
+
+    /* To avoid setting the inactive state twice, which will fail the commit */
+    bool crtc_active_state{};
+  };
+
+  // State for a pending atomic request. Includes the pending kms objects and
+  // resulting state of the driver. Since the AtomicRequest might include
+  // properties that reference memory addresses, this struct must not be moved
+  // or copied.
+  struct AtomicRequest {
+    AtomicRequest() = default;
+
+    DrmModeAtomicReqUnique property_set;
+
+    // Properties in the property set may reference the memory addresses of
+    // these struct members.
+    int wb_fence_address = -1;
+    int out_fence_address = -1;
+
+    KmsObjects used_kms_objects;
+    KmsState new_frame_state;
+
+    // Make this struct non-copyable and non-movable to avoid dangling
+    // references to struct member addresses.
+    AtomicRequest(const AtomicRequest &) = delete;
+    AtomicRequest &operator=(const AtomicRequest &) = delete;
+    AtomicRequest(AtomicRequest &&) = delete;
+    AtomicRequest &operator=(AtomicRequest &&) = delete;
+  };
+
   void ThreadFn();
 
   DrmAtomicStateManager() = default;
@@ -118,22 +137,27 @@ class DrmAtomicStateManager {
   KmsState committed_frame_state_;
   DstRectInfo whole_display_rect_{};
 
-  void WaitLastFrame();
-  bool SetWriteBackFenceIfNeeded(drmModeAtomicReq *pset,
-                                 AtomicCommitArgs &args);
-  bool SetOutputFence(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetActiveIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetDisplayModeIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetCtmIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetColorSpaceIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetContentTypeIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetHdrMetadataIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetMinBpcIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
-  bool SetCompositionIfNeeded(drmModeAtomicReq *pset, AtomicCommitArgs &args);
+  void CleanFailedCommit();
+  bool SetWriteBackFenceIfNeeded(const AtomicCommitArgs &args,
+                                 AtomicRequest &request);
+  bool SetOutputFence(AtomicRequest &request);
+  bool SetActiveIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+  bool SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
+                              AtomicRequest &request);
+  bool SetCtmIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+  bool SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
+                             AtomicRequest &request);
+  bool SetContentTypeIfNeeded(const AtomicCommitArgs &args,
+                              AtomicRequest &request);
+  bool SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
+                              AtomicRequest &request);
+  bool SetMinBpcIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+  bool SetCompositionIfNeeded(const AtomicCommitArgs &args,
+                              AtomicRequest &request);
 
-  DrmModeAtomicReqUnique GetAtomicModeReqForArgs(AtomicCommitArgs &args);
-  static void CheckDoubleSettingState(AtomicCommitArgs &args,
-                                      bool crtc_is_active);
+  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
+      AtomicCommitArgs &args);
+  void CheckDoubleSettingState(AtomicCommitArgs &args) const;
 
   std::thread thread_;
   std::condition_variable cv_;
@@ -151,4 +175,4 @@ class DrmAtomicStateManager {
   int frames_tracked_ GUARDED_BY(mutex_){};
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

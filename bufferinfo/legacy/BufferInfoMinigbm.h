@@ -20,7 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoMinigbm : public LegacyBufferInfoGetter {
  public:
@@ -29,4 +29,4 @@ class BufferInfoMinigbm : public LegacyBufferInfoGetter {
   int ValidateGralloc() override;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

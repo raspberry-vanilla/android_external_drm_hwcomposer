@@ -16,7 +16,7 @@
 
 #include "stats/CompositionStats.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 CompositionStats operator-(const CompositionStats& a,
                            const CompositionStats& b) {
@@ -39,4 +39,4 @@ void CompositionStatsTracker::ReportStats(const Callback& callback) {
   previous_stats_ = new_stats;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -21,7 +21,7 @@
 
 #include "compositor/LayerData.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 struct DrmKmsPlan;
 class HwcDisplay;
@@ -53,9 +53,9 @@ class Backend {
   static ValidatedComposition GetFlattenedComposition(
       const std::vector<const HwcLayer*>& layers);
   static bool HardwareSupportsLayerType(CompositionType comp_type);
+  static uint32_t CalcPixOps(const ValidatedComposition& validated_composition);
   static uint32_t CalcPixOps(const std::vector<const HwcLayer*>& layers,
-                             size_t first_z, size_t size,
-                             std::pair<uint32_t, uint32_t> display_size);
+                             size_t first_z, size_t size);
   static CompositionTypeMap GetCompositionTypes(
       const std::vector<const HwcLayer*>& layers, size_t client_first_z,
       size_t client_size, bool use_cursor_plane);
@@ -63,4 +63,5 @@ class Backend {
       const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
       size_t client_start, size_t client_size, bool use_cursor_plane);
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

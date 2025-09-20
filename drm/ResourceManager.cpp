@@ -32,7 +32,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 ResourceManager::ResourceManager(
     PipelineToFrontendBindingInterface *p2f_bind_interface)
@@ -89,6 +89,10 @@ void ResourceManager::Init() {
   if (BufferInfoGetter::GetInstance() == nullptr) {
     ALOGE("Failed to initialize BufferInfoGetter");
     return;
+  }
+
+  for (auto &drm : drms_) {
+    drm->ResetConnectorsAndCrtcs();
   }
 
   uevent_listener_->RegisterHotplugHandler([this] {
@@ -222,4 +226,4 @@ auto ResourceManager::GetWritebackConnectorsCount() -> uint32_t {
   return count;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

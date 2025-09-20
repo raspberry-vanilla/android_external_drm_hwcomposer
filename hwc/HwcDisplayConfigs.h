@@ -20,7 +20,7 @@
 
 #include "drm/DrmMode.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 using ConfigId = int32_t;
 
@@ -69,4 +69,4 @@ struct HwcDisplayConfigs {
   uint32_t mm_height = 0;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

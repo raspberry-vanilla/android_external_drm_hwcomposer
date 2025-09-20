@@ -20,7 +20,7 @@
 
 #include "drm/DrmHwc.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmHwcTwo : public DrmHwc {
  public:
@@ -54,4 +54,5 @@ class DrmHwcTwo : public DrmHwc {
 
   std::string last_state_dump_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

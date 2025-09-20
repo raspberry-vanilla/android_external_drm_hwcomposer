@@ -21,6 +21,8 @@
 #include <functional>
 #include <memory>
 
+namespace android::drm_hwcomposer {
+
 template <typename T>
 using DUniquePtr = std::unique_ptr<T, std::function<void(T *)>>;
 
@@ -82,3 +84,5 @@ auto inline MakeDrmModeResUnique(int fd) {
   return DrmModeResUnique(drmModeGetResources(fd),
                           [](drmModeRes *it) { drmModeFreeResources(it); });
 }
+
+}  // namespace android::drm_hwcomposer

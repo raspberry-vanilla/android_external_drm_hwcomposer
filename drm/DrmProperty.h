@@ -29,7 +29,7 @@
 #include "utils/fd.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmProperty {
  public:
@@ -183,4 +183,4 @@ bool DrmProperty::GetBlobData(std::vector<T> &data_out) const {
   return true;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

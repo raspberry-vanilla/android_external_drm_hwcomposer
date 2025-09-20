@@ -24,7 +24,7 @@
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 namespace {
 
@@ -38,16 +38,6 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
     return nullptr;
   }
   return *it;
-}
-
-std::pair<uint32_t, uint32_t> GetDisplaySize(const HwcDisplay *display) {
-  const auto *config = display->GetNextConfig();
-  if (config == nullptr) {
-    return std::make_pair(0, 0);
-  }
-
-  return std::make_pair(config->mode.GetRawMode().hdisplay,
-                        config->mode.GetRawMode().vdisplay);
 }
 
 }  // namespace
@@ -69,21 +59,27 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
     }
   }
 
-  size_t client_start = 0;
-  size_t client_size = 0;
+  bool use_cursor_plane = false;
   const auto* cursor_layer = GetCursorLayer(layers);
   auto cursor_plane = display->GetPipe().GetUsablePlanes().second;
-  bool use_cursor_plane = cursor_layer != nullptr && cursor_plane != nullptr &&
-                          !IsClientLayer(display, cursor_layer) &&
-                          cursor_plane->Get()->IsValidForLayer(
-                              &cursor_layer->GetLayerData());
+  if (cursor_layer != nullptr && cursor_plane != nullptr &&
+      !IsClientLayer(display, cursor_layer) &&
+      cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData())) {
+    // Create and test a composition using only cursor plane and all other
+    // layers client-composited to infer whether the cursor plane can be used.
+    ValidatedComposition cursor_composition{
+        .composition_types = GetCompositionTypes(layers, 0, layers.size() - 1,
+                                                 /*use_cursor_plane=*/true)};
+    use_cursor_plane = display->TestComposition(cursor_composition);
+  }
+
+  size_t client_start = 0;
+  size_t client_size = 0;
   ValidatedComposition validated_composition;
 
-  // Validates layers and creates a test composition, returning whether it
+  // Populates and tests |validated_composition|, returning whether it
   // succeeded.
   auto validate_and_test = [&]() -> bool {
-    std::tie(client_start, client_size) = GetClientLayers(display, layers,
-                                                          use_cursor_plane);
     validated_composition
         .composition_types = GetCompositionTypes(layers, client_start,
                                                  client_size, use_cursor_plane);
@@ -93,30 +89,43 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
       return display->TestComposition(validated_composition);
     }
 
+    // Reset the plan in case it was set during a previous test.
+    validated_composition.composition_plan = std::make_shared<DrmKmsPlan>();
+
     return true;
   };
 
   // Initial composition attempt.
+  std::tie(client_start, client_size) = GetClientLayers(display, layers,
+                                                        use_cursor_plane);
   bool success = validate_and_test();
 
-  // First fallback: convert cursor layer to device composition and reattempt.
-  if (!success && use_cursor_plane) {
-    ++display->total_stats().failed_kms_cursor_validate;
-    use_cursor_plane = false;
-    success = validate_and_test();
+  // Cursor fallback: convert all non-cursor layers to client composition and
+  // reattempt. (Cursor layer is preserved as _either_ cursor _or_ device
+  // composited.)
+  if (!success && cursor_layer != nullptr) {
+    if (layers.back()->GetSfType() != CompositionType::kCursor) {
+      ALOGE("Cursor layer was not found at highest z-order");
+      // Continue to next fallback.
+    } else {
+      client_start = 0;
+      client_size = layers.size() - 1;
+      success = validate_and_test();
+    }
   }
 
   // Final fallback: convert all layers to client composition.
   if (!success) {
     ++display->total_stats().failed_kms_validate;
+    if (use_cursor_plane) {
+      ++display->total_stats().failed_kms_cursor_validate;
+    }
+    use_cursor_plane = false;
     validated_composition = GetFlattenedComposition(layers);
   }
 
-  display->total_stats().gpu_pixops += CalcPixOps(layers, client_start,
-                                                  client_size,
-                                                  GetDisplaySize(display));
-  display->total_stats().total_pixops += CalcPixOps(layers, 0, layers.size(),
-                                                    GetDisplaySize(display));
+  display->total_stats().gpu_pixops += CalcPixOps(validated_composition);
+  display->total_stats().total_pixops += CalcPixOps(layers, 0, layers.size());
   if (use_cursor_plane) {
     ++display->total_stats().cursor_plane_frames;
   }
@@ -161,24 +170,26 @@ bool Backend::HardwareSupportsLayerType(CompositionType comp_type) {
          comp_type == CompositionType::kCursor;
 }
 
+uint32_t Backend::CalcPixOps(
+    const ValidatedComposition& validated_composition) {
+  uint32_t pixops = 0;
+  for (const auto& [layer, comp_type] :
+       validated_composition.composition_types) {
+    if (comp_type == CompositionType::kClient) {
+      pixops += layer->GetPixOps();
+    }
+  }
+  return pixops;
+}
+
 uint32_t Backend::CalcPixOps(const std::vector<const HwcLayer*>& layers,
-                             size_t first_z, size_t size,
-                             std::pair<uint32_t, uint32_t> display_size) {
-  uint32_t whole_display = display_size.first * display_size.second;
+                             size_t first_z, size_t size) {
   uint32_t pixops = 0;
   ALOGE_IF(first_z + size > layers.size(),
            "CalcPixOps provided range outside of layers");
   for (size_t z_order = first_z;
        z_order < std::min(first_z + size, layers.size()); ++z_order) {
-    const auto* layer = layers[z_order];
-    const auto& df = layer->GetLayerData().pi.display_frame;
-    if (df.i_rect.has_value()) {
-      pixops += (df.i_rect->right - df.i_rect->left) *
-                (df.i_rect->bottom - df.i_rect->top);
-    } else {
-      // nullopt frame rect means whole display.
-      pixops += whole_display;
-    }
+    pixops += layers[z_order]->GetPixOps();
   }
   return pixops;
 }
@@ -256,8 +267,7 @@ std::tuple<size_t, size_t> Backend::GetExtraClientRange(
     // fewest GPU pixops.
     uint32_t gpu_pixops = UINT32_MAX;
     for (size_t i = 0; i < steps; i++) {
-      const uint32_t po = CalcPixOps(layers, start + i, client_size,
-                                     GetDisplaySize(display));
+      const uint32_t po = CalcPixOps(layers, start + i, client_size);
       if (po < gpu_pixops) {
         gpu_pixops = po;
         client_start = start + i;
@@ -273,4 +283,4 @@ std::tuple<size_t, size_t> Backend::GetExtraClientRange(
 REGISTER_BACKEND("generic", Backend);
 // clang-format on
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

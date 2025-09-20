@@ -18,7 +18,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoMapperMetadata : public BufferInfoGetter {
  public:
@@ -30,4 +30,5 @@ class BufferInfoMapperMetadata : public BufferInfoGetter {
 
   static BufferInfoGetter *CreateInstance();
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

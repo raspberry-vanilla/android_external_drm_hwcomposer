@@ -33,7 +33,7 @@
 #include "drm/DrmUnique.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto DrmAtomicStateManager::CreateInstance(DrmDisplayPipeline *pipe)
     -> std::shared_ptr<DrmAtomicStateManager> {
@@ -92,20 +92,23 @@ void DrmAtomicStateManager::CleanFailedCommit() {
 bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_CALL();
-  // new_frame_state is initialized to the current frame state and may be
-  // modified below.
-  args.new_frame_state = committed_frame_state_;
-  args.used_kms_objects = {};
 
-  CheckDoubleSettingState(args, args.new_frame_state.crtc_active_state);
+  // Clear args.active if it's a no-op.
+  CheckDoubleSettingState(args);
 
   if (!args.HasInputs()) {
     /* nothing to do */
     return true;
   }
 
-  auto pset = GetAtomicModeReqForArgs(args);
-  if (!pset) {
+  if (!committed_frame_state_.crtc_active_state) {
+    // Force args.active if the display is not active and there are other
+    // things to commit.
+    args.active = true;
+  }
+
+  auto atomic_request = GetAtomicModeReqForArgs(args);
+  if (!atomic_request) {
     ALOGE("Failed to get property set");
     return false;
   }
@@ -116,7 +119,8 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
   auto *drm = pipe_->device;
 
   if (args.test_only) {
-    auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
+    auto err = drmModeAtomicCommit(*drm->GetFd(),
+                                   atomic_request->property_set.get(),
                                    flags | DRM_MODE_ATOMIC_TEST_ONLY, drm);
 
     ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
@@ -130,14 +134,16 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
   bool nonblock = !args.blocking && !args.active;
 
   flags |= nonblock ? DRM_MODE_ATOMIC_NONBLOCK : 0U;
-  auto err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
+  auto err = drmModeAtomicCommit(*drm->GetFd(),
+                                 atomic_request->property_set.get(), flags,
+                                 drm);
   if (err != 0 && args.seamless) {
     ALOGE(
         "Seamless commit failed, retrying a full modeset (visual artifacts may "
         "be observed). Error: %s",
         strerror_r(errno, err_buf, error_buf_max_size));
 
-    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
+    err = drmModeAtomicCommit(*drm->GetFd(), atomic_request->property_set.get(),
                               flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
   }
 
@@ -147,14 +153,15 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
     return false;
   }
 
-  args.out_fence = MakeSharedFd(args.out_fence_address);
+  args.out_fence = MakeSharedFd(atomic_request->out_fence_address);
 
   // Store the writeback fence if this operation used a writeback connector
   if (pipe_->writeback_connector && args.writeback_fb) {
-    args.out_writeback_complete_fence = MakeSharedFd(args.wb_fence_address);
+    args.out_writeback_complete_fence = MakeSharedFd(
+        atomic_request->wb_fence_address);
   }
 
-  committed_frame_state_ = std::move(args.new_frame_state);
+  committed_frame_state_ = std::move(atomic_request->new_frame_state);
 
   if (args.display_mode) {
     auto raw_mode = args.display_mode.value().GetRawMode();
@@ -165,7 +172,7 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
     {
       const std::lock_guard lock(mutex_);
       last_present_fence_ = args.out_fence;
-      frame_objects_.emplace(std::move(args.used_kms_objects));
+      frame_objects_.emplace(std::move(atomic_request->used_kms_objects));
       frames_staged_++;
     }
     cv_.notify_all();
@@ -173,22 +180,22 @@ bool DrmAtomicStateManager::CommitFrame(AtomicCommitArgs &args) {
     const std::lock_guard lock(mutex_);
     last_present_fence_ = {};
     frame_objects_ = {};
-    frame_objects_.emplace(std::move(args.used_kms_objects));
+    frame_objects_.emplace(std::move(atomic_request->used_kms_objects));
   }
 
   return true;
 }
 
-void DrmAtomicStateManager::CheckDoubleSettingState(AtomicCommitArgs &args,
-                                                    bool crtc_is_active) {
-  if (args.active && *args.active == crtc_is_active) {
+void DrmAtomicStateManager::CheckDoubleSettingState(
+    AtomicCommitArgs &args) const {
+  if (args.active && *args.active == committed_frame_state_.crtc_active_state) {
     /* Don't set the same state twice */
     args.active.reset();
   }
 }
 
-bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(drmModeAtomicReq *pset,
-                                                      AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(
+    const AtomicCommitArgs &args, AtomicRequest &request) {
   if (!pipe_->writeback_connector || !args.writeback_fb) {
     return true;
   }
@@ -196,21 +203,22 @@ bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(drmModeAtomicReq *pset,
 
   if (!pipe_->writeback_connector->Get()
            ->GetCrtcIdProperty()
-           .AtomicSet(*pset, crtc->GetId())) {
+           .AtomicSet(*request.property_set, crtc->GetId())) {
     ALOGE("DrmAtomicStateManager: Failed to set writeback CRTC_ID property");
     return false;
   }
 
   if (!pipe_->writeback_connector->Get()
            ->GetWritebackFbIdProperty()
-           .AtomicSet(*pset, args.writeback_fb->GetFbId())) {
+           .AtomicSet(*request.property_set, args.writeback_fb->GetFbId())) {
     ALOGE("DrmAtomicStateManager: Failed to set writeback FB_ID property");
     return false;
   }
 
   if (!pipe_->writeback_connector->Get()
            ->GetWritebackOutFenceProperty()
-           .AtomicSet(*pset, uint64_t(&args.wb_fence_address))) {
+           .AtomicSet(*request.property_set,
+                      uint64_t(&request.wb_fence_address))) {
     ALOGE(
         "DrmAtomicStateManager: Failed to set writeback OUT_FENCE_PTR "
         "property");
@@ -220,36 +228,35 @@ bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(drmModeAtomicReq *pset,
   // Wait on input fence if provided
   if (args.writeback_release_fence) {
     sync_wait(*args.writeback_release_fence, -1);
-    args.writeback_release_fence.reset();
   }
 
   return true;
 }
 
-bool DrmAtomicStateManager::SetOutputFence(drmModeAtomicReq *pset,
-                                           AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetOutputFence(AtomicRequest &request) {
   auto *crtc = pipe_->crtc->Get();
 
-  return crtc->GetOutFencePtrProperty().AtomicSet(*pset,
-                                                  uint64_t(
-                                                      &args.out_fence_address));
+  return crtc->GetOutFencePtrProperty()
+      .AtomicSet(*request.property_set, uint64_t(&request.out_fence_address));
 }
 
-bool DrmAtomicStateManager::SetActiveIfNeeded(drmModeAtomicReq *pset,
-                                              AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
+                                              AtomicRequest &request) {
   if (!args.active) {
     return true;
   }
   auto *crtc = pipe_->crtc->Get();
   auto *connector = pipe_->connector->Get();
-  args.new_frame_state.crtc_active_state = *args.active;
-  if (!crtc->GetActiveProperty().AtomicSet(*pset, *args.active ? 1 : 0) ||
-      !connector->GetCrtcIdProperty().AtomicSet(*pset, crtc->GetId())) {
+  request.new_frame_state.crtc_active_state = *args.active;
+  if (!crtc->GetActiveProperty().AtomicSet(*request.property_set,
+                                           *args.active ? 1 : 0) ||
+      !connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
+                                                crtc->GetId())) {
     return false;
   }
   if (!*args.active && args.teardown) {
-    if (!connector->GetCrtcIdProperty().AtomicSet(*pset, 0) ||
-        !crtc->GetModeProperty().AtomicSet(*pset, 0)) {
+    if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0) ||
+        !crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
       return false;
     }
   }
@@ -257,8 +264,8 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(drmModeAtomicReq *pset,
   return true;
 }
 
-bool DrmAtomicStateManager::SetDisplayModeIfNeeded(drmModeAtomicReq *pset,
-                                                   AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
+                                                   AtomicRequest &request) {
   if (!args.display_mode) {
     return true;
   }
@@ -272,15 +279,15 @@ bool DrmAtomicStateManager::SetDisplayModeIfNeeded(drmModeAtomicReq *pset,
   }
 
   auto *crtc = pipe_->crtc->Get();
-  if (!crtc->GetModeProperty().AtomicSet(*pset, *mode_blob)) {
+  if (!crtc->GetModeProperty().AtomicSet(*request.property_set, *mode_blob)) {
     return false;
   }
-  args.used_kms_objects.blobs.emplace_back(std::move(mode_blob));
+  request.used_kms_objects.blobs.emplace_back(std::move(mode_blob));
   return true;
 }
 
-bool DrmAtomicStateManager::SetCtmIfNeeded(drmModeAtomicReq *pset,
-                                           AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
+                                           AtomicRequest &request) {
   auto *crtc = pipe_->crtc->Get();
   if (!args.color_matrix || !crtc->GetCtmProperty()) {
     return true;
@@ -294,39 +301,39 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(drmModeAtomicReq *pset,
     return false;
   }
 
-  if (!crtc->GetCtmProperty().AtomicSet(*pset, *ctm_blob)) {
+  if (!crtc->GetCtmProperty().AtomicSet(*request.property_set, *ctm_blob)) {
     return false;
   }
 
-  args.used_kms_objects.blobs.emplace_back(std::move(ctm_blob));
+  request.used_kms_objects.blobs.emplace_back(std::move(ctm_blob));
   return true;
 }
 
-bool DrmAtomicStateManager::SetColorSpaceIfNeeded(drmModeAtomicReq *pset,
-                                                  AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
+                                                  AtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
   if (!args.colorspace || !connector->GetColorspaceProperty()) {
     return true;
   }
 
   return connector->GetColorspaceProperty()
-      .AtomicSet(*pset,
+      .AtomicSet(*request.property_set,
                  connector->GetColorspacePropertyValue(*args.colorspace));
 }
 
-bool DrmAtomicStateManager::SetContentTypeIfNeeded(drmModeAtomicReq *pset,
-                                                   AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
+                                                   AtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
   if (!args.content_type || !connector->GetContentTypeProperty()) {
     return true;
   }
-  return connector->GetContentTypeProperty().AtomicSet(*pset,
+  return connector->GetContentTypeProperty().AtomicSet(*request.property_set,
                                                        static_cast<uint64_t>(
                                                            *args.content_type));
 }
 
-bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(drmModeAtomicReq *pset,
-                                                   AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
+                                                   AtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
   if (!args.hdr_metadata || !connector->GetHdrOutputMetadataProperty()) {
     return true;
@@ -342,16 +349,16 @@ bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(drmModeAtomicReq *pset,
   }
 
   if (!connector->GetHdrOutputMetadataProperty()
-           .AtomicSet(*pset, *hdr_metadata_blob)) {
+           .AtomicSet(*request.property_set, *hdr_metadata_blob)) {
     return false;
   }
-  args.used_kms_objects.blobs.emplace_back(std::move(hdr_metadata_blob));
+  request.used_kms_objects.blobs.emplace_back(std::move(hdr_metadata_blob));
 
   return true;
 }
 
-bool DrmAtomicStateManager::SetMinBpcIfNeeded(drmModeAtomicReq *pset,
-                                              AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
+                                              AtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
   if (!args.min_bpc || !connector->GetMinBpcProperty()) {
     return true;
@@ -374,24 +381,28 @@ bool DrmAtomicStateManager::SetMinBpcIfNeeded(drmModeAtomicReq *pset,
   int32_t min_bpc_val = std::max(args.min_bpc.value(),
                                  static_cast<int32_t>(range_min));
   min_bpc_val = std::min(min_bpc_val, static_cast<int32_t>(range_max));
-  return connector->GetMinBpcProperty().AtomicSet(*pset, min_bpc_val);
+  return connector->GetMinBpcProperty().AtomicSet(*request.property_set,
+                                                  min_bpc_val);
 }
 
-bool DrmAtomicStateManager::SetCompositionIfNeeded(drmModeAtomicReq *pset,
-                                                   AtomicCommitArgs &args) {
+bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
+                                                   AtomicRequest &request) {
   if (!args.composition) {
     return true;
   }
 
-  auto unused_planes = args.new_frame_state.used_planes;
-  args.new_frame_state.used_planes.clear();
+  // Initialize the list of unused planes to all the planes used in the
+  // previous frame.
+  auto unused_planes = committed_frame_state_.used_planes;
+  // Clear the list of planes for the next frame. It will be repopulated below.
+  request.new_frame_state.used_planes.clear();
 
   for (auto &joining : args.composition->plan) {
     DrmPlane *plane = joining.plane->Get();
     LayerData &layer = joining.layer;
 
-    args.used_kms_objects.framebuffers.emplace_back(layer.fb);
-    args.new_frame_state.used_planes.emplace_back(joining.plane);
+    request.used_kms_objects.framebuffers.emplace_back(layer.fb);
+    request.new_frame_state.used_planes.emplace_back(joining.plane);
 
     /* Remove from 'unused' list, since plane is re-used */
     auto &v = unused_planes;
@@ -406,84 +417,87 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(drmModeAtomicReq *pset,
       display_rect_info.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
     }
 
-    if (plane->AtomicSetState(*pset, layer, joining.z_pos, crtc->GetId(),
-                              display_rect_info, damage_blob) != 0) {
+    if (plane->AtomicSetState(*request.property_set, layer, joining.z_pos,
+                              crtc->GetId(), display_rect_info,
+                              damage_blob) != 0) {
       return false;
     }
-    args.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
+    request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
   }
 
+  // Disable all planes that were used in the previous commit which are no
+  // longer being used.
   return std::all_of(unused_planes.begin(), unused_planes.end(),
-                     [&pset](auto &plane) {
-                       return plane->Get()->AtomicDisablePlane(*pset) == 0;
+                     [&request](auto &plane) {
+                       return plane->Get()->AtomicDisablePlane(
+                                  *request.property_set) == 0;
                      });
 }
 
-DrmModeAtomicReqUnique DrmAtomicStateManager::GetAtomicModeReqForArgs(
-    AtomicCommitArgs &args) {
+std::unique_ptr<DrmAtomicStateManager::AtomicRequest>
+DrmAtomicStateManager::GetAtomicModeReqForArgs(AtomicCommitArgs &args) {
   ATRACE_CALL();
-  if (!args.new_frame_state.crtc_active_state) {
-    /* Force activate display */
-    args.active = true;
-  }
-
-  auto pset = MakeDrmModeAtomicReqUnique();
-  if (!pset) {
+  auto atomic_request = std::make_unique<AtomicRequest>();
+  atomic_request->property_set = MakeDrmModeAtomicReqUnique();
+  if (!atomic_request->property_set) {
     ALOGE("Failed to allocate property set");
     return nullptr;
   }
 
-  if (!SetWriteBackFenceIfNeeded(pset.get(), args)) {
+  // Initialize to the current state, and update as needed with the below
+  // helpers.
+  atomic_request->new_frame_state = committed_frame_state_;
+
+  if (!SetWriteBackFenceIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set writeback fence");
     return nullptr;
   }
 
-  if (!SetOutputFence(pset.get(), args)) {
+  if (!SetOutputFence(*atomic_request)) {
     ALOGE("Failed to set output fence");
     return nullptr;
   }
 
-  if (!SetActiveIfNeeded(pset.get(), args)) {
+  if (!SetActiveIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set active");
     return nullptr;
   }
 
-  if (!SetDisplayModeIfNeeded(pset.get(), args)) {
+  if (!SetDisplayModeIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set display mode");
     return nullptr;
   }
 
-  if (!SetCtmIfNeeded(pset.get(), args)) {
+  if (!SetCtmIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set CTM blob");
     return nullptr;
   }
 
-  if (!SetColorSpaceIfNeeded(pset.get(), args)) {
+  if (!SetColorSpaceIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set color space");
     return nullptr;
   }
 
-  if (!SetContentTypeIfNeeded(pset.get(), args)) {
+  if (!SetContentTypeIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set content type");
     return nullptr;
   }
 
-  if (!SetHdrMetadataIfNeeded(pset.get(), args)) {
+  if (!SetHdrMetadataIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set HDR metadata");
     return nullptr;
   }
 
-  if (!SetMinBpcIfNeeded(pset.get(), args)) {
+  if (!SetMinBpcIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set min BPC");
     return nullptr;
   }
-
-  if (!SetCompositionIfNeeded(pset.get(), args)) {
+  if (!SetCompositionIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set composition");
     return nullptr;
   }
 
-  return pset;
+  return atomic_request;
 }
 
 void DrmAtomicStateManager::ThreadFn() {
@@ -571,4 +585,4 @@ auto DrmAtomicStateManager::ActivateDisplayUsingDPMS() -> int {
                                      DRM_MODE_DPMS_ON);
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

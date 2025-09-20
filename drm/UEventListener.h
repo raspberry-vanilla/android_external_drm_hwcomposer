@@ -22,7 +22,7 @@
 
 #include "utils/UEvent.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class UEventListener {
  public:
@@ -48,4 +48,5 @@ class UEventListener {
 
   std::function<void()> hotplug_handler_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

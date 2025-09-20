@@ -32,7 +32,7 @@
                                        return std::make_unique<backend_>(); \
                                      });
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BackendManager {
  public:
@@ -50,4 +50,5 @@ class BackendManager {
 
   std::map<std::string, BackendConstructorT> available_backends_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

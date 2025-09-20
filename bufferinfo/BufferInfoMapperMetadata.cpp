@@ -27,7 +27,7 @@
 
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 namespace {
 
@@ -179,4 +179,4 @@ auto BufferInfoMapperMetadata::GetBoInfo(buffer_handle_t handle)
   return bi;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -20,7 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class BufferInfoImagination : public LegacyBufferInfoGetter {
  public:
@@ -28,4 +28,5 @@ class BufferInfoImagination : public LegacyBufferInfoGetter {
 
   auto GetBoInfo(buffer_handle_t handle) -> std::optional<BufferInfo> override;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

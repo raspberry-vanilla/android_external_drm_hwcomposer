@@ -32,7 +32,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto DrmFbIdHandle::CreateInstance(BufferInfo *bo, GemHandle first_gem_handle,
                                    DrmDevice &drm)
@@ -172,4 +172,4 @@ auto DrmFbImporter::GetOrCreateFbId(BufferInfo *bo)
   return fb_id_handle;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

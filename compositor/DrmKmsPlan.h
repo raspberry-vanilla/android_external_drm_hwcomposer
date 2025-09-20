@@ -21,7 +21,7 @@
 
 #include "LayerData.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmDevice;
 
@@ -40,4 +40,4 @@ struct DrmKmsPlan {
       -> std::unique_ptr<DrmKmsPlan>;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

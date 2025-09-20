@@ -22,7 +22,7 @@
 #include "bufferinfo/BufferInfoGetter.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.slot_buffer) {
@@ -132,4 +132,12 @@ bool HwcLayer::IsLayerUsableAsDevice() const {
   return it->second.fb != nullptr;
 }
 
-}  // namespace android
+uint32_t HwcLayer::GetPixOps() const {
+  const auto& df = GetLayerData().pi.display_frame;
+  if (df.i_rect.has_value()) {
+    return df.i_rect->Width() * df.i_rect->Height();
+  }
+  return parent_->GetSize().first * parent_->GetSize().second;
+}
+
+}  // namespace android::drm_hwcomposer

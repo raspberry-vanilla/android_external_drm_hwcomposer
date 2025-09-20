@@ -20,7 +20,7 @@
 
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 std::unique_ptr<CompositionStatsAtomReporter>
 CompositionStatsAtomReporter::Create() {
@@ -28,4 +28,4 @@ CompositionStatsAtomReporter::Create() {
   return {};
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

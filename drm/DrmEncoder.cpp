@@ -25,7 +25,7 @@
 #include "DrmDevice.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 auto DrmEncoder::CreateInstance(DrmDevice &dev, uint32_t encoder_id,
                                 uint32_t index) -> std::unique_ptr<DrmEncoder> {
@@ -38,4 +38,4 @@ auto DrmEncoder::CreateInstance(DrmDevice &dev, uint32_t encoder_id,
   return std::unique_ptr<DrmEncoder>(new DrmEncoder(std::move(e), index));
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

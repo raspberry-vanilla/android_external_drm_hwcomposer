@@ -22,7 +22,7 @@
 #include <memory>
 #include <utility>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 using UniqueFd = std::unique_ptr<int, void (*)(const int *)>;
 using SharedFd = std::shared_ptr<int>;
@@ -33,4 +33,4 @@ auto MakeSharedFd(int fd) -> SharedFd;
 
 auto DupFd(SharedFd const &fd) -> int;
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

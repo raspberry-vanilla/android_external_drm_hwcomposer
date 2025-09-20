@@ -31,10 +31,9 @@
 #include "drm/DrmHwc.h"
 #include "utils/properties.h"
 
-using ::android::DrmDisplayPipeline;
 using ColorGamut = ::android::ColorSpace;
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 namespace {
 
@@ -385,6 +384,13 @@ auto HwcDisplay::PresentStagedComposition(
   }
 
   ++total_stats_.total_frames;
+
+  // With multiple displays configured at differet refresh rates,
+  // desired_present_time can be up to almost 2 vsync periods away for the
+  // slower display. WaitLastFrame() should be called before
+  // WaitForPresenttime(), otherwise  can lead to a situation where hwc sleeps
+  // for up to 1.25 vsync period and blocks viable presents in SurfaceFlinger.
+  GetPipe().atomic_state_manager->WaitLastFrame();
 
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
@@ -1079,7 +1085,7 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
       m->eotf = 3;  // HLG
       break;
     default:
-      ALOGW("HDR type %d is not supported.", type);
+      ALOGW("HDR type %d is not supported.", static_cast<int>(type));
       return;
   }
 
@@ -1186,4 +1192,13 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
   configs_.SanitizeGroups();
 }
 
-}  // namespace android
+std::pair<uint32_t, uint32_t> HwcDisplay::GetSize() const {
+  const auto *config = GetNextConfig();
+  if (config == nullptr) {
+    return std::make_pair(0, 0);
+  }
+  return std::make_pair(config->mode.GetRawMode().hdisplay,
+                        config->mode.GetRawMode().vdisplay);
+}
+
+}  // namespace android::drm_hwcomposer

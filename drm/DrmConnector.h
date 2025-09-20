@@ -29,7 +29,7 @@
 #include "compositor/DisplayInfo.h"
 #include "utils/EdidWrapper.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmDevice;
 
@@ -190,4 +190,5 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   std::map<Colorspace, uint64_t> colorspace_enum_map_;
   std::map<uint64_t, PanelOrientation> panel_orientation_enum_map_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

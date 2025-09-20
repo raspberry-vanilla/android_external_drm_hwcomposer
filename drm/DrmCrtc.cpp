@@ -25,7 +25,7 @@
 
 #include "DrmDevice.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 static int GetCrtcProperty(const DrmDevice &dev, const DrmCrtc &crtc,
                            const char *prop_name, DrmProperty *property) {
@@ -69,4 +69,4 @@ auto DrmCrtc::CreateInstance(DrmDevice &dev, uint32_t crtc_id, uint32_t index)
   return c;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

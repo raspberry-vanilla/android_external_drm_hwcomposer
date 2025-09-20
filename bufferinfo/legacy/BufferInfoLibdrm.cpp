@@ -28,7 +28,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 LEGACY_BUFFER_INFO_GETTER(BufferInfoLibdrm);
 
@@ -227,4 +227,4 @@ int BufferInfoLibdrm::ValidateGralloc() {
   return 0;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

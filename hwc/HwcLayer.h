@@ -23,7 +23,7 @@
 #include "compositor/LayerData.h"
 #include "utils/fd.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class HwcDisplay;
 
@@ -106,6 +106,10 @@ class HwcLayer {
     frontend_private_data_ = std::move(data);
   }
 
+  // Returns the number of pixel operations this layer would require if it were
+  // client-composited.
+  uint32_t GetPixOps() const;
+
  private:
   // sf_type_ stores the initial type given to us by surfaceflinger,
   // validated_type_ stores the type after running ValidateDisplay
@@ -147,4 +151,4 @@ class HwcLayer {
   bool IsLayerUsableAsDevice() const;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -28,10 +28,10 @@
 using AidlPixelFormat = aidl::android::hardware::graphics::common::PixelFormat;
 using AidlNativeHandle = aidl::android::hardware::common::NativeHandle;
 
-namespace android {
+namespace android::drm_hwcomposer {
 class CompositionStatsPoller;
 class HwcDisplay;
-}  // namespace android
+}  // namespace android::drm_hwcomposer
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 using AidlColorMode = ColorMode;
@@ -160,9 +160,9 @@ class ComposerClient : public BnComposerClient {
   ::ndk::SpAIBinder createBinder() override;
 
  private:
-  hwc3::Error ImportLayerBuffer(int64_t display_handle, int64_t layer_id,
-                                const Buffer& buffer,
-                                ::android::HwcLayer::Buffer* out_buffer);
+  hwc3::Error ImportLayerBuffer(
+      int64_t display_handle, int64_t layer_id, const Buffer& buffer,
+      ::android::drm_hwcomposer::HwcLayer::Buffer* out_buffer);
 
   // Layer commands
   void DispatchLayerCommand(int64_t display_handle,
@@ -175,13 +175,14 @@ class ComposerClient : public BnComposerClient {
   void ExecuteSetDisplayOutputBuffer(int64_t display_handle,
                                      const Buffer& buffer);
 
-  ::android::HwcDisplay* GetDisplay(int64_t display_handle);
+  ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
 
   std::unique_ptr<CommandResultWriter> cmd_result_writer_;
 
   std::unique_ptr<DrmHwcThree> hwc_;
 
-  std::unique_ptr<::android::CompositionStatsPoller> stats_poller_;
+  std::unique_ptr<::android::drm_hwcomposer::CompositionStatsPoller>
+      stats_poller_;
 };
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

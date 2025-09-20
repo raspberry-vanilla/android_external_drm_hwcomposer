@@ -25,7 +25,7 @@
 #include "DrmCrtc.h"
 #include "DrmDisplayPipeline.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class DrmEncoder : public PipelineBindable<DrmEncoder> {
  public:
@@ -63,4 +63,4 @@ class DrmEncoder : public PipelineBindable<DrmEncoder> {
 
   const uint32_t index_in_res_array_;
 };
-}  // namespace android
+}  // namespace android::drm_hwcomposer

@@ -30,7 +30,7 @@
 #include "drm/VSyncWorker.h"
 #include "stats/CompositionStats.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 using DisplayHandle = int64_t;
 
@@ -232,6 +232,8 @@ class HwcDisplay {
 
   bool NeedsClientLayerUpdate() const;
 
+  std::pair<uint32_t, uint32_t> GetSize() const;
+
  private:
   // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if
   // such AtomicCommitArgs cannot be created due to lack of drm resources or
@@ -320,4 +322,4 @@ class HwcDisplay {
   std::shared_ptr<FrontendDisplayBase> frontend_private_data_;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

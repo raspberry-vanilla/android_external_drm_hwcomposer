@@ -29,7 +29,7 @@
 #include "DrmDevice.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 DrmProperty::DrmPropertyEnum::DrmPropertyEnum(drm_mode_property_enum *e)
     : value(e->value), name(e->name) {
@@ -166,4 +166,4 @@ auto DrmProperty::GetEnumMask(uint64_t &mask) -> bool {
   return true;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

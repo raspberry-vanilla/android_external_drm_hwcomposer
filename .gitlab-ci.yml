@@ -11,6 +11,9 @@ variables:
   CI_TEMPLATES_COMMIT: &ci-templates-commit 32afe5644697e503af18a736587c8619fa036a72
   FDO_UPSTREAM_REPO: "drm-hwcomposer/drm-hwcomposer"
   CUTTLEFISH_TARBALL: "cuttlefish.tar.xz"
+  ANDROID_TOOLS_TARBALL: "android_tools.tar.xz"
+  TOOLS_DIR: "android-tools"
+  BINARIES_DIR: "android-binaries"
   RESULTS_DIR: "${CI_PROJECT_DIR}/results"
 
 include:
@@ -80,8 +83,6 @@ android-cts:
     - job: build_x86_64
       artifacts: true
     - job: ubuntu/x86_64_android
-    - job: use-debian/x86_64_cuttlefish
-      artifacts: true
   artifacts:
     paths:
       - "${RESULTS_DIR}"
@@ -95,13 +96,83 @@ android-vts:
   extends:
     .use-ubuntu/x86_64_android
   script:
-    - "${CI_PROJECT_DIR}/.ci/android/vts-runner.sh"
+    - "${CI_PROJECT_DIR}/.ci/android/android-vts.sh"
   needs:
     - job: build_x86_64
       artifacts: true
     - job: ubuntu/x86_64_android
-    - job: use-debian/x86_64_cuttlefish
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vkms-hotplugs:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/vkms-hotplugs.sh"
+  needs:
+    - job: build_x86_64
       artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-multi-display:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/multi-display.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-headless:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/headless.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
+  artifacts:
+    paths:
+      - "${RESULTS_DIR}"
+    when: always
+    expire_in: 1 week
+  tags:
+    - kvm
+
+vts-writeback:
+  stage: android
+  extends:
+    .use-ubuntu/x86_64_android
+  script:
+    - "${CI_PROJECT_DIR}/.ci/android/writeback.sh"
+  needs:
+    - job: build_x86_64
+      artifacts: true
+    - job: ubuntu/x86_64_android
   artifacts:
     paths:
       - "${RESULTS_DIR}"

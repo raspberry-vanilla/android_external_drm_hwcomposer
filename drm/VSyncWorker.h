@@ -26,7 +26,7 @@
 
 #include "DrmDevice.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 class VSyncWorker {
  public:
@@ -87,4 +87,5 @@ class VSyncWorker {
   std::thread vswt_;
   std::mutex mutex_;
 };
-}  // namespace android
+
+}  // namespace android::drm_hwcomposer

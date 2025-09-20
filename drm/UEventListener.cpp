@@ -22,7 +22,7 @@
 
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 UEventListener::~UEventListener() {
   StopThread();
@@ -69,4 +69,4 @@ void UEventListener::ThreadFn() {
   ALOGI("UEvent thread exit");
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

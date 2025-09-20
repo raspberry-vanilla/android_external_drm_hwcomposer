@@ -20,7 +20,7 @@
 
 #include "DrmDevice.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 DrmMode::DrmMode(drmModeModeInfoPtr m) : mode_(*m){};
 
@@ -33,7 +33,7 @@ bool DrmMode::SameSize(const DrmMode &mode) const {
          (mode_.hdisplay == mode.mode_.hdisplay);
 }
 
-auto DrmMode::CreateModeBlob(const DrmDevice &drm)
+auto DrmMode::CreateModeBlob(const DrmDevice &drm) const
     -> DrmModeUserPropertyBlobUnique {
   struct drm_mode_modeinfo drm_mode = {};
   /* drm_mode_modeinfo and drmModeModeInfo should be identical
@@ -45,4 +45,4 @@ auto DrmMode::CreateModeBlob(const DrmDevice &drm)
                                       sizeof(struct drm_mode_modeinfo));
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

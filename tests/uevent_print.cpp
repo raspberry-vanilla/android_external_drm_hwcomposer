@@ -5,7 +5,7 @@
 #include "utils/UEvent.h"
 
 int main() {
-  auto uevent = android::UEvent::CreateInstance();
+  auto uevent = android::drm_hwcomposer::UEvent::CreateInstance();
   if (!uevent) {
     std::cout << "Can't initialize UEvent class\n";
     return -ENODEV;

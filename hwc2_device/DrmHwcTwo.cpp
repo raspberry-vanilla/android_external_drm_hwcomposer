@@ -23,7 +23,7 @@
 #include "backend/Backend.h"
 #include "utils/log.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 HWC2::Error DrmHwcTwo::RegisterCallback(int32_t descriptor,
                                         hwc2_callback_data_t data,
@@ -122,4 +122,4 @@ const std::string& DrmHwcTwo::RefreshStateDump() {
   return last_state_dump_;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

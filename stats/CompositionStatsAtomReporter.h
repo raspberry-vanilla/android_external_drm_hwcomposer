@@ -18,7 +18,7 @@
 
 #include <memory>
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 // CompositionStatsAtomReporter is a wrapper around creation of a VendorAtom
 // and pushing it to the IStats::reportVendorAtom interface.
@@ -35,4 +35,4 @@ class CompositionStatsAtomReporter {
   virtual ~CompositionStatsAtomReporter() = default;
 };
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

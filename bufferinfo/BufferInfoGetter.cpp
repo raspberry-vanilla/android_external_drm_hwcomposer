@@ -30,7 +30,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-namespace android {
+namespace android::drm_hwcomposer {
 
 BufferInfoGetter *BufferInfoGetter::GetInstance() {
   static std::unique_ptr<BufferInfoGetter> inst;
@@ -122,4 +122,4 @@ LegacyBufferInfoGetter::CreateInstance() {
   return nullptr;
 }
 
-}  // namespace android
+}  // namespace android::drm_hwcomposer

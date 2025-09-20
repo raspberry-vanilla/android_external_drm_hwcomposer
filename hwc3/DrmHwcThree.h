@@ -24,7 +24,7 @@
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
-class Hwc3Display : public ::android::FrontendDisplayBase {
+class Hwc3Display : public ::android::drm_hwcomposer::FrontendDisplayBase {
  public:
   // Desired present time for a composition that has been validated but not
   // yet presented. nullopt means it should be presented at the next vsync.
@@ -33,7 +33,7 @@ class Hwc3Display : public ::android::FrontendDisplayBase {
   int64_t next_layer_id = 1;
 };
 
-class DrmHwcThree : public ::android::DrmHwc {
+class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
  public:
   explicit DrmHwcThree() = default;
   ~DrmHwcThree() override;
@@ -41,28 +41,32 @@ class DrmHwcThree : public ::android::DrmHwc {
   void Init(std::shared_ptr<IComposerCallback> callback);
 
   // DrmHwcInterface
-  void SendVsyncEventToClient(::android::DisplayHandle display_handle,
-                              int64_t timestamp,
-                              uint32_t vsync_period) const override;
+  void SendVsyncEventToClient(
+      ::android::drm_hwcomposer::DisplayHandle display_handle,
+      int64_t timestamp, uint32_t vsync_period) const override;
   void SendVsyncPeriodTimingChangedEventToClient(
-      ::android::DisplayHandle display_handle,
+      ::android::drm_hwcomposer::DisplayHandle display_handle,
       int64_t timestamp) const override;
   void SendRefreshEventToClient(
-      ::android::DisplayHandle display_handle) override;
-  void SendHotplugEventToClient(::android::DisplayHandle display_handle,
-                                DrmHwc::DisplayStatus display_status) override;
+      ::android::drm_hwcomposer::DisplayHandle display_handle) override;
+  void SendHotplugEventToClient(
+      ::android::drm_hwcomposer::DisplayHandle display_handle,
+      DrmHwc::DisplayStatus display_status) override;
 
-  static auto GetHwc3Display(::android::HwcDisplay& display)
+  static auto GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
       -> std::shared_ptr<Hwc3Display>;
 
-  auto GetMustValidateDisplay(::android::DisplayHandle display_handle) -> bool;
-  void ClearMustValidateDisplay(::android::DisplayHandle display_handle);
+  auto GetMustValidateDisplay(
+      ::android::drm_hwcomposer::DisplayHandle display_handle) -> bool;
+  void ClearMustValidateDisplay(
+      ::android::drm_hwcomposer::DisplayHandle display_handle);
 
  private:
   std::shared_ptr<IComposerCallback> composer_callback_;
 
   std::mutex must_validate_lock_;
-  std::set<::android::DisplayHandle> must_validate_
+  std::set<::android::drm_hwcomposer::DisplayHandle> must_validate_
       GUARDED_BY(must_validate_lock_);
 };
+
 }  // namespace aidl::android::hardware::graphics::composer3::impl
