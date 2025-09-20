@@ -621,12 +621,14 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
     return;
   }
 
+#if __ANDROID_API__ >= 36
   if (command.luts) {
     ALOGI("setLayerLuts unsupported: display=%lld layer=%lld",
           (long long)display_handle, (long long)command.layer);
     cmd_result_writer_->AddError(hwc3::Error::kUnsupported);
     return;
   }
+#endif
 
   // If the requested composition type is not supported, the HWC should return
   // an error and not process any further commands.
