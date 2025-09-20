@@ -394,6 +394,8 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
   // Initialize the list of unused planes to all the planes used in the
   // previous frame.
   auto unused_planes = committed_frame_state_.used_planes;
+  // Clear the list of planes for the next frame. It will be repopulated below.
+  request.new_frame_state.used_planes.clear();
 
   for (auto &joining : args.composition->plan) {
     DrmPlane *plane = joining.plane->Get();
