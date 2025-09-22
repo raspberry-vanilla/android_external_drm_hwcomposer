@@ -21,6 +21,8 @@
 #include <functional>
 #include <thread>
 
+#include <android-base/thread_annotations.h>
+
 namespace android::drm_hwcomposer {
 
 // NOLINTNEXTLINE(misc-unused-using-decls): False positive
@@ -32,45 +34,55 @@ struct FlatConCallbacks {
 
 class FlatteningController {
  public:
-  static auto CreateInstance(FlatConCallbacks &cbks)
-      -> std::shared_ptr<FlatteningController>;
-  ~FlatteningController() {
-    StopThread();
-    thread_.join();
-  }
+  FlatteningController(FlatConCallbacks callbacks,
+                       std::chrono::milliseconds timeout);
+  ~FlatteningController();
 
-  void Disable() {
-    auto lock = std::lock_guard<std::mutex>(mutex_);
-    flatten_next_frame_ = false;
-    disabled_ = true;
-  }
+  // Disable flattening and stop checking for an idle scene.
+  void DisableFlattening();
 
-  /* Compositor should call this every frame */
-  bool NewFrame();
+  // Registers a new frame by updating the flattening state as needed and
+  // resetting the idle timer.
+  void NewFrame();
 
-  auto ShouldFlatten() const {
-    return flatten_next_frame_;
-  }
-
-  void StopThread() {
-    auto lock = std::lock_guard<std::mutex>(mutex_);
-    cbks_ = {};
-    cv_.notify_all();
-  }
-
-  static constexpr auto kTimeout = 1s;
+  // Returns true if the FlatteningController detects that the scene is idle
+  // and should be flattened by the compositor.
+  bool ShouldFlatten() const;
 
  private:
-  FlatteningController() = default;
+  // Stop the helper thread
+  void StopThread();
+
   void ThreadFn();
 
-  bool flatten_next_frame_{};
-  bool disabled_{};
-  decltype(std::chrono::system_clock::now()) sleep_until_{};
   std::thread thread_;
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::condition_variable cv_;
-  FlatConCallbacks cbks_;
+
+  enum class State {
+    // Thread is not active, should not flatten.
+    kDisabled,
+    // Thread is active. Waiting for timeout.
+    kActive,
+    // Callback has been triggered but NewFrame has not yet been called.
+    kTriggeredCallback,
+    // Callback was triggered and NewFrame was called once.
+    kFlattened,
+    // Thread will exit without any further processing or state update.
+    kExitThread,
+  };
+
+  /* Disable the controller by default as it can cause refresh event to be
+   * issued at creation time, even when it is not required. This can fail VTS
+   * tests at teardown that check for this behaviour. See:
+   * https://cs.android.com/android/platform/superproject/main/+/cedca652b903e4f4e584e457b5a7038e0825fb94:hardware/interfaces/graphics/composer/aidl/vts/VtsComposerClient.cpp;drc=a2a6deaf5036e081f48379b6573db4465538b5ac;l=604
+   */
+  State state_ GUARDED_BY(mutex_) = State::kDisabled;
+
+  // Only accessed from helper thread.
+  const FlatConCallbacks cbks_;
+  decltype(std::chrono::system_clock::now()) sleep_until_{};
+  const std::chrono::milliseconds timeout_;
 };
 
 }  // namespace android::drm_hwcomposer

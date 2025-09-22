@@ -45,15 +45,9 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
 auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
   auto layers = display->GetOrderLayersByZPos();
 
-  auto flatcon = display->GetFlatCon();
-  if (flatcon) {
-    bool should_flatten = false;
-    if (layers.size() <= 1)
-      flatcon->Disable();
-    else
-      should_flatten = flatcon->NewFrame();
-
-    if (should_flatten) {
+  const FlatteningController* flatcon = display->GetFlatCon();
+  if (flatcon != nullptr) {
+    if (flatcon->ShouldFlatten()) {
       display->total_stats().frames_flattened++;
       return GetFlattenedComposition(layers);
     }

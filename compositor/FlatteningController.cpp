@@ -37,58 +37,66 @@
 
 namespace android::drm_hwcomposer {
 
-auto FlatteningController::CreateInstance(FlatConCallbacks &cbks)
-    -> std::shared_ptr<FlatteningController> {
-  auto fc = std::shared_ptr<FlatteningController>(new FlatteningController());
-
-  /* Disable the controller by default as it can cause refresh event to be
-   * issued at creation time, even when it is not required. This can fail VTS
-   * tests at teardown that check for this behaviour. See:
-   * https://cs.android.com/android/platform/superproject/main/+/cedca652b903e4f4e584e457b5a7038e0825fb94:hardware/interfaces/graphics/composer/aidl/vts/VtsComposerClient.cpp;drc=a2a6deaf5036e081f48379b6573db4465538b5ac;l=604
-   */
-  fc->Disable();
-  fc->cbks_ = cbks;
-  fc->thread_ = std::thread(&FlatteningController::ThreadFn, fc.get());
-
-  return fc;
+FlatteningController::FlatteningController(FlatConCallbacks callbacks,
+                                           std::chrono::milliseconds timeout)
+    : cbks_(std::move(callbacks)), timeout_(timeout) {
+  thread_ = std::thread(&FlatteningController::ThreadFn, this);
 }
 
-/* Compositor should call this every frame */
-bool FlatteningController::NewFrame() {
-  bool wake_it = false;
+FlatteningController::~FlatteningController() {
+  StopThread();
+  thread_.join();
+}
+
+void FlatteningController::DisableFlattening() {
+  auto lock = std::lock_guard<std::mutex>(mutex_);
+  state_ = State::kDisabled;
+}
+
+void FlatteningController::NewFrame() {
   auto lock = std::lock_guard<std::mutex>(mutex_);
 
-  if (flatten_next_frame_) {
-    flatten_next_frame_ = false;
-    return true;
+  if (state_ == State::kTriggeredCallback) {
+    state_ = State::kFlattened;
+    return;
   }
 
-  sleep_until_ = std::chrono::system_clock::now() + kTimeout;
-  if (disabled_) {
-    wake_it = true;
-    disabled_ = false;
-  }
+  sleep_until_ = std::chrono::system_clock::now() + timeout_;
+  bool was_active = (state_ == State::kActive);
+  state_ = State::kActive;
 
-  if (wake_it)
+  if (!was_active) {
     cv_.notify_all();
+  }
+}
 
-  return false;
+bool FlatteningController::ShouldFlatten() const {
+  auto lock = std::lock_guard<std::mutex>(mutex_);
+  return state_ == State::kTriggeredCallback || state_ == State::kFlattened;
+}
+
+void FlatteningController::StopThread() {
+  auto lock = std::lock_guard<std::mutex>(mutex_);
+  state_ = State::kExitThread;
+  cv_.notify_all();
 }
 
 void FlatteningController::ThreadFn() {
   for (;;) {
     std::unique_lock<std::mutex> lock(mutex_);
-    if (!cbks_.trigger)
+    base::ScopedLockAssertion lock_assertion(mutex_);
+    if (state_ == State::kExitThread) {
       break;
+    }
 
-    if (sleep_until_ <= std::chrono::system_clock::now() && !disabled_) {
-      disabled_ = true;
-      flatten_next_frame_ = true;
+    if (sleep_until_ <= std::chrono::system_clock::now() &&
+        (state_ == State::kActive)) {
+      state_ = State::kTriggeredCallback;
       ALOGV("Timeout. Sending an event to compositor");
       cbks_.trigger();
     }
 
-    if (disabled_) {
+    if (state_ != State::kActive) {
       ALOGV("Wait");
       cv_.wait(lock);
     } else {

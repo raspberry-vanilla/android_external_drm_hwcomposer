@@ -37,6 +37,7 @@ namespace android::drm_hwcomposer {
 
 namespace {
 
+constexpr auto kFlatteningTimeout = 1s;
 constexpr int kCtmRows = 3;
 constexpr int kCtmCols = 3;
 
@@ -324,6 +325,13 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     }
   }
 
+  // Notify the flattening controller of a new frame.
+  if (layers_.size() <= 1) {
+    flatcon_->DisableFlattening();
+  } else {
+    flatcon_->NewFrame();
+  }
+
   // The CompositionTypeMap in the ValidatedComposition indicates the
   // composition type that the Backend has determined for each layer.
   auto result = backend_->ValidateDisplay(this);
@@ -566,10 +574,7 @@ void HwcDisplay::Deinit() {
 
     current_plan_.reset();
     backend_.reset();
-    if (flatcon_) {
-      flatcon_->StopThread();
-      flatcon_.reset();
-    }
+    flatcon_.reset();
   }
 
   if (vsync_worker_) {
@@ -597,7 +602,8 @@ bool HwcDisplay::Init() {
     }
     auto flatcbk = (struct FlatConCallbacks){
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
-    flatcon_ = FlatteningController::CreateInstance(flatcbk);
+    flatcon_ = std::make_unique<FlatteningController>(flatcbk,
+                                                      kFlatteningTimeout);
   }
 
   HwcLayer::LayerProperties lp;
