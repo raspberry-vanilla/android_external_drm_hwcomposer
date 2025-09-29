@@ -39,6 +39,7 @@
 #include <android/binder_ibinder_platform.h>
 #include <cutils/native_handle.h>
 #include <ui/GraphicBufferMapper.h>
+#include <utils/Trace.h>
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
@@ -711,6 +712,8 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
 }
 
 void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
+  ATRACE_CALL();
+
   const int64_t display_handle = command.display;
   HwcDisplay* display = hwc_->GetDisplay(display_handle);
   if (display == nullptr) {
