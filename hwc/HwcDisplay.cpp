@@ -149,7 +149,9 @@ void HwcDisplay::SetColorTransformMatrix(
   }
 
   ctm_has_offset_ = TransformHasOffsetValue(color_transform_matrix.data());
-  color_matrix_ = ToColorTransform(color_transform_matrix);
+  if (!ctm_has_offset_) {
+    color_matrix_ = ToColorTransform(color_transform_matrix);
+  }
 }
 
 void HwcDisplay::SetColorMatrixToIdentity() {
