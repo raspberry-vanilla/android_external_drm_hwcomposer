@@ -275,10 +275,13 @@ apex {
 cc_test_host {
     name: "drm_hwcomposer_unittests",
     srcs: [
+        "compositor/FlatteningController.cpp",
+        "compositor/FlatteningControllerTests.cpp",
         "stats/CompositionStats.cpp",
         "stats/CompositionStatsTest.cpp",
     ],
     static_libs: [
+        "libbase",
         "libgmock",
         "libgtest",
     ],

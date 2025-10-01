@@ -20,8 +20,10 @@
 #include "HwcDisplay.h"
 
 #include <cinttypes>
+#include <sstream> 
 
 #include <ui/ColorSpace.h>
+#include <utils/Trace.h>
 
 #include "backend/Backend.h"
 #include "backend/BackendManager.h"
@@ -37,6 +39,7 @@ namespace android::drm_hwcomposer {
 
 namespace {
 
+constexpr auto kFlatteningTimeout = 1s;
 constexpr int kCtmRows = 3;
 constexpr int kCtmCols = 3;
 
@@ -147,7 +150,9 @@ void HwcDisplay::SetColorTransformMatrix(
   }
 
   ctm_has_offset_ = TransformHasOffsetValue(color_transform_matrix.data());
-  color_matrix_ = ToColorTransform(color_transform_matrix);
+  if (!ctm_has_offset_) {
+    color_matrix_ = ToColorTransform(color_transform_matrix);
+  }
 }
 
 void HwcDisplay::SetColorMatrixToIdentity() {
@@ -228,6 +233,8 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
 }
 
 HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
+  ATRACE_CALL();
+
   const HwcDisplayConfig *new_config = GetConfig(config);
   if (new_config == nullptr) {
     ALOGE("Could not find active mode for %u", config);
@@ -239,7 +246,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
 
   ALOGV("Create modeset commit.");
-  SetOutputType(new_config->output_type);
+  // Allow HDR only on external displays
+  if (GetPipe().connector->Get()->IsExternal())
+    SetOutputType(new_config->output_type);
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
   // separate test commit, since the commit does a test anyways.
@@ -324,6 +333,13 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     }
   }
 
+  // Notify the flattening controller of a new frame.
+  if (layers_.size() <= 1) {
+    flatcon_->DisableFlattening();
+  } else {
+    flatcon_->NewFrame();
+  }
+
   // The CompositionTypeMap in the ValidatedComposition indicates the
   // composition type that the Backend has determined for each layer.
   auto result = backend_->ValidateDisplay(this);
@@ -374,6 +390,8 @@ auto HwcDisplay::AcceptValidatedComposition() -> void {
 auto HwcDisplay::PresentStagedComposition(
     std::optional<int64_t> desired_present_time, SharedFd &out_present_fence,
     std::vector<ReleaseFence> &out_release_fences) -> bool {
+  ATRACE_CALL();
+
   if (IsInHeadlessMode()) {
     return true;
   }
@@ -419,6 +437,8 @@ auto HwcDisplay::PresentStagedComposition(
   if (!out_present_fence) {
     return true;
   }
+
+  vsync_worker_->AddLastPresentFence(out_present_fence);
 
   for (auto &l : layers_) {
     if (l.second.GetPriorBufferScanOutFlag()) {
@@ -566,10 +586,7 @@ void HwcDisplay::Deinit() {
 
     current_plan_.reset();
     backend_.reset();
-    if (flatcon_) {
-      flatcon_->StopThread();
-      flatcon_.reset();
-    }
+    flatcon_.reset();
   }
 
   if (vsync_worker_) {
@@ -597,7 +614,8 @@ bool HwcDisplay::Init() {
     }
     auto flatcbk = (struct FlatConCallbacks){
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
-    flatcon_ = FlatteningController::CreateInstance(flatcbk);
+    flatcon_ = std::make_unique<FlatteningController>(flatcbk,
+                                                      kFlatteningTimeout);
   }
 
   HwcLayer::LayerProperties lp;
@@ -770,6 +788,22 @@ void HwcDisplay::WaitForPresentTime(int64_t present_time,
 
   // Sleep until 75% vsync_period before the desired_vsync.
   int64_t sleep_until = desired_vsync - (quarter_vsync_period * 3);
+
+  ATRACE_NAME("WaitForPresentTime");
+
+  // NOLINTBEGIN
+  std::stringstream oss;
+  oss << "current_time: " << current_time
+      << " next_vsync_time: " << next_vsync_time << " (rel "
+      << ((next_vsync_time - current_time) / 1000000.00) << "ms)"
+      << " desired_vsync: " << desired_vsync << " (rel "
+      << ((desired_vsync - current_time) / 1000000.00) << "ms)"
+      << " vsync_period_ns: " << vsync_period_ns
+      << " sleep_until: " << sleep_until << " (rel "
+      << ((sleep_until - current_time) / 1000000.00) << "ms)";
+  ATRACE_INSTANT(oss.str().c_str());
+  // NOLINTEND
+
   struct timespec sleep_until_ts{};
   constexpr int64_t kOneSecondNs = 1LL * 1000 * 1000 * 1000;
   sleep_until_ts.tv_sec = int(sleep_until / kOneSecondNs);
@@ -788,6 +822,8 @@ uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
 
 bool HwcDisplay::TestComposition(
     Backend::ValidatedComposition &composition) const {
+  ATRACE_CALL();
+
   if (IsInHeadlessMode()) {
     return true;
   }
@@ -923,6 +959,8 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
 bool HwcDisplay::CommitComposition(
     const Backend::CompositionTypeMap &composition,
     SharedFd &out_present_fence) {
+  ATRACE_CALL();
+
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
     return true;

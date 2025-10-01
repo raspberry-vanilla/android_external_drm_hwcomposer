@@ -18,6 +18,8 @@
 
 #include "VSyncWorker.h"
 
+#include <sync/sync.h>
+#include <utils/Trace.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -29,6 +31,36 @@
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
+namespace {
+std::optional<uint64_t> GetPresentTime(const SharedFd &fence_fd) {
+  if (!fence_fd) {
+    return std::nullopt;
+  }
+
+  struct sync_file_info *file_info = sync_file_info(*fence_fd);
+  if (file_info == nullptr) {
+    return std::nullopt;
+  }
+
+  if (file_info->status != 1) {
+    sync_file_info_free(file_info);
+    return std::nullopt;
+  }
+
+  uint64_t timestamp = 0;
+  struct sync_fence_info *fence_info = sync_get_fence_info(file_info);
+  for (size_t i = 0; i < file_info->num_fences; i++) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic):
+    const uint64_t fence_timestamp = fence_info[i].timestamp_ns;
+    if (std::max(fence_timestamp, timestamp) == fence_timestamp) {
+      timestamp = fence_timestamp;
+    }
+  }
+
+  sync_file_info_free(file_info);
+  return timestamp;
+}
+}  // namespace
 
 auto VSyncWorker::CreateInstance(std::shared_ptr<DrmDisplayPipeline> &pipe)
     -> std::unique_ptr<VSyncWorker> {
@@ -64,6 +96,7 @@ void VSyncWorker::SetVsyncPeriodNs(uint32_t vsync_period_ns) {
   const std::lock_guard<std::mutex> lock(mutex_);
   vsync_period_ns_ = vsync_period_ns;
   last_timestamp_ = std::nullopt;
+  last_present_fence_.reset();
 }
 
 void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
@@ -82,6 +115,26 @@ void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
 uint32_t VSyncWorker::GetLastVsyncTimestamp() {
   const std::lock_guard<std::mutex> lock(mutex_);
   return last_timestamp_is_fresh_ ? last_timestamp_.value_or(0) : 0;
+}
+
+void VSyncWorker::UpdateLastVsyncTimeWithPresentTime() {
+  if (enabled_) {
+    last_present_fence_.reset();
+    return;
+  }
+
+  ATRACE_CALL();
+  std::optional<int64_t> fence_time = GetPresentTime(last_present_fence_);
+  last_present_fence_.reset();
+
+  if (last_timestamp_.value_or(0) < fence_time.value_or(0)) {
+    last_timestamp_ = fence_time;
+  }
+}
+
+void VSyncWorker::AddLastPresentFence(SharedFd &fence) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  last_present_fence_ = fence;
 }
 
 int64_t VSyncWorker::GetNextVsyncTimestamp(int64_t time) {
@@ -125,7 +178,9 @@ bool VSyncWorker::ShouldEnable() const {
  *  Thus, we must sleep until timestamp 687 to maintain phase with the last
  *  timestamp.
  */
-int64_t VSyncWorker::GetPhasedVSync(int64_t frame_ns, int64_t current) const {
+int64_t VSyncWorker::GetPhasedVSync(int64_t frame_ns, int64_t current) {
+  UpdateLastVsyncTimeWithPresentTime();
+
   if (!last_timestamp_.has_value())
     return current + frame_ns;
 
