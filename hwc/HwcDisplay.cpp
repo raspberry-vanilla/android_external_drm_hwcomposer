@@ -20,6 +20,7 @@
 #include "HwcDisplay.h"
 
 #include <cinttypes>
+#include <sstream> 
 
 #include <ui/ColorSpace.h>
 #include <utils/Trace.h>
@@ -437,6 +438,8 @@ auto HwcDisplay::PresentStagedComposition(
     return true;
   }
 
+  vsync_worker_->AddLastPresentFence(out_present_fence);
+
   for (auto &l : layers_) {
     if (l.second.GetPriorBufferScanOutFlag()) {
       out_release_fences.emplace_back(l.first, out_present_fence);
@@ -785,6 +788,22 @@ void HwcDisplay::WaitForPresentTime(int64_t present_time,
 
   // Sleep until 75% vsync_period before the desired_vsync.
   int64_t sleep_until = desired_vsync - (quarter_vsync_period * 3);
+
+  ATRACE_NAME("WaitForPresentTime");
+
+  // NOLINTBEGIN
+  std::stringstream oss;
+  oss << "current_time: " << current_time
+      << " next_vsync_time: " << next_vsync_time << " (rel "
+      << ((next_vsync_time - current_time) / 1000000.00) << "ms)"
+      << " desired_vsync: " << desired_vsync << " (rel "
+      << ((desired_vsync - current_time) / 1000000.00) << "ms)"
+      << " vsync_period_ns: " << vsync_period_ns
+      << " sleep_until: " << sleep_until << " (rel "
+      << ((sleep_until - current_time) / 1000000.00) << "ms)";
+  ATRACE_INSTANT(oss.str().c_str());
+  // NOLINTEND
+
   struct timespec sleep_until_ts{};
   constexpr int64_t kOneSecondNs = 1LL * 1000 * 1000 * 1000;
   sleep_until_ts.tv_sec = int(sleep_until / kOneSecondNs);

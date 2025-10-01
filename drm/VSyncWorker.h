@@ -51,6 +51,8 @@ class VSyncWorker {
   void SetVsyncTimestampTracking(bool enabled);
   uint32_t GetLastVsyncTimestamp();
 
+  void AddLastPresentFence(SharedFd &fence);
+
   // Get the next predicted vsync timestamp after |time|, based on the last
   // recorded vsync timestamp and the current vsync period.
   int64_t GetNextVsyncTimestamp(int64_t time);
@@ -62,12 +64,13 @@ class VSyncWorker {
 
   void ThreadFn();
 
-  int64_t GetPhasedVSync(int64_t frame_ns, int64_t current) const
-      REQUIRES(mutex_);
+  int64_t GetPhasedVSync(int64_t frame_ns, int64_t current) REQUIRES(mutex_);
   int SyntheticWaitVBlank(int64_t *timestamp);
 
   void UpdateVSyncControl();
   bool ShouldEnable() const REQUIRES(mutex_);
+
+  void UpdateLastVsyncTimeWithPresentTime() REQUIRES(mutex_);
 
   SharedFd drm_fd_;
   uint32_t high_crtc_ = 0;
@@ -82,6 +85,8 @@ class VSyncWorker {
   bool enable_vsync_timestamps_ GUARDED_BY(mutex_) = false;
   bool last_timestamp_is_fresh_ GUARDED_BY(mutex_) = false;
   std::optional<VsyncTimestampCallback> callback_ GUARDED_BY(mutex_);
+
+  SharedFd last_present_fence_ GUARDED_BY(mutex_);
 
   std::condition_variable cv_;
   std::thread vswt_;
