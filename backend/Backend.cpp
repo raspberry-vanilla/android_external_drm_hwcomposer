@@ -84,7 +84,7 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
     }
 
     // Reset the plan in case it was set during a previous test.
-    validated_composition.composition_plan = std::make_shared<DrmKmsPlan>();
+    validated_composition.composition_plan.reset();
 
     return true;
   };
@@ -130,7 +130,7 @@ Backend::ValidatedComposition Backend::GetFlattenedComposition(
     const std::vector<const HwcLayer*>& layers) {
   return ValidatedComposition{
       .composition_types = GetCompositionTypes(layers, 0, layers.size(), false),
-      .composition_plan = std::make_shared<DrmKmsPlan>()};
+      .composition_plan = nullptr};
 }
 
 std::tuple<size_t, size_t> Backend::GetClientLayers(

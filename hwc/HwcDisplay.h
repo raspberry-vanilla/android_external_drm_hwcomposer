@@ -241,10 +241,9 @@ class HwcDisplay {
   // The caller must do a test commit on the returned args to ensure that the
   // hardware can perform the commit.
   std::optional<AtomicCommitArgs> CreateFrameUpdateCommit(
-      const Backend::CompositionTypeMap &composition) const;
+      const Backend::ValidatedComposition &composition) const;
 
-  bool CommitComposition(const Backend::CompositionTypeMap &composition,
-                         SharedFd &out_present_fence);
+  bool CommitStagedComposition(SharedFd &out_present_fence);
 
   // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
   // This should be called after a successful commit.
@@ -300,8 +299,10 @@ class HwcDisplay {
   Colorspace colorspace_{};
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
-
-  std::shared_ptr<DrmKmsPlan> current_plan_;
+  // Most recent result of ValidateStagedComposition. Must be kept alive until
+  // the composition is committed.
+  std::optional<Backend::ValidatedComposition>
+      validated_composition_ = std::nullopt;
 
   SharedFd writeback_complete_fence_;
 

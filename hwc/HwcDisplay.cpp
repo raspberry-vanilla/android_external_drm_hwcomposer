@@ -309,6 +309,11 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
 }
 
 auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
+  if (validated_composition_.has_value()) {
+    ALOGE("%s: Previously validated composition was not presented", __func__);
+    validated_composition_.reset();
+  }
+
   if (IsInHeadlessMode()) {
     return {};
   }
@@ -340,22 +345,16 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     flatcon_->NewFrame();
   }
 
-  // The CompositionTypeMap in the ValidatedComposition indicates the
-  // composition type that the Backend has determined for each layer.
-  auto result = backend_->ValidateDisplay(this);
-
-  // Store plan to ensure shared planes won't be stolen by other display
-  // between ValidateDisplay() and PresentDisplay() calls.
-  current_plan_ = result.composition_plan;
+  validated_composition_.emplace(backend_->ValidateDisplay(this));
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
   for (auto &[id, layer] : layers_) {
     // Set the validated type
-    auto it = result.composition_types.find(&layer);
-    ALOGE_IF(it == result.composition_types.end(),
+    auto it = validated_composition_->composition_types.find(&layer);
+    ALOGE_IF(it == validated_composition_->composition_types.end(),
              "Backend did not composite layer %" PRId64 "", id);
-    if (it != result.composition_types.end()) {
+    if (it != validated_composition_->composition_types.end()) {
       layer.SetValidatedType(it->second);
     }
     if (layer.IsTypeChanged()) {
@@ -403,7 +402,7 @@ auto HwcDisplay::PresentStagedComposition(
 
   ++total_stats_.total_frames;
 
-  // With multiple displays configured at differet refresh rates,
+  // With multiple displays configured at different refresh rates,
   // desired_present_time can be up to almost 2 vsync periods away for the
   // slower display. WaitLastFrame() should be called before
   // WaitForPresenttime(), otherwise  can lead to a situation where hwc sleeps
@@ -419,12 +418,17 @@ auto HwcDisplay::PresentStagedComposition(
     WaitForPresentTime(desired_present_time.value(), vperiod_ns);
   }
 
-  Backend::CompositionTypeMap composition;
-  for (auto &l : layers_) {
-    composition.emplace(&l.second, l.second.GetValidatedType());
+  // Check if validation was skipped, and populate the composition types as
+  // needed. Otherwise, use the already-validated composition types.
+  if (!validated_composition_.has_value()) {
+    validated_composition_ = Backend::ValidatedComposition{};
+    for (auto &l : layers_) {
+      validated_composition_->composition_types
+          .emplace(&l.second, l.second.GetValidatedType());
+    }
   }
 
-  if (!CommitComposition(composition, out_present_fence)) {
+  if (!CommitStagedComposition(out_present_fence)) {
     ++total_stats_.failed_kms_present;
     return false;
   }
@@ -584,7 +588,7 @@ void HwcDisplay::Deinit() {
     a_args.teardown = true;
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
 
-    current_plan_.reset();
+    validated_composition_.reset();
     backend_.reset();
     flatcon_.reset();
   }
@@ -827,12 +831,14 @@ bool HwcDisplay::TestComposition(
   if (IsInHeadlessMode()) {
     return true;
   }
-  auto a_args = CreateFrameUpdateCommit(composition.composition_types);
+  auto a_args = CreateFrameUpdateCommit(composition);
   if (!a_args) {
     return false;
   }
   a_args->test_only = true;
   if (GetPipe().atomic_state_manager->ExecuteAtomicCommit(*a_args)) {
+    // Put the composition plan into the newly-validated composition. Its owner
+    // is responsible for keeping it alive until commit.
     composition.composition_plan = a_args->composition;
     return true;
   }
@@ -841,7 +847,7 @@ bool HwcDisplay::TestComposition(
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
-    const Backend::CompositionTypeMap &composition) const {
+    const Backend::ValidatedComposition &composition) const {
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
     return AtomicCommitArgs{};
@@ -872,9 +878,10 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   std::map<uint32_t, const HwcLayer *> z_map;
   std::optional<LayerData> cursor_layer = std::nullopt;
   for (const auto &[_, layer] : layers_) {
-    auto it = composition.find(&layer);
-    CompositionType type = it != composition.end() ? it->second
-                                                   : CompositionType::kInvalid;
+    auto it = composition.composition_types.find(&layer);
+    CompositionType type = it != composition.composition_types.end()
+                               ? it->second
+                               : CompositionType::kInvalid;
     switch (type) {
       case CompositionType::kDevice:
         z_map.emplace(layer.GetZOrder(), &layer);
@@ -934,10 +941,15 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     composition_layers.emplace_back(layer->GetLayerData());
   }
 
-  a_args.composition = DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
-                                                    std::move(
-                                                        composition_layers),
-                                                    cursor_layer);
+  // Use the provided validated composition plan if it exists, otherwise create
+  // it now.
+  a_args
+      .composition = composition.composition_plan != nullptr
+                         ? composition.composition_plan
+                         : DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
+                                                        std::move(
+                                                            composition_layers),
+                                                        cursor_layer);
   if (!a_args.composition) {
     ALOGE_IF(!a_args.test_only, "Failed to create DrmKmsPlan");
     return std::nullopt;
@@ -956,29 +968,39 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   return a_args;
 }
 
-bool HwcDisplay::CommitComposition(
-    const Backend::CompositionTypeMap &composition,
-    SharedFd &out_present_fence) {
+bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
   ATRACE_CALL();
 
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
     return true;
   }
+
+  if (!validated_composition_.has_value()) {
+    ALOGE("%s: No composition is staged. Cannot commit.", __func__);
+    return false;
+  }
+
   // Client layer needs to be populated after validation since the client may
   // not provide a new buffer until after validation.
-  if (std::any_of(composition.begin(), composition.end(),
+  if (std::any_of(validated_composition_->composition_types.begin(),
+                  validated_composition_->composition_types.end(),
                   [](const auto &pair) -> bool {
                     return pair.second == CompositionType::kClient;
                   })) {
     client_layer_.PopulateLayerData();
   }
-  auto a_args = CreateFrameUpdateCommit(composition);
+
+  auto a_args = CreateFrameUpdateCommit(validated_composition_.value());
+  // |validated_composition_| can safely be reset now. |a_args| holds its own
+  // pointer to the plan which will remain in scope until the commit is finished
+  // (successfully or not).
+  validated_composition_.reset();
+
   if (!a_args) {
     ALOGE("Failed to create AtomicCommitArgs for frame composition.");
     return false;
   }
-  current_plan_ = a_args->composition;
 
   if (!GetPipe().atomic_state_manager->ExecuteAtomicCommit(*a_args)) {
     ALOGE("Failed to commit the frame composition.");
