@@ -29,25 +29,6 @@
 
 namespace android::drm_hwcomposer {
 
-template <class O>
-auto PipelineBindable<O>::BindPipeline(const DrmDisplayPipeline *pipeline,
-                                       bool return_object_if_bound)
-    -> std::shared_ptr<BindingOwner<O>> {
-  auto owner_object = owner_object_.lock();
-  if (owner_object) {
-    if (bound_pipeline_ == pipeline && return_object_if_bound) {
-      return owner_object;
-    }
-
-    return {};
-  }
-  owner_object = std::make_shared<BindingOwner<O>>(static_cast<O *>(this));
-
-  owner_object_ = owner_object;
-  bound_pipeline_ = pipeline;
-  return owner_object;
-}
-
 static auto TryCreatePipeline(DrmDevice &dev, DrmConnector &connector,
                               DrmEncoder &enc, DrmCrtc &crtc)
     -> std::unique_ptr<DrmDisplayPipeline> {

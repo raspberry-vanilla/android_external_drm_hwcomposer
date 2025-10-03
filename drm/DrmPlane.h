@@ -37,14 +37,18 @@ struct drm_plane_size_hint_local {
 };
 
 class DrmPlane : public PipelineBindable<DrmPlane> {
+  friend class FakeDrmPlane;
+
  public:
   DrmPlane(const DrmPlane &) = delete;
   DrmPlane &operator=(const DrmPlane &) = delete;
 
+  virtual ~DrmPlane() = default;
+
   static auto CreateInstance(DrmDevice &dev, uint32_t plane_id)
       -> std::unique_ptr<DrmPlane>;
 
-  bool IsCrtcSupported(const DrmCrtc &crtc) const;
+  virtual bool IsCrtcSupported(const DrmCrtc &crtc) const;
   bool IsValidForLayer(const LayerData *layer);
 
   auto GetType() const {

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include <drm/drm_mode.h>
 #define LOG_TAG "drmhwc"
 
 #include "DrmConnector.h"
 
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <array>

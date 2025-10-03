@@ -36,12 +36,16 @@ class DrmDevice;
 using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 
 class DrmConnector : public PipelineBindable<DrmConnector> {
+  friend class FakeDrmConnector;
+
  public:
   static auto CreateInstance(DrmDevice &dev, uint32_t connector_id,
                              uint32_t index) -> std::unique_ptr<DrmConnector>;
 
   DrmConnector(const DrmProperty &) = delete;
   DrmConnector &operator=(const DrmProperty &) = delete;
+
+  virtual ~DrmConnector() = default;
 
   int UpdateEdidProperty();
   auto GetEdidBlob() -> DrmModePropertyBlobUnique;
@@ -61,7 +65,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return index_in_res_array_;
   }
 
-  auto GetCurrentEncoderId() const {
+  virtual uint32_t GetCurrentEncoderId() const {
     return connector_->encoder_id;
   }
 
