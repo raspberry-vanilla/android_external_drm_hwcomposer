@@ -29,10 +29,12 @@
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/VSyncWorker.h"
 #include "stats/CompositionStats.h"
+#include "utils/EdidWrapper.h"
 
 namespace android::drm_hwcomposer {
 
 using DisplayHandle = int64_t;
+using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 
 class Backend;
 class DrmHwc;
@@ -272,6 +274,8 @@ class HwcDisplay {
 
   DrmHwc *const hwc_;
 
+  EdidWrapperUnique edid_wrapper_ = std::make_unique<EdidWrapper>();
+
   int64_t staged_mode_change_time_{};
   std::optional<ConfigId> staged_mode_config_id_{};
 
@@ -316,8 +320,8 @@ class HwcDisplay {
   void SetHdrOutputMetadata(ui::Hdr hdrType);
   void SetOutputType(OutputType hdr_output_type);
 
-  auto GetEdid() const -> EdidWrapperUnique & {
-    return GetPipe().connector->Get()->GetParsedEdid();
+  auto GetEdid() const -> const EdidWrapperUnique & {
+    return edid_wrapper_;
   }
 
   std::shared_ptr<FrontendDisplayBase> frontend_private_data_;

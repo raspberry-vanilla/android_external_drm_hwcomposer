@@ -27,13 +27,10 @@
 #include "DrmProperty.h"
 #include "DrmUnique.h"
 #include "compositor/DisplayInfo.h"
-#include "utils/EdidWrapper.h"
 
 namespace android::drm_hwcomposer {
 
 class DrmDevice;
-
-using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 
 class DrmConnector : public PipelineBindable<DrmConnector> {
   friend class FakeDrmConnector;
@@ -49,9 +46,6 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   int UpdateEdidProperty();
   auto GetEdidBlob() -> DrmModePropertyBlobUnique;
-  auto GetParsedEdid() -> EdidWrapperUnique & {
-    return edid_wrapper_;
-  }
 
   auto GetDev() const -> DrmDevice & {
     return *drm_;
@@ -169,8 +163,6 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
                                     DrmProperty *property) -> bool {
     return GetConnectorProperty(prop_name, property, /*is_optional=*/true);
   }
-
-  EdidWrapperUnique edid_wrapper_;
 
   const uint32_t index_in_res_array_;
 

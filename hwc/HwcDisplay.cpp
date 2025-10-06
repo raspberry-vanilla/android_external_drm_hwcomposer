@@ -20,7 +20,6 @@
 #include "HwcDisplay.h"
 
 #include <cinttypes>
-#include <sstream> 
 
 #include <ui/ColorSpace.h>
 #include <utils/Trace.h>
@@ -620,6 +619,15 @@ bool HwcDisplay::Init() {
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
     flatcon_ = std::make_unique<FlatteningController>(flatcbk,
                                                       kFlatteningTimeout);
+
+#if HAS_LIBDISPLAY_INFO
+    auto edid = LibdisplayEdidWrapper::Create(
+        pipeline_->connector->Get()->GetEdidBlob());
+    if (edid) {
+      edid_wrapper_ = std::move(edid);
+    }
+    ALOGW_IF(!edid, "Failed to create a LibdisplayInfo parser.");
+#endif
   }
 
   HwcLayer::LayerProperties lp;

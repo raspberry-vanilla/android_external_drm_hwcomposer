@@ -201,7 +201,7 @@ function run_vts() {
   adb shell stop surfaceflinger
   adb logcat -c
 
-  ADB_TEST_CMD="(/data/local/tmp/VtsHalGraphicsComposer3_TargetTest 2>&1 \
+  ADB_TEST_CMD="(MESA_SHADER_CACHE_DIR=/data/local/tmp/ /data/local/tmp/VtsHalGraphicsComposer3_TargetTest 2>&1 \
     | tee /data/local/tmp/${results_log})"
 
   set +e
