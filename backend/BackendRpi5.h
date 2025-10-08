@@ -24,7 +24,7 @@ namespace android::drm_hwcomposer {
 
 class BackendRpi5 : public Backend {
  public:
-  bool IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) override;
+  bool IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) const override;
 };
 }  // namespace android::drm_hwcomposer
 
