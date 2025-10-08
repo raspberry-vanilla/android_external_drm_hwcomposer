@@ -25,6 +25,8 @@
 #include <aidl/android/frameworks/stats/IStats.h>
 #include <android/binder_manager.h>
 
+#include "CompositionStats.h"
+#include "backend/Backend.h"
 #include "desktopatoms.h"
 #include "utils/log.h"
 
@@ -35,20 +37,62 @@ namespace DesktopAtoms = android::vendor::google::desktop::stats::DesktopAtoms;
 namespace android::drm_hwcomposer {
 namespace {
 
+using FlattenReason = Backend::FlattenReason;
+
 const std::string kStatsServiceName = std::string(IStats::descriptor)
                                           .append("/default");
+
+std::string ValidationResultToString(ValidationResult result) {
+  switch (result) {
+    case ValidationResult::kUnspecified:
+      return "Unspecified";
+    case ValidationResult::kSuccess:
+      return "Success";
+    case ValidationResult::kFailure:
+      return "Failure";
+    case ValidationResult::kSkip:
+      return "Skip";
+  }
+  LOG_ALWAYS_FATAL("Unknown ValidationResult value=%d",
+                   static_cast<int>(result));
+  return "Unknown";
+}
+
+std::string FlattenReasonToString(FlattenReason reason) {
+  switch (reason) {
+    case FlattenReason::kUnspecified:
+      return "Unspecified";
+    case FlattenReason::kNone:
+      return "None";
+    case FlattenReason::kStaticScene:
+      return "StaticScene";
+    case FlattenReason::kValidateFailed:
+      return "ValidateFailed";
+    case FlattenReason::kCtmWithOffset:
+      return "CtmWithOffset";
+  }
+  LOG_ALWAYS_FATAL("Unknown FlattenReason value=%d", static_cast<int>(reason));
+  return "Unknown";
+}
 
 // Use a private implementation of CompositionStatsAtomReporter to avoid leaking
 // the IStats interface through the public api.
 class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
  public:
-  void PushAtom(int64_t display_handle, int64_t presented_frame_count,
-                int64_t present_failed_count,
-                int64_t validate_failed_count) override {
-    ALOGV("Sending stats: id=%" PRId64 ", frames=%" PRId64
-          ", failed_present=%" PRId64 ", failed_validate=%" PRId64,
-          display_handle, presented_frame_count, present_failed_count,
-          validate_failed_count);
+  void PushAtom(int64_t display_handle, bool present_failed,
+                ValidationResult validation_result,
+                FlattenReason flatten_reason, int64_t frame_count,
+                int64_t layer_count, int64_t used_plane_count,
+                uint64_t total_pixops, uint64_t gpu_pixops) override {
+    ALOGV("Sending stats: display_handle=%" PRId64
+          ", present_failed=%d, validation_result=%s, flatten_reason=%s, "
+          "frame_count=%" PRId64 ", layer_count=%" PRId64
+          ", used_plane_count=%" PRId64 ", total_pixops=%" PRIu64
+          ", gpu_pixops=%" PRIu64,
+          display_handle, present_failed,
+          ValidationResultToString(validation_result).c_str(),
+          FlattenReasonToString(flatten_reason).c_str(), frame_count,
+          layer_count, used_plane_count, total_pixops, gpu_pixops);
 
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
@@ -56,8 +100,14 @@ class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
     const VendorAtom atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::HWC_COMPOSITION_STATS,
                          kDeprecatedReverseDomainName, display_handle,
-                         presented_frame_count, present_failed_count,
-                         validate_failed_count);
+                         /*presented_frame_count=*/0,
+                         /*present_failed_count=*/0,
+                         /*validate_failed_count=*/0, present_failed,
+                         static_cast<int32_t>(validation_result),
+                         static_cast<int32_t>(flatten_reason), frame_count,
+                         layer_count, used_plane_count,
+                         static_cast<int64_t>(total_pixops),
+                         static_cast<int64_t>(gpu_pixops));
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));

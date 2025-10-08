@@ -20,6 +20,7 @@
 #include "HwcDisplay.h"
 
 #include <cinttypes>
+#include <sstream>
 
 #include <ui/ColorSpace.h>
 #include <utils/Trace.h>
@@ -30,11 +31,14 @@
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
+#include "stats/CompositionStats.h"
 #include "utils/properties.h"
 
 using ColorGamut = ::android::ColorSpace;
 
 namespace android::drm_hwcomposer {
+
+using FlattenReason = Backend::FlattenReason;
 
 namespace {
 
@@ -360,6 +364,7 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
       changed_layers.emplace_back(id, layer.GetValidatedType());
     }
   }
+
   return changed_layers;
 }
 
@@ -385,6 +390,7 @@ auto HwcDisplay::AcceptValidatedComposition() -> void {
   }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto HwcDisplay::PresentStagedComposition(
     std::optional<int64_t> desired_present_time, SharedFd &out_present_fence,
     std::vector<ReleaseFence> &out_release_fences) -> bool {
@@ -399,7 +405,10 @@ auto HwcDisplay::PresentStagedComposition(
     return true;
   }
 
-  ++total_stats_.total_frames;
+  CompositionAttributes attributes{.display_handle = handle_};
+  CompositionStats stats{};
+  ++stats.total_frames;
+  stats.layer_count += layers_.size();
 
   // With multiple displays configured at different refresh rates,
   // desired_present_time can be up to almost 2 vsync periods away for the
@@ -417,20 +426,69 @@ auto HwcDisplay::PresentStagedComposition(
     WaitForPresentTime(desired_present_time.value(), vperiod_ns);
   }
 
-  // Check if validation was skipped, and populate the composition types as
-  // needed. Otherwise, use the already-validated composition types.
-  if (!validated_composition_.has_value()) {
+  // Check if validation was performed and update related stats. Otherwise
+  // populate the composition types now.
+  if (validated_composition_.has_value()) {
+    attributes.validation_result = validated_composition_->flatten_reason ==
+                                           FlattenReason::kValidateFailed
+                                       ? ValidationResult::kFailure
+                                       : ValidationResult::kSuccess;
+    attributes.flatten_reason = validated_composition_->flatten_reason;
+    if (validated_composition_->flatten_reason ==
+        FlattenReason::kValidateFailed) {
+      ++stats.failed_kms_validate;
+    } else if (validated_composition_->flatten_reason ==
+               FlattenReason::kStaticScene) {
+      ++stats.frames_flattened;
+    }
+    if (validated_composition_->cursor_plane_validated.has_value()) {
+      if (validated_composition_->cursor_plane_validated.value()) {
+        ++stats.cursor_plane_frames;
+      } else {
+        ++stats.failed_kms_cursor_validate;
+      }
+    }
+  } else {
+    attributes.validation_result = ValidationResult::kSkip;
     validated_composition_ = Backend::ValidatedComposition{};
-    for (auto &l : layers_) {
+    for (const auto &[id, layer] : layers_) {
       validated_composition_->composition_types
-          .emplace(&l.second, l.second.GetValidatedType());
+          .emplace(&layer, layer.GetValidatedType());
     }
   }
 
+  bool has_client = false;
+  for (const auto &[id, layer] : layers_) {
+    stats.total_pixops += layer.GetPixOps();
+    switch (layer.GetValidatedType()) {
+      case CompositionType::kClient:
+        has_client = true;
+        stats.gpu_pixops += layer.GetPixOps();
+        break;
+      case CompositionType::kDevice:
+      case CompositionType::kCursor:
+        ++stats.used_plane_count;
+        break;
+      case CompositionType::kSolidColor:
+      case CompositionType::kInvalid:
+        ALOGE("Invalid layer type: %d",
+              static_cast<int>(layer.GetValidatedType()));
+    }
+  }
+
+  if (has_client) {
+    ++stats.used_plane_count;
+  }
+
   if (!CommitStagedComposition(out_present_fence)) {
-    ++total_stats_.failed_kms_present;
+    attributes.present_failed = true;
+    ++stats.failed_kms_present;
+    comp_stats_[attributes] += stats;
     return false;
   }
+
+  attributes.present_failed = false;
+  comp_stats_[attributes] += stats;
 
   // Reset the hdr output metadata blobs so we don't apply it repeatedly.
   hdr_metadata_.reset();

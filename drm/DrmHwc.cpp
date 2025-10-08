@@ -19,8 +19,13 @@
 #include "DrmHwc.h"
 
 #include <cinttypes>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <utility>
 
 #include "backend/Backend.h"
+#include "stats/CompositionStats.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 
@@ -52,7 +57,8 @@ std::string DumpStats(const CompositionStats &stats) {
   return ss.str();
 }
 
-std::string DumpDisplayStats(HwcDisplay *display, const CompositionStats &stats,
+std::string DumpDisplayStats(const HwcDisplay *display,
+                             const CompositionStats &stats,
                              const CompositionStats &delta) {
   std::stringstream ss;
   ss << "- Display on: " << display->GetDisplayName() << "\n"
@@ -202,10 +208,10 @@ bool DrmHwc::DestroyVirtualDisplay(DisplayHandle display) {
 }
 
 auto DrmHwc::PullCompositionStats()
-    -> std::map<DisplayHandle, CompositionStats> {
-  std::map<int64_t, CompositionStats> stats;
-  for (auto &[display_handle, display] : displays_) {
-    stats[static_cast<int64_t>(display_handle)] = display->total_stats();
+    -> std::map<CompositionAttributes, CompositionStats> {
+  std::map<CompositionAttributes, CompositionStats> stats;
+  for (const auto &[display_handle, display] : displays_) {
+    stats.insert(display->comp_stats().begin(), display->comp_stats().end());
   }
   return stats;
 }
@@ -215,17 +221,33 @@ std::string DrmHwc::DumpState() {
 
   output << "-- drm_hwcomposer --\n\n";
 
-  auto callback = [this, &output](int64_t display_handle,
-                                  const CompositionStats &stats,
-                                  const CompositionStats &delta) {
-    auto *display = GetDisplay(display_handle);
-    ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found",
-             display_handle);
-    if (display) {
-      output << DumpDisplayStats(display, stats, delta);
+  std::map<DisplayHandle, std::pair<CompositionStats, CompositionStats>>
+      total_stats;
+  const auto callback = [&total_stats](const CompositionAttributes &attributes,
+                                       const CompositionStats &cumulative,
+                                       const CompositionStats &delta) {
+    auto it = total_stats.find(attributes.display_handle);
+    if (it == total_stats.end()) {
+      total_stats.emplace(attributes.display_handle,
+                          std::make_pair(CompositionStats{},
+                                         CompositionStats{}));
+      it = total_stats.find(attributes.display_handle);
     }
+    auto &[total_cumulative, total_delta] = it->second;
+    total_cumulative += cumulative;
+    total_delta += delta;
   };
   dump_stats_tracker_.ReportStats(callback);
+
+  for (const auto &[display_handle, display_stats] : total_stats) {
+    const auto *display = GetDisplay(display_handle);
+    ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found",
+             display_handle);
+    if (display != nullptr) {
+      output << DumpDisplayStats(display, display_stats.first,
+                                 display_stats.second);
+    }
+  }
   return output.str();
 }
 

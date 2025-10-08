@@ -18,7 +18,7 @@
 
 #include <chrono>
 
-#include "hwc/HwcDisplay.h"
+#include "stats/CompositionStats.h"
 #include "stats/CompositionStatsAtomReporter.h"
 
 namespace android::drm_hwcomposer {
@@ -42,14 +42,17 @@ CompositionStatsPoller::~CompositionStatsPoller() {
 void CompositionStatsPoller::PollFunc() {
   bool thread_exit = false;
   while (!thread_exit) {
-    tracker_.ReportStats([this](DisplayHandle display_handle,
+    tracker_.ReportStats([this](const CompositionAttributes& attributes,
                                 const CompositionStats& /*cumulative*/,
                                 const CompositionStats& delta) {
       if (delta.total_frames == 0) {
         return;
       }
-      reporter_->PushAtom(display_handle, delta.total_frames,
-                          delta.failed_kms_present, delta.failed_kms_validate);
+      reporter_->PushAtom(attributes.display_handle, attributes.present_failed,
+                          attributes.validation_result,
+                          attributes.flatten_reason, delta.total_frames,
+                          delta.layer_count, delta.used_plane_count,
+                          delta.total_pixops, delta.gpu_pixops);
     });
 
     constexpr std::chrono::seconds kPollFrequency = std::chrono::minutes(1);

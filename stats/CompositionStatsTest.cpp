@@ -30,6 +30,14 @@ using ::testing::StrictMock;
 
 namespace android::drm_hwcomposer {
 
+static bool operator==(const CompositionAttributes& lhs,
+                       const CompositionAttributes& rhs) {
+  return lhs.display_handle == rhs.display_handle &&
+         lhs.present_failed == rhs.present_failed &&
+         lhs.validation_result == rhs.validation_result &&
+         lhs.flatten_reason == rhs.flatten_reason;
+}
+
 // Equality operator to be used by Eq, ASSERT_EQ, etc. Needs to be static rather
 // than in anonymous namespace to ensure gmock can find it.
 static bool operator==(const CompositionStats& lhs,
@@ -41,14 +49,15 @@ static bool operator==(const CompositionStats& lhs,
          lhs.failed_kms_present == rhs.failed_kms_present &&
          lhs.frames_flattened == rhs.frames_flattened &&
          lhs.cursor_plane_frames == rhs.cursor_plane_frames &&
-         lhs.failed_kms_cursor_validate == rhs.failed_kms_cursor_validate;
+         lhs.failed_kms_cursor_validate == rhs.failed_kms_cursor_validate &&
+         lhs.layer_count == rhs.layer_count &&
+         lhs.used_plane_count == rhs.used_plane_count;
 }
 
 // Stream insertion operator for better gtest failure messages.
 static std::ostream& operator<<(std::ostream& os,
                                 const CompositionStats& stats) {
-  os << "CompositionStats { "
-     << "total_frames: " << stats.total_frames
+  os << "CompositionStats { " << "total_frames: " << stats.total_frames
      << ", total_pixops: " << stats.total_pixops
      << ", gpu_pixops: " << stats.gpu_pixops
      << ", failed_kms_validate: " << stats.failed_kms_validate
@@ -56,14 +65,15 @@ static std::ostream& operator<<(std::ostream& os,
      << ", frames_flattened: " << stats.frames_flattened
      << ", cursor_plane_frames: " << stats.cursor_plane_frames
      << ", failed_kms_cursor_validate: " << stats.failed_kms_cursor_validate
-     << " }";
+     << ", layer_count: " << stats.layer_count
+     << ", use_plane_count: " << stats.used_plane_count << " }";
   return os;
 }
 
 class MockCompositionStatsProvider : public CompositionStatsProvider {
  public:
-  MOCK_METHOD((std::map<int64_t, CompositionStats>), PullCompositionStats, (),
-              (override));
+  MOCK_METHOD((std::map<CompositionAttributes, CompositionStats>),
+              PullCompositionStats, (), (override));
 };
 
 // Helper class to facilitate passing std::function to the
@@ -72,12 +82,14 @@ class MockStatsCallback {
  public:
   // Set expectations on the Invoke mock method.
   MOCK_METHOD(void, Invoke,
-              (int64_t, const CompositionStats&, const CompositionStats&), ());
+              (const CompositionAttributes&, const CompositionStats&,
+               const CompositionStats&),
+              ());
 
   // Pass this to CompositionStatsTracker::ReportStats.
   CompositionStatsTracker::Callback AsStdFunction() {
-    return [this](int64_t id, const CompositionStats& c,
-                  const CompositionStats& d) { this->Invoke(id, c, d); };
+    return [this](const CompositionAttributes& a, const CompositionStats& c,
+                  const CompositionStats& d) { this->Invoke(a, c, d); };
   }
 };
 
@@ -100,16 +112,18 @@ class CompositionStatsTrackerTest : public ::testing::Test {
                             .failed_kms_present = base / 20,
                             .frames_flattened = base / 5,
                             .cursor_plane_frames = base / 2,
-                            .failed_kms_cursor_validate = base / 50};
+                            .failed_kms_cursor_validate = base / 50,
+                            .layer_count = 2,
+                            .used_plane_count = 2};
   }
 };
 
 // Initial call to ReportStats reports the same stats for cumulative and delta.
 TEST_F(CompositionStatsTrackerTest, ReportStatsInitialCall) {
-  const int64_t display_handle = 1;
-  CompositionStats current_stats = CreateStats(100);
-  std::map<int64_t, CompositionStats> provider_result = {
-      {display_handle, current_stats}};
+  const CompositionAttributes attr{.display_handle = 1};
+  const CompositionStats current_stats = CreateStats(100);
+  const std::map<CompositionAttributes, CompositionStats> provider_result{
+      {attr, current_stats}};
 
   StrictMock<MockStatsCallback> mock_callback;
 
@@ -118,18 +132,18 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsInitialCall) {
 
   // Expect that delta is same as cumulative.
   EXPECT_CALL(mock_callback,
-              Invoke(Eq(display_handle), Eq(current_stats), Eq(current_stats)));
+              Invoke(Eq(attr), Eq(current_stats), Eq(current_stats)));
 
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
 // Subsequent calls to ReportStats with no change in cumulative stats.
 TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallNoChange) {
-  const int64_t display_handle = 1;
-  CompositionStats stats = CreateStats(100);
-  std::map<int64_t, CompositionStats> provider_result = {
-      {display_handle, stats}};
-  CompositionStats zero_delta = {};
+  const CompositionAttributes attr{.display_handle = 1};
+  const CompositionStats stats = CreateStats(100);
+  const std::map<CompositionAttributes, CompositionStats> provider_result{
+      {attr, stats}};
+  const CompositionStats zero_delta{};
 
   // Same provider result for both calls.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
@@ -138,86 +152,83 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallNoChange) {
   StrictMock<MockStatsCallback> mock_callback;
 
   // Initial call.
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle), Eq(stats), Eq(stats)));
+  EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(stats)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 
   // Second call. Delta should be zero.
-  EXPECT_CALL(mock_callback,
-              Invoke(Eq(display_handle), Eq(stats), Eq(zero_delta)));
+  EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(zero_delta)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
 // Test that the delta is reported as expected.
 TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallWithChange) {
-  const int64_t display_handle = 1;
-  CompositionStats stats1 = CreateStats(100);
-  CompositionStats stats2 = CreateStats(150);
-  std::map<int64_t, CompositionStats> provider_result1 = {
-      {display_handle, stats1}};
-  std::map<int64_t, CompositionStats> provider_result2 = {
-      {display_handle, stats2}};
-  CompositionStats expected_delta = stats2 - stats1;
+  const CompositionAttributes attr{.display_handle = 1};
+  const CompositionStats stats1 = CreateStats(100);
+  const CompositionStats stats2 = CreateStats(150);
+  const std::map<CompositionAttributes, CompositionStats> provider_result1{
+      {attr, stats1}};
+  const std::map<CompositionAttributes, CompositionStats> provider_result2{
+      {attr, stats2}};
+  const CompositionStats expected_delta = stats2 - stats1;
 
   StrictMock<MockStatsCallback> mock_callback;
 
   // First call with the initial stats.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result1));
-  EXPECT_CALL(mock_callback,
-              Invoke(Eq(display_handle), Eq(stats1), Eq(stats1)));
+  EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats1), Eq(stats1)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 
   // Second call with updated stats and non-trivial delta.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result2));
-  EXPECT_CALL(mock_callback,
-              Invoke(Eq(display_handle), Eq(stats2), Eq(expected_delta)));
+  EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats2), Eq(expected_delta)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
-// Test that stats for multiple displays are reported correctly.
-TEST_F(CompositionStatsTrackerTest, ReportStatsMultipleDisplays) {
-  const int64_t display_handle1 = 10;
-  const int64_t display_handle2 = 20;
-  CompositionStats display1_stats1 = CreateStats(100);
-  CompositionStats display2_stats1 = CreateStats(200);
-  CompositionStats display1_stats2 = CreateStats(110);
-  CompositionStats display2_stats2 = CreateStats(250);
+// Test that stats for multiple attributes are reported correctly.
+TEST_F(CompositionStatsTrackerTest, ReportStatsMultipleAttributes) {
+  const CompositionAttributes attr1{.display_handle = 10};
+  const CompositionAttributes attr2{.display_handle = 20};
+  const CompositionStats attr1_stats1 = CreateStats(100);
+  const CompositionStats attr2_stats1 = CreateStats(200);
+  const CompositionStats attr1_stats2 = CreateStats(110);
+  const CompositionStats attr2_stats2 = CreateStats(250);
 
-  std::map<int64_t, CompositionStats> provider_result1 =
-      {{display_handle1, display1_stats1}, {display_handle2, display2_stats1}};
-  std::map<int64_t, CompositionStats> provider_result2 =
-      {{display_handle1, display1_stats2}, {display_handle2, display2_stats2}};
+  const std::map<CompositionAttributes, CompositionStats>
+      provider_result1{{attr1, attr1_stats1}, {attr2, attr2_stats1}};
+  const std::map<CompositionAttributes, CompositionStats>
+      provider_result2{{attr1, attr1_stats2}, {attr2, attr2_stats2}};
 
-  CompositionStats display1_expected_delta1 = display1_stats1;
-  CompositionStats display1_expected_delta2 = display1_stats2 - display1_stats1;
-  CompositionStats display2_expected_delta1 = display2_stats1;
-  CompositionStats display2_expected_delta2 = display2_stats2 - display2_stats1;
+  const CompositionStats attr1_expected_delta1 = attr1_stats1;
+  const CompositionStats attr1_expected_delta2 = attr1_stats2 - attr1_stats1;
+  const CompositionStats attr2_expected_delta1 = attr2_stats1;
+  const CompositionStats attr2_expected_delta2 = attr2_stats2 - attr2_stats1;
 
   StrictMock<MockStatsCallback> mock_callback;
 
-  // Initial call. Ordering between displays doesn't matter.
+  // Initial call. Ordering between attributes doesn't matter.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result1));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats1),
-                                    Eq(display1_expected_delta1)));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle2), Eq(display2_stats1),
-                                    Eq(display2_expected_delta1)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr2), Eq(attr2_stats1), Eq(attr2_expected_delta1)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 
-  // Updated call. Ordering between displays doesn't matter.
+  // Updated call. Ordering between attributes doesn't matter.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result2));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats2),
-                                    Eq(display1_expected_delta2)));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle2), Eq(display2_stats2),
-                                    Eq(display2_expected_delta2)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr2), Eq(attr2_stats2), Eq(attr2_expected_delta2)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
-// No displays in the provider result.
+// No entries in the provider result.
 TEST_F(CompositionStatsTrackerTest, ReportStatsEmptyResult) {
-  std::map<int64_t, CompositionStats> empty_result = {};
+  const std::map<CompositionAttributes, CompositionStats> empty_result{};
 
   // StrictMock will fail if there are any unexpected calls to Invoke.
   StrictMock<MockStatsCallback> mock_callback;
@@ -226,78 +237,76 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsEmptyResult) {
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
-// Display added in between calls to ReportStats.
-TEST_F(CompositionStatsTrackerTest, ReportStatsDisplayAdded) {
-  const int64_t display_handle1 = 10;
-  const int64_t display_handle2 = 20;
-  const CompositionStats display1_stats1 = CreateStats(100);
-  const CompositionStats display1_stats2 = CreateStats(110);
-  const CompositionStats display2_stats = CreateStats(50);
+// Attributes added in between calls to ReportStats.
+TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesAdded) {
+  const CompositionAttributes attr1{.display_handle = 10};
+  const CompositionAttributes attr2{.display_handle = 20};
+  const CompositionStats attr1_stats1 = CreateStats(100);
+  const CompositionStats attr1_stats2 = CreateStats(110);
+  const CompositionStats attr2_stats = CreateStats(50);
 
-  std::map<int64_t, CompositionStats> provider_result1 = {
-      {display_handle1, display1_stats1}};
-  std::map<int64_t, CompositionStats> provider_result2 =
-      {{display_handle1, display1_stats2}, {display_handle2, display2_stats}};
+  const std::map<CompositionAttributes, CompositionStats> provider_result1{
+      {attr1, attr1_stats1}};
+  const std::map<CompositionAttributes, CompositionStats>
+      provider_result2{{attr1, attr1_stats2}, {attr2, attr2_stats}};
 
-  const CompositionStats display1_expected_delta1 = display1_stats1;
-  const CompositionStats display1_expected_delta2 = display1_stats2 -
-                                                    display1_stats1;
-  const CompositionStats display2_expected_delta = display2_stats;
+  const CompositionStats attr1_expected_delta1 = attr1_stats1;
+  const CompositionStats attr1_expected_delta2 = attr1_stats2 - attr1_stats1;
+  const CompositionStats attr2_expected_delta = attr2_stats;
 
   StrictMock<MockStatsCallback> mock_callback;
 
-  // First call only contains display 1.
+  // First call only contains attr1.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result1));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats1),
-                                    Eq(display1_expected_delta1)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 
-  // Second call has both displays.
+  // Second call has both attributes.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result2));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats2),
-                                    Eq(display1_expected_delta2)));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle2), Eq(display2_stats),
-                                    Eq(display2_expected_delta)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 
-// Display removed in between calls to ReportStats.
-TEST_F(CompositionStatsTrackerTest, ReportStatsDisplayRemoved) {
-  const int64_t display_handle1 = 10;
-  const int64_t display_handle2 = 20;
-  const CompositionStats display1_stats1 = CreateStats(100);
-  const CompositionStats display2_stats = CreateStats(200);
-  const CompositionStats display1_stats2 = CreateStats(110);
+// Attributes removed in between calls to ReportStats.
+TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesRemoved) {
+  const CompositionAttributes attr1{.display_handle = 10};
+  const CompositionAttributes attr2{.display_handle = 20};
+  const CompositionStats attr1_stats1 = CreateStats(100);
+  const CompositionStats attr2_stats = CreateStats(200);
+  const CompositionStats attr1_stats2 = CreateStats(110);
 
-  std::map<int64_t, CompositionStats> provider_result1 =
-      {{display_handle1, display1_stats1}, {display_handle2, display2_stats}};
-  std::map<int64_t, CompositionStats> provider_result2 = {
-      {display_handle1, display1_stats2}};
+  const std::map<CompositionAttributes, CompositionStats>
+      provider_result1{{attr1, attr1_stats1}, {attr2, attr2_stats}};
+  const std::map<CompositionAttributes, CompositionStats> provider_result2{
+      {attr1, attr1_stats2}};
 
-  const CompositionStats display1_expected_delta1 = display1_stats1;
-  const CompositionStats display2_expected_delta = display2_stats;
-  const CompositionStats display1_expected_delta2 = display1_stats2 -
-                                                    display1_stats1;
+  const CompositionStats attr1_expected_delta1 = attr1_stats1;
+  const CompositionStats attr2_expected_delta = attr2_stats;
+  const CompositionStats attr1_expected_delta2 = attr1_stats2 - attr1_stats1;
 
   StrictMock<MockStatsCallback> mock_callback;
 
-  // Initial call has both displays.
+  // Initial call has both attributes.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result1));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats1),
-                                    Eq(display1_expected_delta1)));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle2), Eq(display2_stats),
-                                    Eq(display2_expected_delta)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 
-  // Second call has only display 1. StrictMock will fail if Invoke is called
-  // for display_handle2.
+  // Second call has only attr1. StrictMock will fail if Invoke is called
+  // for attr2.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result2));
-  EXPECT_CALL(mock_callback, Invoke(Eq(display_handle1), Eq(display1_stats2),
-                                    Eq(display1_expected_delta2)));
+  EXPECT_CALL(mock_callback,
+              Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
   tracker_->ReportStats(mock_callback.AsStdFunction());
 }
 

@@ -17,12 +17,13 @@
 
 #include "Backend.h"
 
-#include <climits>
+#include <tuple>
+#include <vector>
 
 #include "BackendManager.h"
-#include "bufferinfo/BufferInfoGetter.h"
-#include "drm/DrmHwc.h"
+#include "compositor/LayerData.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
 
@@ -42,20 +43,22 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
 
 }  // namespace
 
-auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
-  auto layers = display->GetOrderLayersByZPos();
+auto Backend::ValidateDisplay(const HwcDisplay* display) const
+    -> ValidatedComposition {
+  const auto layers = display->GetOrderLayersByZPos();
 
   const FlatteningController* flatcon = display->GetFlatCon();
-  if (flatcon != nullptr) {
-    if (flatcon->ShouldFlatten()) {
-      display->total_stats().frames_flattened++;
-      return GetFlattenedComposition(layers);
-    }
+  if (flatcon != nullptr && flatcon->ShouldFlatten()) {
+    return GetFlattenedComposition(layers, FlattenReason::kStaticScene);
+  }
+
+  if (display->CtmByGpu()) {
+    return GetFlattenedComposition(layers, FlattenReason::kCtmWithOffset);
   }
 
   bool use_cursor_plane = false;
   const auto* cursor_layer = GetCursorLayer(layers);
-  auto cursor_plane = display->GetPipe().GetUsablePlanes().second;
+  const auto cursor_plane = display->GetPipe().GetUsablePlanes().second;
   if (cursor_layer != nullptr && cursor_plane != nullptr &&
       !IsClientLayer(display, cursor_layer) &&
       cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData())) {
@@ -69,7 +72,7 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
 
   size_t client_start = 0;
   size_t client_size = 0;
-  ValidatedComposition validated_composition;
+  ValidatedComposition validated_composition{};
 
   // Populates and tests |validated_composition|, returning whether it
   // succeeded.
@@ -110,32 +113,29 @@ auto Backend::ValidateDisplay(HwcDisplay* display) -> ValidatedComposition {
 
   // Final fallback: convert all layers to client composition.
   if (!success) {
-    ++display->total_stats().failed_kms_validate;
-    if (use_cursor_plane) {
-      ++display->total_stats().failed_kms_cursor_validate;
-    }
-    use_cursor_plane = false;
-    validated_composition = GetFlattenedComposition(layers);
+    validated_composition = GetFlattenedComposition(layers,
+                                                    FlattenReason::
+                                                        kValidateFailed);
   }
 
-  display->total_stats().gpu_pixops += CalcPixOps(validated_composition);
-  display->total_stats().total_pixops += CalcPixOps(layers, 0, layers.size());
   if (use_cursor_plane) {
-    ++display->total_stats().cursor_plane_frames;
+    validated_composition.cursor_plane_validated = success;
   }
+
   return validated_composition;
 }
 
 Backend::ValidatedComposition Backend::GetFlattenedComposition(
-    const std::vector<const HwcLayer*>& layers) {
+    const std::vector<const HwcLayer*>& layers, FlattenReason flatten_reason) {
   return ValidatedComposition{
       .composition_types = GetCompositionTypes(layers, 0, layers.size(), false),
-      .composition_plan = nullptr};
+      .composition_plan = nullptr,
+      .flatten_reason = flatten_reason};
 }
 
 std::tuple<size_t, size_t> Backend::GetClientLayers(
     const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-    bool use_cursor_plane) {
+    bool use_cursor_plane) const {
   size_t client_start = 0;
   size_t client_size = 0;
 
@@ -152,7 +152,8 @@ std::tuple<size_t, size_t> Backend::GetClientLayers(
                              use_cursor_plane);
 }
 
-bool Backend::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) {
+bool Backend::IsClientLayer(const HwcDisplay* display,
+                            const HwcLayer* layer) const {
   return !HardwareSupportsLayerType(layer->GetSfType()) ||
          !layer->IsLayerUsableAsDevice() || display->CtmByGpu() ||
          (layer->GetLayerData().pi.RequireScalingOrPhasing() &&
@@ -162,18 +163,6 @@ bool Backend::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) {
 bool Backend::HardwareSupportsLayerType(CompositionType comp_type) {
   return comp_type == CompositionType::kDevice ||
          comp_type == CompositionType::kCursor;
-}
-
-uint32_t Backend::CalcPixOps(
-    const ValidatedComposition& validated_composition) {
-  uint32_t pixops = 0;
-  for (const auto& [layer, comp_type] :
-       validated_composition.composition_types) {
-    if (comp_type == CompositionType::kClient) {
-      pixops += layer->GetPixOps();
-    }
-  }
-  return pixops;
 }
 
 uint32_t Backend::CalcPixOps(const std::vector<const HwcLayer*>& layers,

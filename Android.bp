@@ -329,6 +329,8 @@ drm_hwcomposer_atom_reporter_library {
     name: "drm_hwcomposer_atom_reporter",
     shared_libs: [
         "libc++",
+        "libdrm",
+        "libhardware",
         "liblog",
     ],
     soong_config_variables: {

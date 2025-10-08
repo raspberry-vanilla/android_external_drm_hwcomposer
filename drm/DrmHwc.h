@@ -48,7 +48,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
 
   // CompositionStatsProvider:
   auto PullCompositionStats()
-      -> std::map<DisplayHandle, CompositionStats> override;
+      -> std::map<CompositionAttributes, CompositionStats> override;
 
   std::string DumpState();
 
