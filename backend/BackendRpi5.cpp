@@ -21,7 +21,7 @@
 
 namespace android::drm_hwcomposer {
 
-bool BackendRpi5::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) {
+bool BackendRpi5::IsClientLayer(const HwcDisplay* display, const HwcLayer* layer) const {
   LayerData layer_data = layer->GetLayerData();
 
   if (layer_data.bi->format == DRM_FORMAT_YVU420)
