@@ -1,1 +1,4 @@
 x86_64 CtsDisplayTestCases android.display.cts.DisplayTest#testGetSupportedRefreshRatesIsDivisorRate
+
+# Lavapipe fails
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testAndroidBaselineProfile2021Support

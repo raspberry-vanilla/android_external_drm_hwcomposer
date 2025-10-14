@@ -42,9 +42,24 @@ class PipelineBindable {
     return bound_pipeline_;
   }
 
+  // Header implementation required for template instantiation.
   auto BindPipeline(const DrmDisplayPipeline *pipeline,
                     bool return_object_if_bound = false)
-      -> std::shared_ptr<BindingOwner<O>>;
+      -> std::shared_ptr<BindingOwner<O>> {
+    auto owner_object = owner_object_.lock();
+    if (owner_object) {
+      if (bound_pipeline_ == pipeline && return_object_if_bound) {
+        return owner_object;
+      }
+
+      return {};
+    }
+    owner_object = std::make_shared<BindingOwner<O>>(static_cast<O *>(this));
+
+    owner_object_ = owner_object;
+    bound_pipeline_ = pipeline;
+    return owner_object;
+  }
 
  private:
   const DrmDisplayPipeline *bound_pipeline_;

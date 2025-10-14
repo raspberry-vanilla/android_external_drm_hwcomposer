@@ -18,6 +18,8 @@
 
 #if HAS_LIBDISPLAY_INFO
 
+#include <ui/GraphicTypes.h>
+
 #include "utils/EdidWrapper.h"
 #include "utils/log.h"
 

@@ -18,7 +18,7 @@ debian/x86_64_cuttlefish:
     - .container
   timeout: 6h
   variables:
-    FDO_DISTRIBUTION_VERSION: "bookworm-slim"
+    FDO_DISTRIBUTION_VERSION: "trixie-slim"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/debian/x86_64_cuttlefish.sh'
     HWC_TAG: $DEBIAN_CUTTLEFISH_TAG
   after_script:

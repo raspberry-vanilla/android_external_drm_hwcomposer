@@ -54,6 +54,7 @@ cc_defaults {
 
     cppflags: [
         "-DHAS_LIBDISPLAY_INFO",
+        "-DHAS_LIBSYNC",
     ],
 
     cpp_std: "gnu++17",
@@ -275,15 +276,34 @@ apex {
 cc_test_host {
     name: "drm_hwcomposer_unittests",
     srcs: [
+        "bufferinfo/BufferInfoGetter.cpp",
         "compositor/FlatteningController.cpp",
         "compositor/FlatteningControllerTests.cpp",
+        "drm/DrmAtomicStateManager.cpp",
+        "drm/DrmConnector.cpp",
+        "drm/DrmCrtc.cpp",
+        "drm/DrmDevice.cpp",
+        "drm/DrmDisplayPipeline.cpp",
+        "drm/DrmDisplayPipelineTest.cpp",
+        "drm/DrmEncoder.cpp",
+        "drm/DrmMode.cpp",
+        "drm/DrmPlane.cpp",
+        "drm/DrmProperty.cpp",
         "stats/CompositionStats.cpp",
         "stats/CompositionStatsTest.cpp",
+        "utils/fd.cpp",
+        "utils/properties.cpp",
     ],
     static_libs: [
         "libbase",
+        "libcutils",
+        "libdrm",
         "libgmock",
         "libgtest",
+        "liblog",
+    ],
+    shared_libs: [
+        "libhardware",
     ],
 }
 
@@ -309,6 +329,8 @@ drm_hwcomposer_atom_reporter_library {
     name: "drm_hwcomposer_atom_reporter",
     shared_libs: [
         "libc++",
+        "libdrm",
+        "libhardware",
         "liblog",
     ],
     soong_config_variables: {

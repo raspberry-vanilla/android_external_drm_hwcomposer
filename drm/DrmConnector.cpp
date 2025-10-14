@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include <drm/drm_mode.h>
 #define LOG_TAG "drmhwc"
 
 #include "DrmConnector.h"
 
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <array>
@@ -29,7 +29,6 @@
 
 #include "DrmDevice.h"
 #include "compositor/DisplayInfo.h"
-#include "utils/log.h"
 
 #include <cutils/properties.h>
 
@@ -89,14 +88,6 @@ auto DrmConnector::Init()-> bool {
       !GetConnectorProperty("CRTC_ID", &crtc_id_property_)) {
     return false;
   }
-
-  UpdateEdidProperty();
-#if HAS_LIBDISPLAY_INFO
-  auto edid = LibdisplayEdidWrapper::Create(GetEdidBlob());
-  edid_wrapper_ = edid ? std::move(edid) : std::make_unique<EdidWrapper>();
-#else
-  edid_wrapper_ = std::make_unique<EdidWrapper>();
-#endif
 
   if (IsWriteback()) {
     if (!GetConnectorProperty("WRITEBACK_PIXEL_FORMATS",

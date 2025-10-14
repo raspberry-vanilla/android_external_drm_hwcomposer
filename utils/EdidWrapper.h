@@ -23,10 +23,12 @@ extern "C" {
 }
 #endif
 
-#include <ui/GraphicTypes.h>
-
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmUnique.h"
+
+namespace ui {
+enum class Hdr;
+}  // namespace ui
 
 namespace android::drm_hwcomposer {
 

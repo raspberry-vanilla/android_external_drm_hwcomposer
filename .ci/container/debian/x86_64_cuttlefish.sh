@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091 # no need to follow references to other shell scripts
+# shellcheck disable=SC1090,SC1091 # no need to follow references to other shell scripts
 # For changes in this file to take effect, bump both:
 # DEBIAN_CUTTLEFISH_TAG and UBUNTU_ANDROID_TAG
 set -e
@@ -71,11 +71,13 @@ EPHEMERAL_DEPS=(
   glslang-tools
   gpg
   gpg-agent
-  libncurses5
+  libncurses-dev
+  meson
   ninja-build
   openssl
   openssh-client
   openssh-server
+  patch
   perl
   pkg-config
   pipx
@@ -135,7 +137,62 @@ DRMHWC_DIR="${TOP}/external/drm_hwcomposer"
 get_repo "${DRMHWC_DIR}"
 
 # Ensure that __ANDROID_API__ is defined as ANDROID_SDK_VERSION
+: "${ANDROID_SDK_VERSION:?ANDROID_SDK_VERSION is not set}"
 sed -i "/cc_defaults[[:space:]]*{/a\    min_sdk_version: \"${ANDROID_SDK_VERSION}\"," "${DRMHWC_DIR}/Android.bp"
+
+# Keep mesa's Android.bp files for other devices that reference them, but,
+# since the blueprint files don't support building lavapipe and llvmpipe for cuttlefish,
+# continue to use Android.mk for these drivers
+MESA3D_DIR="${TOP}/external/mesa3d"
+pushd "${MESA3D_DIR}"
+git remote add upstream https://gitlab.freedesktop.org/mesa/mesa.git
+git fetch upstream
+
+# Fetch upstream mesa at the commit which uses the static LLVM library available from AOSP.
+# When this commit is included in the next mesa release, then just use the released version.
+MESA3D_LLVM_COMMIT="9029c8b1e37"
+git restore --source="$MESA3D_LLVM_COMMIT" android/
+
+# Revert the commit which removed the libglapi module since we still
+# need it for the Android 16 build
+MESA3D_LIBGLAPI_COMMIT="a1333d60e9f"
+git log -1 -p "${MESA3D_LIBGLAPI_COMMIT}" | patch -p1 -R
+popd
+
+# Remove references to AOSP's vulkan.lvp to avoid conflicts with Mesa make files
+rm "${MESA3D_DIR}/src/gallium/targets/lavapipe/Android.bp"
+CUTTLEFISH_DEVICE_DIR="${TOP}/device/google/cuttlefish"
+sed -i '/"vulkan\.lvp"/d' "${CUTTLEFISH_DEVICE_DIR}/build/Android.bp"
+
+ALLOW_MESA_DIR="${TOP}/vendor/google/build/androidmk"
+mkdir -p "${ALLOW_MESA_DIR}"
+echo 'external/mesa3d/android/Android.mk' > "${ALLOW_MESA_DIR}/allowlist.txt"
+
+ALLOW_MESA_PRODUCT="${TOP}/device/google/cuttlefish/vsoc_x86_64/phone/aosp_cf.mk"
+sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| external/mesa3d/android/Android.mk|' \
+  "${ALLOW_MESA_PRODUCT}"
+
+cat >> "${CUTTLEFISH_DEVICE_DIR}/shared/virgl/BoardConfig.mk" <<EOF
+  BOARD_MESA3D_USES_MESON_BUILD := true
+  BOARD_MESA3D_GALLIUM_DRIVERS := llvmpipe
+  BOARD_MESA3D_VULKAN_DRIVERS := swrast
+EOF
+
+sed -i '$d' "${CUTTLEFISH_DEVICE_DIR}/shared/virgl/device_vendor.mk"
+cat >> "${CUTTLEFISH_DEVICE_DIR}/shared/virgl/device_vendor.mk" <<EOF
+  PRODUCT_PACKAGES += \\
+    libEGL_mesa \\
+    libGLESv1_CM_mesa \\
+    libGLESv2_mesa \\
+    libgallium_dri \\
+    libglapi \\
+    vulkan.lvp
+EOF
+
+CROSVM_FILE="${CUTTLEFISH_DEVICE_DIR}/host/libs/vm_manager/crosvm_manager.cpp"
+sed -i 's/\("androidboot.hardware.egl", \)"angle"/\1"mesa"/' "${CROSVM_FILE}"
+sed -i 's/\("androidboot.hardware.vulkan", \)"pastel"/\1"lvp"/' "${CROSVM_FILE}"
+sed -i '/"lvp"/a \        {"androidboot.hardware.hwcomposer.mode", "client"},' "${CROSVM_FILE}"
 
 # Don't block vkms
 BLOCKLIST="${TOP}/device/google/cuttlefish/shared/modules.blocklist"

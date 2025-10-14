@@ -8,7 +8,7 @@ variables:
   ANDROID_BRANCH: android16-release
   ANDROID_SDK_VERSION: 36
   DEBIAN_FRONTEND: noninteractive
-  CI_TEMPLATES_COMMIT: &ci-templates-commit 32afe5644697e503af18a736587c8619fa036a72
+  CI_TEMPLATES_COMMIT: &ci-templates-commit aec7a6ce7bb38902c70641526f6611e27141784a
   FDO_UPSTREAM_REPO: "drm-hwcomposer/drm-hwcomposer"
   CUTTLEFISH_TARBALL: "cuttlefish.tar.xz"
   ANDROID_TOOLS_TARBALL: "android_tools.tar.xz"
