@@ -1007,15 +1007,13 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     composition_layers.emplace_back(layer->GetLayerData());
   }
 
-  // Use the provided validated composition plan if it exists, otherwise create
-  // it now.
-  a_args
-      .composition = composition.composition_plan != nullptr
-                         ? composition.composition_plan
-                         : DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
-                                                        std::move(
-                                                            composition_layers),
-                                                        cursor_layer);
+  // TODO: Attempting to reuse the |composition.composition_plan| here causes
+  // visual artifacts, so we must create a new plan. We expect the new plan to
+  // be equivalent, so why can the existing plan not be used?
+  a_args.composition = DrmKmsPlan::CreateDrmKmsPlan(GetPipe(),
+                                                    std::move(
+                                                        composition_layers),
+                                                    cursor_layer);
   if (!a_args.composition) {
     ALOGE_IF(!a_args.test_only, "Failed to create DrmKmsPlan");
     return std::nullopt;
