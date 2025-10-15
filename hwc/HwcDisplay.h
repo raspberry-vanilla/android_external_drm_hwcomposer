@@ -59,6 +59,14 @@ class HwcDisplay {
 
   enum DisplayType { kInternal, kExternal, kVirtual };
 
+  enum class HdcpState : int {
+    kUndesired,
+    kDesired,
+    kPending,
+    kEnabled,
+    kRetry
+  };
+
   HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay();
@@ -162,6 +170,9 @@ class HwcDisplay {
 
   void GetHdrCapabilities(std::vector<ui::Hdr> *types, float *max_luminance,
                           float *max_average_luminance, float *min_luminance);
+
+  auto IsHdcpPropertyPresent() -> bool;
+  auto StartHdcp(bool start) -> bool;
 
   bool IsWritebackSupported();
   bool SetWritebackEnabled(bool enabled);
@@ -323,6 +334,8 @@ class HwcDisplay {
 
   uint32_t frame_no_ = 0;
   std::map<CompositionAttributes, CompositionStats> comp_stats_{};
+
+  HwcDisplay::HdcpState hdcp_state_ = HdcpState::kUndesired;
 
   std::shared_ptr<FrontendDisplayBase> frontend_private_data_;
 };

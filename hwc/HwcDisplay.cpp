@@ -20,6 +20,7 @@
 #include "HwcDisplay.h"
 
 #include <cinttypes>
+#include <cstdint>
 #include <sstream>
 
 #include <ui/ColorSpace.h>
@@ -803,6 +804,40 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                 min_luminance);
 }
 
+auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+  if (!GetPipe().connector->Get()->GetContentProtectionProperty() ||
+      !GetPipe().connector->Get()->GetHdcpContentTypeProperty()) {
+    return false;
+  }
+  return true;
+}
+
+auto HwcDisplay::StartHdcp(bool start) -> bool {
+  /*
+   * Client can request to start Hdcp or Terminate Hdcp based on the bool start
+   * If Client requests to start Hdcp, internal state is set to kDesired
+   * else the state stays as Undesired
+   * Since the HDCP Content and Content Protection prop are optional
+   * We need to make sure the connector has these properties else
+   * return a false to indicate that the request to start/stop
+   * HDCP cannot be completed.
+   */
+  if (!IsHdcpPropertyPresent()) {
+    ALOGE(
+        "Client requested HDCP, but HDCP properties not available on that "
+        "display");
+    return false;
+  }
+  if (start) {
+    ALOGI("Client requested to start HDCP");
+    hdcp_state_ = HwcDisplay::HdcpState::kDesired;
+  }
+  return true;
+}
+
 AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const HwcDisplayConfig *config,
     const std::optional<LayerData> &modeset_layer) {
@@ -935,6 +970,17 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
 
     a_args.display_mode = staged_config->mode;
     a_args.seamless = true;
+  }
+
+  if (hdcp_state_ == HwcDisplay::HdcpState::kDesired) {
+    ALOGI("Requesting HDCP to be enabled with Content Type 1");
+    a_args.content_protection = ContentProtection::kDesired;
+    a_args.hdcp_content_type = HdcpContentType::kType1;
+  }
+  if (hdcp_state_ == HwcDisplay::HdcpState::kRetry) {
+    ALOGI("Retrying HDCP to be enabled with Content Type 0");
+    a_args.content_protection = ContentProtection::kDesired;
+    a_args.hdcp_content_type = HdcpContentType::kType0;
   }
 
   // order the layers by z-order
@@ -1098,6 +1144,11 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args) {
         configs_.active_config_id);
     staged_mode_config_id_.reset();
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
+  }
+
+  if (a_args.hdcp_content_type.has_value() ||
+      a_args.content_protection.has_value()) {
+    hdcp_state_ = HdcpState::kPending;
   }
 }
 

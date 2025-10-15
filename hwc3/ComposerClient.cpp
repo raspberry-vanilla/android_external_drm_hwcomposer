@@ -1556,8 +1556,22 @@ ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
 #if __ANDROID_API__ >= 36
 
 ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
-    int64_t /*display*/, const drm::HdcpLevels& /*levels*/) {
-  return ToBinderStatus(hwc3::Error::kUnsupported);
+    int64_t display_handle, const drm::HdcpLevels& levels) {
+  HwcDisplay* display = GetDisplay(display_handle);
+  if (display == nullptr) {
+    return ToBinderStatus(hwc3::Error::kBadDisplay);
+  }
+  // Client can only request lazy HDCP activation/start
+  // TODO: Add HDCP terminate/stop request once client handles it
+  if (levels.connectedLevel != drm::HdcpLevel::HDCP_NONE &&
+      levels.connectedLevel != drm::HdcpLevel::HDCP_UNKNOWN) {
+    ALOGI("Requested to start HDCP for connected level : %d",
+          levels.connectedLevel);
+    if (!display->StartHdcp(true)) {
+      return ToBinderStatus(hwc3::Error::kUnsupported);
+    }
+  }
+  return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t /* display */,
