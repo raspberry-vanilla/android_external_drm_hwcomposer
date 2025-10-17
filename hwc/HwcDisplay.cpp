@@ -1020,10 +1020,10 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   // CTM will be applied by the client, don't apply DRM CTM
-  if (client_layer_count == layers_.size())
+  if (client_layer_count == layers_.size() &&
+      hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
     a_args.color_matrix = identity_color_matrix_;
-  else
-    a_args.color_matrix = color_matrix_;
+  }
 
   if (use_client_layer) {
     z_map.emplace(client_z_order, &client_layer_);
