@@ -18,6 +18,7 @@
 
 #include <pthread.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -44,6 +45,8 @@ struct AtomicCommitArgs {
   std::optional<Colorspace> colorspace;
   std::optional<ContentType> content_type;
   std::shared_ptr<hdr_output_metadata> hdr_metadata;
+  std::optional<HdcpContentType> hdcp_content_type;
+  std::optional<ContentProtection> content_protection;
   std::optional<int32_t> min_bpc;
 
   std::shared_ptr<DrmFbIdHandle> writeback_fb;
@@ -149,6 +152,8 @@ class DrmAtomicStateManager {
                              AtomicRequest &request);
   bool SetContentTypeIfNeeded(const AtomicCommitArgs &args,
                               AtomicRequest &request);
+  bool SetContentProtectionIfNeeded(const AtomicCommitArgs &args,
+                                    AtomicRequest &request);
   bool SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
                               AtomicRequest &request);
   bool SetMinBpcIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);

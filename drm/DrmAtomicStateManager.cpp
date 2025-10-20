@@ -352,6 +352,25 @@ bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
                                                            *args.content_type));
 }
 
+bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
+    const AtomicCommitArgs &args, AtomicRequest &request) {
+  auto *connector = pipe_->connector->Get();
+  if (!args.content_protection.has_value() ||
+      !args.hdcp_content_type.has_value() ||
+      !connector->GetContentProtectionProperty() ||
+      !connector->GetHdcpContentTypeProperty()) {
+    return true;
+  }
+  if (!connector->GetContentProtectionProperty()
+           .AtomicSet(*request.property_set,
+                      static_cast<uint64_t>(args.content_protection.value()))) {
+    return false;
+  }
+  return connector->GetHdcpContentTypeProperty()
+      .AtomicSet(*request.property_set,
+                 static_cast<uint64_t>(args.hdcp_content_type.value()));
+}
+
 bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
                                                    AtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
@@ -500,6 +519,11 @@ DrmAtomicStateManager::GetAtomicModeReqForArgs(AtomicCommitArgs &args) {
 
   if (!SetContentTypeIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set content type");
+    return nullptr;
+  }
+
+  if (!SetContentProtectionIfNeeded(args, *atomic_request)) {
+    ALOGE("Failed to set Content Protection and HDCP Content Type");
     return nullptr;
   }
 

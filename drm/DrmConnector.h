@@ -113,12 +113,20 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return content_type_property_;
   }
 
+  auto &GetContentProtectionProperty() const {
+    return content_protection_property_;
+  }
+
   auto &GetMinBpcProperty() const {
     return min_bpc_property_;
   }
 
   auto &GetHdrOutputMetadataProperty() const {
     return hdr_output_metadata_property_;
+  }
+
+  auto &GetHdcpContentTypeProperty() const {
+    return hdcp_content_type_property_;
   }
 
   auto &GetWritebackFbIdProperty() const {
@@ -173,8 +181,10 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmProperty edid_property_;
   DrmProperty colorspace_property_;
   DrmProperty content_type_property_;
+  DrmProperty content_protection_property_;
   DrmProperty min_bpc_property_;
   DrmProperty hdr_output_metadata_property_;
+  DrmProperty hdcp_content_type_property_;
 
   DrmProperty link_status_property_;
   DrmProperty panel_orientation_;

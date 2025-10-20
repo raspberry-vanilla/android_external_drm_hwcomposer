@@ -146,8 +146,14 @@ auto DrmConnector::Init()-> bool {
 
   GetOptionalConnectorProperty("content type", &content_type_property_);
 
+  GetOptionalConnectorProperty("Content Protection",
+                               &content_protection_property_);
+
   GetOptionalConnectorProperty("HDR_OUTPUT_METADATA",
                                &hdr_output_metadata_property_);
+
+  GetOptionalConnectorProperty("HDCP Content Type",
+                               &hdcp_content_type_property_);
 
   GetOptionalConnectorProperty("min bpc", &min_bpc_property_);
 
