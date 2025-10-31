@@ -85,6 +85,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsLinkStatusGood();
 
+  void UpdateContentProtection();
+
   auto &GetModes() const {
     return modes_;
   }
