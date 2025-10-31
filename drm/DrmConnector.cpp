@@ -309,6 +309,13 @@ bool DrmConnector::IsLinkStatusGood() {
   return true;
 }
 
+void DrmConnector::UpdateContentProtection() {
+  if (!GetOptionalConnectorProperty("Content Protection",
+                                    &content_protection_property_)) {
+    ALOGW("No Content protection Property available");
+  }
+}
+
 std::optional<PanelOrientation> DrmConnector::GetPanelOrientation() {
   if (!panel_orientation_.GetValue().has_value()) {
     ALOGW("No panel orientation property available.");

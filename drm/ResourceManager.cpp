@@ -162,6 +162,9 @@ void ResourceManager::UpdateFrontendDisplays() {
     if (connected) {
       if (!conn->IsLinkStatusGood())
         frontend_interface_->NotifyDisplayLinkStatus(attached_pipelines_[conn]);
+
+      // Handle the Content Protection Uevent to update its status
+      conn->UpdateContentProtection();
     }
   }
   frontend_interface_->FinalizeDisplayBinding();
