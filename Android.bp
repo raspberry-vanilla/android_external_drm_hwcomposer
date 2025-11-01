@@ -93,7 +93,6 @@ filegroup {
         "drm/VSyncWorker.cpp",
 
         "backend/BackendManager.cpp",
-        "backend/BackendRpi5.cpp",
         "backend/ClientBackend.cpp",
         "backend/CompositionPlanner.cpp",
         "backend/GenericBackend.cpp",
