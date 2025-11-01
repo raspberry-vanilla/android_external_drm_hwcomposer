@@ -24,12 +24,23 @@
 
 namespace android::drm_hwcomposer {
 
+namespace {
+// List of devices that should default to client composition.
 // NOLINTNEXTLINE(cert-err58-cpp)
-const std::vector<std::string> BackendManager::kClientDevices = {
+const std::vector<std::string> kClientDevices = {
     "kirin",
     "mediatek-drm",
     "pl111",
 };
+}  // namespace
+
+BackendManager::Backend::Backend(const std::string &name) : name_(name) {
+  BackendManager::GetInstance().RegisterBackend(name, this);
+}
+
+BackendManager::Backend::~Backend() {
+  BackendManager::GetInstance().UnregisterBackend(name_);
+}
 
 BackendManager &BackendManager::GetInstance() {
   static BackendManager backend_manager;
@@ -37,37 +48,41 @@ BackendManager &BackendManager::GetInstance() {
   return backend_manager;
 }
 
-int BackendManager::RegisterBackend(const std::string &name,
-                                    BackendConstructorT backend_constructor) {
-  available_backends_[name] = std::move(backend_constructor);
-  return 0;
+void BackendManager::RegisterBackend(const std::string &name,
+                                     Backend *backend) {
+  if (available_backends_.count(name) != 0) {
+    ALOGE("Backend %s already registered.", name.c_str());
+    return;
+  }
+  available_backends_[name] = backend;
 }
 
-int BackendManager::SetBackendForDisplay(HwcDisplay *display) {
-  auto driver_name(display->GetPipe().device->GetName());
+void BackendManager::UnregisterBackend(const std::string &name) {
+  available_backends_.erase(name);
+}
+
+std::unique_ptr<DrmDisplayPipeline> BackendManager::CreatePipelineForConnector(
+    DrmConnector &connector) {
+  auto driver_name(connector.GetDev().GetName());
   std::string backend_name = Properties::GetBackendOverride();
   if (backend_name.empty()) {
     backend_name = driver_name;
   }
 
-  display->set_backend(GetBackendByName(backend_name));
-  if (display->backend() == nullptr) {
-    ALOGE("Failed to set backend '%s' for '%s' and driver '%s'",
-          backend_name.c_str(),
-          display->GetPipe().connector->Get()->GetName().c_str(),
+  auto *backend = GetBackendByName(backend_name);
+  if (backend == nullptr) {
+    ALOGE("Failed to find backend '%s' for '%s' and driver '%s'",
+          backend_name.c_str(), connector.GetName().c_str(),
           driver_name.c_str());
-    return -EINVAL;
+    return nullptr;
   }
+  ALOGI("Found Backend '%s' for '%s' and driver '%s'", backend_name.c_str(),
+        connector.GetName().c_str(), driver_name.c_str());
 
-  ALOGI("Backend '%s' for '%s' and driver '%s' was successfully set",
-        backend_name.c_str(),
-        display->GetPipe().connector->Get()->GetName().c_str(),
-        driver_name.c_str());
-
-  return 0;
+  return backend->CreatePipeline(connector);
 }
 
-std::unique_ptr<Backend> BackendManager::GetBackendByName(std::string &name) {
+BackendManager::Backend *BackendManager::GetBackendByName(std::string &name) {
   if (available_backends_.empty()) {
     ALOGE("No backends are specified");
     return nullptr;
@@ -79,7 +94,7 @@ std::unique_ptr<Backend> BackendManager::GetBackendByName(std::string &name) {
     name = it == kClientDevices.end() ? "generic" : "client";
   }
 
-  return available_backends_[name]();
+  return available_backends_[name];
 }
 
 }  // namespace android::drm_hwcomposer

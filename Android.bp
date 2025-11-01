@@ -92,10 +92,12 @@ filegroup {
         "drm/UEventListener.cpp",
         "drm/VSyncWorker.cpp",
 
-        "backend/Backend.cpp",
-        "backend/BackendClient.cpp",
         "backend/BackendManager.cpp",
         "backend/BackendRpi5.cpp",
+        "backend/ClientBackend.cpp",
+        "backend/CompositionPlanner.cpp",
+        "backend/GenericBackend.cpp",
+        "backend/GenericCompositionPlanner.cpp",
 
         "hwc/HwcDisplay.cpp",
         "hwc/HwcDisplayConfigs.cpp",

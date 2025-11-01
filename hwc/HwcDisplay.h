@@ -22,7 +22,7 @@
 
 #include "HwcDisplayConfigs.h"
 #include "HwcLayer.h"
-#include "backend/Backend.h"
+#include "backend/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
@@ -36,7 +36,7 @@ namespace android::drm_hwcomposer {
 using DisplayHandle = int64_t;
 using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 
-class Backend;
+class CompositionPlanner;
 class DrmHwc;
 
 class FrontendDisplayBase {
@@ -77,7 +77,8 @@ class HwcDisplay {
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
-  bool TestComposition(Backend::ValidatedComposition &composition) const;
+  bool TestComposition(
+      CompositionPlanner::ValidatedComposition &composition) const;
 
   std::vector<const HwcLayer *> GetOrderLayersByZPos() const;
 
@@ -185,9 +186,6 @@ class HwcDisplay {
     return &it->second;
   }
 
-  const Backend *backend() const;
-  void set_backend(std::unique_ptr<Backend> backend);
-
   auto layers() -> std::map<ILayerId, HwcLayer> & {
     return layers_;
   }
@@ -254,7 +252,7 @@ class HwcDisplay {
   // The caller must do a test commit on the returned args to ensure that the
   // hardware can perform the commit.
   std::optional<AtomicCommitArgs> CreateFrameUpdateCommit(
-      const Backend::ValidatedComposition &composition) const;
+      const CompositionPlanner::ValidatedComposition &composition) const;
 
   bool CommitStagedComposition(SharedFd &out_present_fence);
 
@@ -303,7 +301,6 @@ class HwcDisplay {
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 
-  std::unique_ptr<Backend> backend_;
   std::unique_ptr<FlatteningController> flatcon_;
 
   std::unique_ptr<VSyncWorker> vsync_worker_;
@@ -327,7 +324,7 @@ class HwcDisplay {
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
   // Most recent result of ValidateStagedComposition. Must be kept alive until
   // the composition is committed.
-  std::optional<Backend::ValidatedComposition>
+  std::optional<CompositionPlanner::ValidatedComposition>
       validated_composition_ = std::nullopt;
 
   SharedFd writeback_complete_fence_;

@@ -24,7 +24,6 @@
 #include <sstream>
 #include <utility>
 
-#include "backend/Backend.h"
 #include "stats/CompositionStats.h"
 #include "utils/log.h"
 #include "utils/properties.h"

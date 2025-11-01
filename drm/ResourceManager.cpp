@@ -24,6 +24,7 @@
 #include <ctime>
 #include <sstream>
 
+#include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDevice.h"
@@ -147,8 +148,11 @@ void ResourceManager::UpdateFrontendDisplays() {
 
       if (connected) {
         std::shared_ptr<DrmDisplayPipeline>
-            pipeline = DrmDisplayPipeline::CreatePipeline(*conn);
-
+            pipeline = BackendManager::GetInstance().CreatePipelineForConnector(
+                *conn);
+        ALOGE_IF(pipeline == nullptr,
+                 "Failed to create pipeline for connector %s",
+                 conn->GetName().c_str());
         if (pipeline) {
           frontend_interface_->BindDisplay(pipeline);
           attached_pipelines_[conn] = std::move(pipeline);

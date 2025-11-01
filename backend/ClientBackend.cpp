@@ -14,16 +14,36 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include "Backend.h"
+#include "GenericBackend.h"
+#include "GenericCompositionPlanner.h"
+#include "hwc/HwcDisplay.h"
 
 namespace android::drm_hwcomposer {
-
-class BackendClient : public Backend {
+namespace {
+class ClientCompositionPlanner : public CompositionPlanner {
  public:
   auto ValidateDisplay(const HwcDisplay* display) const
-      -> ValidatedComposition override;
+      -> ValidatedComposition override {
+    return GetFlattenedComposition(display->GetOrderLayersByZPos(),
+                                   FlattenReason::kNone);
+  }
 };
 
+class ClientBackend : public GenericBackend {
+ public:
+  std::unique_ptr<CompositionPlanner> CreateCompositionPlanner() override {
+    return std::make_unique<ClientCompositionPlanner>();
+  }
+
+ private:
+  ClientBackend() : GenericBackend("client") {
+  }
+
+  static ClientBackend instance;
+};
+
+// NOLINTNEXTLINE(cert-err58-cpp)
+ClientBackend ClientBackend::instance;
+
+}  // namespace
 }  // namespace android::drm_hwcomposer

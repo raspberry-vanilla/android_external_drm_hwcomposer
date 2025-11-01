@@ -19,7 +19,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <tuple>
 #include <vector>
 
 #include "compositor/LayerData.h"
@@ -30,7 +29,10 @@ struct DrmKmsPlan;
 class HwcDisplay;
 class HwcLayer;
 
-class Backend {
+// CompositionPlanner is responsible for determining the mapping between
+// HwcLayer and drm planes. This includes deciding which HwcLayers should be
+// client composited, and which ones can be composited by the device.
+class CompositionPlanner {
  public:
   // Mapping of the CompositionType that the Backend assigned to each
   // HwcLayer.
@@ -59,26 +61,14 @@ class Backend {
     std::optional<bool> cursor_plane_validated = std::nullopt;
   };
 
-  virtual ~Backend() = default;
-  virtual ValidatedComposition ValidateDisplay(const HwcDisplay* display) const;
-  virtual std::tuple<size_t, size_t> GetClientLayers(
-      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-      bool use_cursor_plane) const;
-  virtual bool IsClientLayer(const HwcDisplay* display,
-                             const HwcLayer* layer) const;
+  virtual ~CompositionPlanner() = default;
+  virtual ValidatedComposition ValidateDisplay(
+      const HwcDisplay* display) const = 0;
 
- protected:
+  // Returns a ValidatedComposition that assigns all HwcLayers to client
+  // composition.
   static ValidatedComposition GetFlattenedComposition(
       const std::vector<const HwcLayer*>& layers, FlattenReason flatten_reason);
-  static bool HardwareSupportsLayerType(CompositionType comp_type);
-  static uint32_t CalcPixOps(const std::vector<const HwcLayer*>& layers,
-                             size_t first_z, size_t size);
-  static CompositionTypeMap GetCompositionTypes(
-      const std::vector<const HwcLayer*>& layers, size_t client_first_z,
-      size_t client_size, bool use_cursor_plane);
-  static std::tuple<size_t, size_t> GetExtraClientRange(
-      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-      size_t client_start, size_t client_size, bool use_cursor_plane);
 };
 
 }  // namespace android::drm_hwcomposer

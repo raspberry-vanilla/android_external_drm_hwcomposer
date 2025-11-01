@@ -19,7 +19,7 @@
 #include <memory>
 
 #include "CompositionStats.h"
-#include "backend/Backend.h"
+#include "backend/CompositionPlanner.h"
 
 namespace android::drm_hwcomposer {
 
@@ -34,7 +34,7 @@ class CompositionStatsAtomReporter {
   // Pushes a Vendor Atom to IStats::reportVendorAtom.
   virtual void PushAtom(int64_t display_handle, bool present_failed,
                         ValidationResult validation_result,
-                        Backend::FlattenReason flatten_reason,
+                        CompositionPlanner::FlattenReason flatten_reason,
                         int64_t frame_count, int64_t layer_count,
                         int64_t used_plane_count, uint64_t total_pixops,
                         uint64_t gpu_pixops) = 0;

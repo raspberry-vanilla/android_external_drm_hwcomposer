@@ -26,7 +26,7 @@
 #include <android/binder_manager.h>
 
 #include "CompositionStats.h"
-#include "backend/Backend.h"
+#include "backend/CompositionPlanner.h"
 #include "desktopatoms.h"
 #include "utils/log.h"
 
@@ -37,7 +37,7 @@ namespace DesktopAtoms = android::vendor::google::desktop::stats::DesktopAtoms;
 namespace android::drm_hwcomposer {
 namespace {
 
-using FlattenReason = Backend::FlattenReason;
+using FlattenReason = CompositionPlanner::FlattenReason;
 
 const std::string kStatsServiceName = std::string(IStats::descriptor)
                                           .append("/default");
