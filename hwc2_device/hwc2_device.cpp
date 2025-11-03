@@ -29,7 +29,7 @@
 #include <cutils/native_handle.h>
 
 #include "DrmHwcTwo.h"
-#include "backend/Backend.h"
+#include "backend/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "hwc/HwcLayer.h"
 #include "utils/log.h"

@@ -24,6 +24,7 @@
 #include "DrmDevice.h"
 #include "DrmEncoder.h"
 #include "DrmPlane.h"
+#include "backend/CompositionPlanner.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 

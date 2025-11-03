@@ -20,7 +20,7 @@
 #include <functional>
 #include <map>
 
-#include "backend/Backend.h"
+#include "backend/CompositionPlanner.h"
 
 namespace android::drm_hwcomposer {
 
@@ -35,7 +35,8 @@ struct CompositionAttributes {
   int64_t display_handle = 0;
   bool present_failed = false;
   ValidationResult validation_result = ValidationResult::kSkip;
-  Backend::FlattenReason flatten_reason = Backend::FlattenReason::kNone;
+  CompositionPlanner::FlattenReason
+      flatten_reason = CompositionPlanner::FlattenReason::kNone;
 
   // When adding new attributes, update the operator< below as well as
   // operator== which is implemented in the unit test file.

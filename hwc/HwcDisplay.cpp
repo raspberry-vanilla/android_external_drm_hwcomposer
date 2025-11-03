@@ -26,8 +26,7 @@
 #include <ui/ColorSpace.h>
 #include <utils/Trace.h>
 
-#include "backend/Backend.h"
-#include "backend/BackendManager.h"
+#include "backend/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -39,7 +38,7 @@ using ColorGamut = ::android::ColorSpace;
 
 namespace android::drm_hwcomposer {
 
-using FlattenReason = Backend::FlattenReason;
+using FlattenReason = CompositionPlanner::FlattenReason;
 
 namespace {
 
@@ -349,7 +348,7 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     flatcon_->NewFrame();
   }
 
-  validated_composition_.emplace(backend_->ValidateDisplay(this));
+  validated_composition_.emplace(pipeline_->backend->ValidateDisplay(this));
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
@@ -451,7 +450,7 @@ auto HwcDisplay::PresentStagedComposition(
     }
   } else {
     attributes.validation_result = ValidationResult::kSkip;
-    validated_composition_ = Backend::ValidatedComposition{};
+    validated_composition_ = CompositionPlanner::ValidatedComposition{};
     for (const auto &[id, layer] : layers_) {
       validated_composition_->composition_types
           .emplace(&layer, layer.GetValidatedType());
@@ -647,7 +646,6 @@ void HwcDisplay::Deinit() {
     GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
 
     validated_composition_.reset();
-    backend_.reset();
     flatcon_.reset();
   }
 
@@ -669,11 +667,6 @@ bool HwcDisplay::Init() {
   }
 
   if (!IsInHeadlessMode()) {
-    auto ret = BackendManager::GetInstance().SetBackendForDisplay(this);
-    if (ret) {
-      ALOGE("Failed to set backend for d=%d %d\n", int(handle_), ret);
-      return false;
-    }
     auto flatcbk = (struct FlatConCallbacks){
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
     flatcon_ = std::make_unique<FlatteningController>(flatcbk,
@@ -926,7 +919,7 @@ uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
 }
 
 bool HwcDisplay::TestComposition(
-    Backend::ValidatedComposition &composition) const {
+    CompositionPlanner::ValidatedComposition &composition) const {
   ATRACE_CALL();
 
   if (IsInHeadlessMode()) {
@@ -948,7 +941,7 @@ bool HwcDisplay::TestComposition(
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
-    const Backend::ValidatedComposition &composition) const {
+    const CompositionPlanner::ValidatedComposition &composition) const {
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
     return AtomicCommitArgs{};
@@ -1312,14 +1305,6 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
   auto whitePoint = gamut.getWhitePoint();
   m->white_point.x = ToU16ColorValue(whitePoint.x);
   m->white_point.y = ToU16ColorValue(whitePoint.y);
-}
-
-const Backend *HwcDisplay::backend() const {
-  return backend_.get();
-}
-
-void HwcDisplay::set_backend(std::unique_ptr<Backend> backend) {
-  backend_ = std::move(backend);
 }
 
 bool HwcDisplay::NeedsClientLayerUpdate() const {
