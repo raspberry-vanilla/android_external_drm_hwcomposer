@@ -144,4 +144,10 @@ auto Properties::GetDevicePath() -> std::string {
   return {path_pattern};
 }
 
+auto Properties::GetForceMode() -> std::string {
+  char force_mode[PROPERTY_VALUE_MAX];
+  property_get("vendor.hwc.drm.force_mode", force_mode, "");
+  return {force_mode};
+}
+
 }  // namespace android::drm_hwcomposer

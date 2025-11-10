@@ -23,12 +23,8 @@
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
+#include "utils/properties.h"
 
-constexpr uint32_t kHeadlessModeDisplayWidthMm = 163;
-constexpr uint32_t kHeadlessModeDisplayHeightMm = 122;
-constexpr uint32_t kHeadlessModeDisplayWidthPx = 1024;
-constexpr uint32_t kHeadlessModeDisplayHeightPx = 768;
-constexpr uint32_t kHeadlessModeDisplayVRefresh = 60;
 constexpr uint32_t kSyncLen = 10;
 constexpr uint32_t kBackPorch = 10;
 constexpr uint32_t kFrontPorch = 10;
@@ -37,6 +33,24 @@ constexpr uint32_t kHzInKHz = 1000;
 namespace android::drm_hwcomposer {
 
 void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
+  std::string force_mode = Properties::GetForceMode();
+  uint32_t xres = 0, yres = 0, rate = 0;
+  // Parse <xres>x<yres>[@<refreshrate>]
+  if (sscanf(force_mode.c_str(), "%dx%d@%d", &xres, &yres, &rate) != 3) {
+    rate = 0;
+    if (sscanf(force_mode.c_str(), "%dx%d", &xres, &yres) != 2) {
+      xres = yres = 0;
+    }
+  }
+  ALOGI_IF(xres && yres, "Force mode %dx%d@%dHz for HEADLESS-MODE",
+      xres, yres, rate);
+
+  const uint32_t kHeadlessModeDisplayWidthMm = xres ? xres : 160;
+  const uint32_t kHeadlessModeDisplayHeightMm = yres ? yres : 90;
+  const uint32_t kHeadlessModeDisplayWidthPx = xres ? xres : 1920;
+  const uint32_t kHeadlessModeDisplayHeightPx = yres ? yres : 1080;
+  const uint32_t kHeadlessModeDisplayVRefresh = rate ? rate : 60;
+
   hwc_configs.clear();
 
   preferred_config_id = active_config_id = next_config_id++;
@@ -81,6 +95,10 @@ void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
 
   mm_width = kHeadlessModeDisplayWidthMm;
   mm_height = kHeadlessModeDisplayHeightMm;
+
+  ALOGI("Add mode %dx%d@%dHz for %s",
+      headless_drm_mode_info.hdisplay, headless_drm_mode_info.vdisplay,
+      headless_drm_mode_info.vrefresh, headless_drm_mode_info.name);
 }
 
 bool HwcDisplayConfigs::Init(DrmConnector &connector) {
