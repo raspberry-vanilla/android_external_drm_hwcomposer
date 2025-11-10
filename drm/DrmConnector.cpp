@@ -29,6 +29,7 @@
 
 #include "DrmDevice.h"
 #include "compositor/DisplayInfo.h"
+#include "utils/properties.h"
 
 #ifndef DRM_MODE_CONNECTOR_SPI
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -242,6 +243,18 @@ std::string DrmConnector::GetName() const {
 }
 
 int DrmConnector::UpdateModes() {
+  std::string force_mode = Properties::GetForceMode();
+  uint32_t xres = 0, yres = 0, rate = 0;
+  // Parse <xres>x<yres>[@<refreshrate>]
+  if (sscanf(force_mode.c_str(), "%dx%d@%d", &xres, &yres, &rate) != 3) {
+    rate = 0;
+    if (sscanf(force_mode.c_str(), "%dx%d", &xres, &yres) != 2) {
+      xres = yres = 0;
+    }
+  }
+  ALOGI_IF(xres && yres, "Force mode %dx%d@%dHz for display in connector %s",
+      xres, yres, rate, GetName().c_str());
+
   auto conn = MakeDrmModeConnectorUnique(*drm_->GetFd(), GetId());
   if (!conn) {
     ALOGE("Failed to get connector %d", GetId());
@@ -260,7 +273,25 @@ int DrmConnector::UpdateModes() {
     }
 
     if (!exists) {
-      modes_.emplace_back(&connector_->modes[i]);
+      DrmMode m(&connector_->modes[i]);
+      ALOGV("Supported mode %dx%d@%fHz for display in connector %s",
+          m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+          m.GetVRefresh(), GetName().c_str());
+      if (xres && yres) {
+        if (!rate && m.GetRawMode().hdisplay == xres
+            && m.GetRawMode().vdisplay == yres) {
+          rate = m.GetVRefresh();
+        }
+        if (m.GetRawMode().hdisplay != xres
+            || m.GetRawMode().vdisplay != yres
+            || m.GetVRefresh() != rate) {
+          continue;
+        }
+      }
+      ALOGD("Add mode %dx%d@%fHz for display in connector %s",
+          m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+          m.GetVRefresh(), GetName().c_str());
+      modes_.emplace_back(m);
     }
   }
 
