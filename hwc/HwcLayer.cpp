@@ -18,8 +18,10 @@
 
 #include "HwcLayer.h"
 
-#include "HwcDisplay.h"
-#include "bufferinfo/BufferInfoGetter.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmFbImporter.h"
+#include "hwc/HwcDisplay.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

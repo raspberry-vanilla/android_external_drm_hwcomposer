@@ -20,10 +20,9 @@
 
 #include <cstdint>
 
-#include "DrmDisplayPipeline.h"
-#include "DrmMode.h"
-#include "DrmProperty.h"
-#include "DrmUnique.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmProperty.h"
+#include "drm/DrmUnique.h"
 
 namespace android::drm_hwcomposer {
 

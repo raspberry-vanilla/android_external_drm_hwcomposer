@@ -25,8 +25,9 @@
 
 #include <mutex>
 
+#include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "utils/log.h"
-#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 

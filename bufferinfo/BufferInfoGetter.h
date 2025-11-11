@@ -21,8 +21,7 @@
 
 #include <optional>
 
-#include "BufferInfo.h"
-#include "drm/DrmDevice.h"
+#include "utils/log.h"
 
 #ifndef DRM_FORMAT_INVALID
 #define DRM_FORMAT_INVALID 0
@@ -31,6 +30,8 @@
 namespace android::drm_hwcomposer {
 
 using BufferUniqueId = uint64_t;
+
+struct BufferInfo;
 
 class BufferInfoGetter {
  public:

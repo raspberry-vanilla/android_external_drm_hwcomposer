@@ -19,6 +19,7 @@
 #include <hardware/hwcomposer2.h>
 
 #include "drm/DrmHwc.h"
+#include "hwc/HwcDisplay.h"
 
 namespace android::drm_hwcomposer {
 

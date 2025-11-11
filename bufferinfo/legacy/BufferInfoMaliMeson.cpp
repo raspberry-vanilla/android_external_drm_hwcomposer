@@ -23,8 +23,9 @@
 
 #include <cinttypes>
 
+#include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "gralloc_priv.h"
-#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

@@ -17,17 +17,17 @@
 #pragma once
 
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <set>
 
-#include "DrmDevice.h"
-#include "DrmDisplayPipeline.h"
-#include "DrmFbImporter.h"
-#include "DrmProperty.h"
-#include "UEventListener.h"
-#include "utils/properties.h"
-
 namespace android::drm_hwcomposer {
+
+enum class CtmHandling;
+class DrmConnector;
+class DrmDevice;
+struct DrmDisplayPipeline;
+class UEventListener;
 
 class PipelineToFrontendBindingInterface {
  public:

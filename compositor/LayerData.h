@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "bufferinfo/BufferInfo.h"
-#include "drm/DrmFbImporter.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {

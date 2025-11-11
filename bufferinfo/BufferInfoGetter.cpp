@@ -17,7 +17,6 @@
 #define LOG_TAG "drmhwc"
 
 #include "BufferInfoGetter.h"
-#include "BufferInfoMapperMetadata.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -27,8 +26,8 @@
 
 #include <mutex>
 
+#include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "utils/log.h"
-#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 

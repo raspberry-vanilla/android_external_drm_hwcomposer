@@ -16,6 +16,7 @@
 
 #include "CompositionPlanner.h"
 
+#include "compositor/LayerData.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {

@@ -20,12 +20,12 @@
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
 
-#include "DrmConnector.h"
-#include "DrmCrtc.h"
-#include "DrmDevice.h"
-#include "DrmDisplayPipeline.h"
-#include "DrmEncoder.h"
-#include "DrmPlane.h"
+#include "drm/DrmConnector.h"
+#include "drm/DrmCrtc.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmEncoder.h"
+#include "drm/DrmPlane.h"
 
 namespace android::drm_hwcomposer {
 

@@ -20,6 +20,8 @@
 
 namespace android::drm_hwcomposer {
 
+struct BufferInfo;
+
 class BufferInfoMapperMetadata : public BufferInfoGetter {
  public:
   using BufferInfoGetter::BufferInfoGetter;

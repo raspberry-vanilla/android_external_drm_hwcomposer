@@ -21,13 +21,12 @@
 #include <optional>
 #include <vector>
 
-#include "compositor/LayerData.h"
-
 namespace android::drm_hwcomposer {
 
-struct LayerToPlaneJoiningPlan;
+enum class CompositionType;
 class HwcDisplay;
 class HwcLayer;
+struct LayerToPlaneJoiningPlan;
 
 // CompositionPlanner is responsible for determining the mapping between
 // HwcLayer and drm planes. This includes deciding which HwcLayers should be

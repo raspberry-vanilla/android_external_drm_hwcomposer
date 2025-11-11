@@ -26,8 +26,8 @@
 #include <optional>
 #include <string>
 
-#include "fd.h"
-#include "log.h"
+#include "utils/fd.h"
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

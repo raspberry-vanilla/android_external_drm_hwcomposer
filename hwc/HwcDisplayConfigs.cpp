@@ -21,8 +21,9 @@
 #include <cmath>
 #include <cstring>
 
-#include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
+#include "drm/DrmMode.h"
+#include "utils/log.h"
 #include "utils/properties.h"
 
 constexpr uint32_t kSyncLen = 10;

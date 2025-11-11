@@ -17,9 +17,10 @@
 #pragma once
 
 #include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
-#include <log/log.h>
 
 #include <cstdint>
+
+#include "utils/log.h"
 
 // NOLINTNEXTLINE
 #define DEBUG_FUNC() ALOGV("%s", __func__)

@@ -16,14 +16,14 @@
 
 #pragma once
 
-#include "stats/CompositionStats.h"
-
 #include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 #include <android-base/thread_annotations.h>
+
+#include "stats/CompositionStats.h"
 
 namespace android::drm_hwcomposer {
 

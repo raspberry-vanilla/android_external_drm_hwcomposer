@@ -21,23 +21,25 @@
 #include <optional>
 #include <tuple>
 
-#include "DrmConnector.h"
-#include "DrmCrtc.h"
-#include "DrmEncoder.h"
-#include "bufferinfo/BufferInfo.h"
+#include "drm/DrmUnique.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 
+struct BufferInfo;
+class DrmConnector;
+class DrmCrtc;
+class DrmEncoder;
 class DrmFbImporter;
 class DrmPlane;
+class DrmProperty;
 class ResourceManager;
 
 class DrmDevice {
   friend class FakeDrmDevice;
 
  public:
-  ~DrmDevice() = default;
+  ~DrmDevice();
 
   static auto CreateInstance(std::string const &path, ResourceManager *res_man,
                              uint32_t index) -> std::unique_ptr<DrmDevice>;
@@ -88,25 +90,9 @@ class DrmDevice {
     return *drm_fb_importer_;
   }
 
-  auto FindCrtcById(uint32_t id) const -> DrmCrtc * {
-    for (const auto &crtc : crtcs_) {
-      if (crtc->GetId() == id) {
-        return crtc.get();
-      }
-    };
+  DrmCrtc *FindCrtcById(uint32_t id) const;
 
-    return nullptr;
-  }
-
-  auto FindEncoderById(uint32_t id) const -> DrmEncoder * {
-    for (const auto &enc : encoders_) {
-      if (enc->GetId() == id) {
-        return enc.get();
-      }
-    };
-
-    return nullptr;
-  }
+  DrmEncoder *FindEncoderById(uint32_t id) const;
 
   int GetProperty(uint32_t obj_id, uint32_t obj_type, const char *prop_name,
                   DrmProperty *property) const;

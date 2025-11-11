@@ -26,10 +26,10 @@
 
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
-#include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
-#include "drm/DrmPlane.h"
+#include "drm/UEventListener.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 

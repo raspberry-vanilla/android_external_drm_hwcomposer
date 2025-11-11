@@ -30,10 +30,18 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
+#include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
+#include "drm/DrmCrtc.h"
+#include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
+#include "drm/VSyncWorker.h"
+#include "hwc/HwcLayer.h"
 #include "stats/CompositionStats.h"
+#include "utils/EdidWrapper.h"
+#include "utils/log.h"
 #include "utils/properties.h"
 
 using ColorGamut = ::android::ColorSpace;

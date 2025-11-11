@@ -20,6 +20,7 @@
 
 #include <thread>
 
+#include "utils/UEvent.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

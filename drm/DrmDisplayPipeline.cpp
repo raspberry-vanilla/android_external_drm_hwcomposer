@@ -18,13 +18,13 @@
 
 #include "DrmDisplayPipeline.h"
 
-#include "DrmAtomicStateManager.h"
-#include "DrmConnector.h"
-#include "DrmCrtc.h"
-#include "DrmDevice.h"
-#include "DrmEncoder.h"
-#include "DrmPlane.h"
 #include "compositor/CompositionPlanner.h"
+#include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmConnector.h"
+#include "drm/DrmCrtc.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmEncoder.h"
+#include "drm/DrmPlane.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 

@@ -15,7 +15,7 @@
  */
 
 #include "backend/GenericBackend.h"
-#include "compositor/GenericCompositionPlanner.h"
+#include "compositor/CompositionPlanner.h"
 #include "hwc/HwcDisplay.h"
 
 namespace android::drm_hwcomposer {

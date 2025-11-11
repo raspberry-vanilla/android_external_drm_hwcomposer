@@ -18,12 +18,14 @@
 
 #include "DrmCrtc.h"
 
-#include <utils/log.h>
 #include <xf86drmMode.h>
 
 #include <cstdint>
 
-#include "DrmDevice.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmProperty.h"
+#include "drm/DrmUnique.h"
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

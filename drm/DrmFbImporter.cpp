@@ -29,8 +29,9 @@
 #include <cinttypes>
 #include <system_error>
 
+#include "bufferinfo/BufferInfo.h"
+#include "drm/DrmDevice.h"
 #include "utils/log.h"
-#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 
@@ -123,6 +124,9 @@ DrmFbIdHandle::~DrmFbIdHandle() {
       ALOGE("Failed to close gem handle %d, errno: %d", gem_handles_[i], errno);
     }
   }
+}
+
+DrmFbIdHandle::DrmFbIdHandle(DrmDevice &drm) : drm_fd_(drm.GetFd()) {
 }
 
 auto DrmFbImporter::GetOrCreateFbId(BufferInfo *bo)

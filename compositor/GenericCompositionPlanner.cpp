@@ -20,11 +20,12 @@
 #include <tuple>
 #include <vector>
 
-#include "backend/BackendManager.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
+#include "drm/DrmPlane.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

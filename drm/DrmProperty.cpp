@@ -26,7 +26,7 @@
 #include <cstdint>
 #include <string>
 
-#include "DrmDevice.h"
+#include "utils/fd.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

@@ -21,7 +21,7 @@
 #include <android/binder_process.h>
 #include <sched.h>
 
-#include "Composer.h"
+#include "hwc3/Composer.h"
 #include "utils/log.h"
 
 using aidl::android::hardware::graphics::composer3::impl::Composer;

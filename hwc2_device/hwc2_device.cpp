@@ -25,15 +25,17 @@
 #include <optional>
 
 #include <cutils/native_handle.h>
+#include <hardware/hwcomposer2.h>
+#include <system/graphics-base-v1.1.h>
 #include <ui/GraphicTypes.h>
 
-#include "DrmHwcTwo.h"
-#include "compositor/CompositionPlanner.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "compositor/DisplayInfo.h"
-#include "hardware/hwcomposer2.h"
+#include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
-#include "system/graphics-base-v1.1.h"
+#include "hwc2_device/DrmHwcTwo.h"
 #include "utils/log.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 

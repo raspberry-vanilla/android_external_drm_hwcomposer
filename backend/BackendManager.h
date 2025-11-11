@@ -21,9 +21,10 @@
 #include <string>
 #include <vector>
 
-#include "compositor/CompositionPlanner.h"
-
 namespace android::drm_hwcomposer {
+
+class DrmConnector;
+struct DrmDisplayPipeline;
 
 // BackendManager is a singleton that manages the registration of Backends and
 // finding a Backend which can be used to create a DrmDisplayPipeline for a

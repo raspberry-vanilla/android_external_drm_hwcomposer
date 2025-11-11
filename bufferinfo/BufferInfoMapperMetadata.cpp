@@ -25,6 +25,8 @@
 
 #include <cinttypes>
 
+#include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

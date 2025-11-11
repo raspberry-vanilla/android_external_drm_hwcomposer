@@ -18,9 +18,9 @@
 
 #include "LayerToPlaneJoiningPlan.h"
 
-#include "drm/DrmDevice.h"
+#include "compositor/LayerData.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
-#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
