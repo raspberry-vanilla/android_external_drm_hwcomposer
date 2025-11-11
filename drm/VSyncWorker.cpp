@@ -27,7 +27,11 @@
 #include <cstring>
 #include <ctime>
 
+#include "drm/DrmCrtc.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/ResourceManager.h"
+#include "utils/fd.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

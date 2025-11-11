@@ -21,6 +21,9 @@
 
 namespace android::drm_hwcomposer {
 
+class DrmConnector;
+struct DrmDisplayPipeline;
+
 // Implement the Backend interface on top of upstream drm uAPI.
 class GenericBackend : public BackendManager::Backend {
  public:

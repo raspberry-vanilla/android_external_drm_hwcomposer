@@ -22,15 +22,29 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <thread>
 
-#include "compositor/DisplayInfo.h"
+#include <android-base/thread_annotations.h>
+
 #include "compositor/LayerData.h"
-#include "compositor/LayerToPlaneJoiningPlan.h"
-#include "drm/DrmPlane.h"
-#include "drm/ResourceManager.h"
-#include "drm/VSyncWorker.h"
+#include "drm/DrmMode.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
+
+template <typename T>
+class BindingOwner;
+
+class DrmFbIdHandle;
+class DrmPlane;
+
+struct DrmDisplayPipeline;
+struct LayerToPlaneJoiningPlan;
+
+enum class Colorspace;
+enum class ContentProtection;
+enum class ContentType;
+enum class HdcpContentType;
 
 struct AtomicCommitArgs {
   /* inputs. All fields are optional, but at least one has to be specified */

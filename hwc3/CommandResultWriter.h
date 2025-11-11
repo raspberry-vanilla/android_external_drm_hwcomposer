@@ -17,16 +17,18 @@
 #include <unordered_map>
 #include <vector>
 
+#include <aidl/android/hardware/graphics/composer3/CommandError.h>
+#include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
+#include <aidl/android/hardware/graphics/composer3/PresentFence.h>
+#include <aidl/android/hardware/graphics/composer3/PresentOrValidate.h>
+#include <aidl/android/hardware/graphics/composer3/ReleaseFences.h>
 #include <android-base/unique_fd.h>
 
-#include "Utils.h"
-#include "aidl/android/hardware/graphics/composer3/CommandError.h"
-#include "aidl/android/hardware/graphics/composer3/CommandResultPayload.h"
-#include "aidl/android/hardware/graphics/composer3/PresentFence.h"
-#include "aidl/android/hardware/graphics/composer3/PresentOrValidate.h"
-#include "aidl/android/hardware/graphics/composer3/ReleaseFences.h"
-
 namespace aidl::android::hardware::graphics::composer3 {
+
+namespace hwc3 {
+enum class Error;
+}  // namespace hwc3
 
 struct DisplayChanges {
   std::optional<ChangedCompositionTypes> composition_changes;

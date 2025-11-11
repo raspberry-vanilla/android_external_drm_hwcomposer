@@ -24,6 +24,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

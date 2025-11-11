@@ -82,7 +82,7 @@ enum class Colorspace : int32_t {
 /**
  * Display panel orientation property values.
  */
-enum PanelOrientation {
+enum class PanelOrientation {
   kModePanelOrientationNormal = 0,
   kModePanelOrientationBottomUp,
   kModePanelOrientationLeftUp,

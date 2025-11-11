@@ -25,9 +25,9 @@
 #include <aidl/android/frameworks/stats/IStats.h>
 #include <android/binder_manager.h>
 
-#include "CompositionStats.h"
 #include "compositor/CompositionPlanner.h"
 #include "desktopatoms.h"
+#include "stats/CompositionStats.h"
 #include "utils/log.h"
 
 using aidl::android::frameworks::stats::IStats;

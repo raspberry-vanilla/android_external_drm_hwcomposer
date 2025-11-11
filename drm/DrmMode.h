@@ -22,7 +22,7 @@
 #include <cstdio>
 #include <string>
 
-#include "DrmUnique.h"
+#include "drm/DrmUnique.h"
 
 namespace android::drm_hwcomposer {
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "stats/CompositionStats.h"
+#include "CompositionStats.h"
 
 namespace android::drm_hwcomposer {
 

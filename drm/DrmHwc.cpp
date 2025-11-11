@@ -24,6 +24,9 @@
 #include <sstream>
 #include <utility>
 
+#include "drm/DrmConnector.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
 #include "utils/log.h"
 #include "utils/properties.h"

@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include "CompositionPlanner.h"
+#include "compositor/CompositionPlanner.h"
 
 namespace android::drm_hwcomposer {
 
-struct LayerToPlaneJoiningPlan;
+enum class CompositionType;
 class HwcDisplay;
 class HwcLayer;
 

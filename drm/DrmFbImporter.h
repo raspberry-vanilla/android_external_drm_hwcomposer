@@ -23,7 +23,6 @@
 #include <map>
 
 #include "bufferinfo/BufferInfo.h"
-#include "drm/DrmDevice.h"
 #include "utils/fd.h"
 
 #ifndef DRM_FORMAT_INVALID
@@ -33,6 +32,8 @@
 using GemHandle = uint32_t;
 
 namespace android::drm_hwcomposer {
+
+class DrmDevice;
 
 class DrmFbIdHandle {
  public:
@@ -50,7 +51,7 @@ class DrmFbIdHandle {
   }
 
  private:
-  explicit DrmFbIdHandle(DrmDevice &drm) : drm_fd_(drm.GetFd()) {};
+  explicit DrmFbIdHandle(DrmDevice &drm);
 
   SharedFd drm_fd_;
 

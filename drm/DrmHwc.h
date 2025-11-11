@@ -16,12 +16,13 @@
 
 #pragma once
 
-#include "drm/DrmDisplayPipeline.h"
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
 
 namespace android::drm_hwcomposer {
+
+struct DrmDisplayPipeline;
 
 class DrmHwc : public PipelineToFrontendBindingInterface,
                public CompositionStatsProvider {

@@ -24,9 +24,11 @@
 
 #include <android-base/thread_annotations.h>
 
-#include "DrmDevice.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
+
+struct DrmDisplayPipeline;
 
 class VSyncWorker {
  public:

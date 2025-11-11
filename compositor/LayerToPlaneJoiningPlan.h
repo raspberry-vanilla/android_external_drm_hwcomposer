@@ -23,7 +23,10 @@
 
 namespace android::drm_hwcomposer {
 
-class DrmDevice;
+class DrmPlane;
+struct DrmDisplayPipeline;
+template <typename T>
+class BindingOwner;
 
 struct LayerToPlaneJoiningPlan {
   struct LayerToPlaneJoining {

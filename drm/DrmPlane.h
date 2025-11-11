@@ -21,14 +21,21 @@
 #include <cstdint>
 #include <vector>
 
-#include "DrmCrtc.h"
-#include "DrmProperty.h"
-#include "compositor/LayerData.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmProperty.h"
+#include "drm/DrmUnique.h"
 
 namespace android::drm_hwcomposer {
 
+class DrmCrtc;
 class DrmDevice;
+
+struct DstRectInfo;
 struct LayerData;
+
+enum class BufferBlendMode;
+enum class BufferColorSpace;
+enum class BufferSampleRange;
 
 // NOLINTNEXTLINE(readability-identifier-naming)
 struct drm_plane_size_hint_local {

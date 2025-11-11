@@ -22,12 +22,12 @@
 namespace android::drm_hwcomposer {
 
 class CompositionPlanner;
-class DrmConnector;
-class DrmDevice;
-class DrmPlane;
-class DrmCrtc;
-class DrmEncoder;
 class DrmAtomicStateManager;
+class DrmConnector;
+class DrmCrtc;
+class DrmDevice;
+class DrmEncoder;
+class DrmPlane;
 
 struct DrmDisplayPipeline;
 

@@ -19,12 +19,10 @@
 
 #include "Composer.h"
 
-#include <android-base/logging.h>
 #include <android/binder_ibinder_platform.h>
 
 #include "hwc3/ComposerClient.h"
 #include "hwc3/Utils.h"
-#include "utils/log.h"
 #include "utils/properties.h"
 
 using ::android::drm_hwcomposer::Properties;

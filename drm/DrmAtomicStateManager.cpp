@@ -29,10 +29,16 @@
 
 #include <cassert>
 
+#include "compositor/LayerData.h"
+#include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmFbImporter.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmUnique.h"
+#include "utils/fd.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

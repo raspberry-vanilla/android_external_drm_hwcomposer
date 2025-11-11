@@ -18,9 +18,12 @@
 
 #if HAS_LIBDISPLAY_INFO
 
+#include "EdidWrapper.h"
+
 #include <ui/GraphicTypes.h>
 
-#include "utils/EdidWrapper.h"
+#include "compositor/DisplayInfo.h"
+#include "drm/DrmUnique.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

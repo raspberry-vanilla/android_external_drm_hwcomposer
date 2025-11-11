@@ -20,9 +20,11 @@
 
 #include <cinttypes>
 
-#include "Utils.h"
-#include "aidl/android/hardware/graphics/common/Dataspace.h"
-#include "aidl/android/hardware/graphics/common/DisplayHotplugEvent.h"
+#include <aidl/android/hardware/graphics/common/Dataspace.h>
+#include <aidl/android/hardware/graphics/common/DisplayHotplugEvent.h>
+
+#include "drm/DrmHwc.h"
+#include "hwc/HwcDisplay.h"
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 

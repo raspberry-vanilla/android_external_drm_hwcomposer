@@ -20,8 +20,8 @@
 
 #include <cinttypes>
 
-#include "compositor/CompositionPlanner.h"
-#include "utils/log.h"
+#include "drm/DrmHwc.h"
+#include "hwc/HwcDisplay.h"
 
 namespace android::drm_hwcomposer {
 

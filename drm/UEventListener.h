@@ -20,9 +20,9 @@
 #include <mutex>
 #include <thread>
 
-#include "utils/UEvent.h"
-
 namespace android::drm_hwcomposer {
+
+class UEvent;
 
 class UEventListener {
  public:

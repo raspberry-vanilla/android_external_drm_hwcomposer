@@ -27,8 +27,13 @@
 #include <cstdint>
 #include <sstream>
 
-#include "DrmDevice.h"
 #include "compositor/DisplayInfo.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmEncoder.h"
+#include "drm/DrmMode.h"
+#include "drm/DrmProperty.h"
+#include "drm/DrmUnique.h"
+#include "utils/log.h"
 #include "utils/properties.h"
 
 #ifndef DRM_MODE_CONNECTOR_SPI
@@ -80,6 +85,13 @@ auto DrmConnector::CreateInstance(DrmDevice &dev, uint32_t connector_id,
   }
 
   return c;
+}
+
+DrmConnector::~DrmConnector() = default;
+
+DrmConnector::DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
+                           uint32_t index)
+    : connector_(std::move(connector)), drm_(drm), index_in_res_array_(index) {
 }
 
 auto DrmConnector::Init()-> bool {
@@ -194,6 +206,17 @@ auto DrmConnector::GetEdidBlob() -> DrmModePropertyBlobUnique {
   }
 
   return MakeDrmModePropertyBlobUnique(*drm_->GetFd(), *blob_id);
+}
+
+bool DrmConnector::SupportsEncoder(DrmEncoder &enc) const {
+  for (int i = 0; i < connector_->count_encoders; i++) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (connector_->encoders[i] == enc.GetId()) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool DrmConnector::IsInternal() const {

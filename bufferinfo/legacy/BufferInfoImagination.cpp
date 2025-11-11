@@ -22,6 +22,8 @@
 
 #include <cerrno>
 
+#include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "img_gralloc1_public.h"
 #include "utils/log.h"
 

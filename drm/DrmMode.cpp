@@ -18,7 +18,8 @@
 
 #include <cstring>
 
-#include "DrmDevice.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmUnique.h"
 
 namespace android::drm_hwcomposer {
 

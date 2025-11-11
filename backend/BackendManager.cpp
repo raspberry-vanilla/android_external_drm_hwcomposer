@@ -18,7 +18,9 @@
 
 #include "BackendManager.h"
 
-#include "hwc/HwcDisplay.h"
+#include "drm/DrmConnector.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 
