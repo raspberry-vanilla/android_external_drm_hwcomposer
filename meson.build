@@ -24,6 +24,8 @@ src_common = files(
     'stats/CompositionStats.cpp',
     'stats/CompositionStatsAtomReporter.cpp',
     'stats/CompositionStatsPoller.cpp',
+    'stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp',
+    'stats/DisplayRefreshRatesChangedAtomReporter.cpp',
     'utils/fd.cpp',
     'utils/LibdisplayEdidWrapper.cpp',
     'utils/properties.cpp',

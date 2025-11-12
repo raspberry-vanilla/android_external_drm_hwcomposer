@@ -72,7 +72,11 @@ std::string DumpDisplayStats(const HwcDisplay *display,
 }
 }  // namespace
 
-DrmHwc::DrmHwc() : resource_manager_(this), dump_stats_tracker_(this) {};
+DrmHwc::DrmHwc()
+    : resource_manager_(this),
+      dump_stats_tracker_(this),
+      refresh_rates_reporter_(
+          DisplayRefreshRatesChangedAtomReporter::Create()) {};
 
 /* Must be called after every display attach/detach cycle */
 void DrmHwc::FinalizeDisplayBinding() {
@@ -272,6 +276,20 @@ void DrmHwc::DeinitDisplays() {
   for (auto &pair : Displays()) {
     pair.second->SetPipeline(nullptr);
   }
+}
+
+void DrmHwc::LogRefreshRateChanges() {
+  std::vector<int32_t> refresh_rates;
+  refresh_rates.reserve(displays_.size());
+  for (const auto &[_, display] : displays_) {
+    if (const HwcDisplayConfig *config = display->GetCurrentConfig(); config) {
+      refresh_rates.push_back(
+          static_cast<int32_t>(lround(config->mode.GetVRefresh())));
+    }
+  }
+
+  if (refresh_rates_reporter_)
+    refresh_rates_reporter_->UpdateRefreshRates(refresh_rates);
 }
 
 }  // namespace android::drm_hwcomposer

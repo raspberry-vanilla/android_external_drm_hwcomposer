@@ -40,6 +40,7 @@
 #include "drm/VSyncWorker.h"
 #include "hwc/HwcLayer.h"
 #include "stats/CompositionStats.h"
+#include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
 #include "utils/EdidWrapper.h"
 #include "utils/log.h"
 #include "utils/properties.h"
@@ -144,6 +145,9 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
   writeback_layer_ = std::make_unique<HwcLayer>(this);
 
   identity_color_matrix_ = ToColorTransform(kIdentityMatrix);
+
+  display_mode_reporter_ = DisplayHotplugConnectModeDetectedAtomReporter::
+      Create();
 }
 
 void HwcDisplay::SetColorTransformMatrix(
@@ -640,6 +644,9 @@ void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
     bool success = Init();
     ALOGE_IF(!success, "Failed to init HwcDisplay after setting pipeline.");
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+    if (pipeline_) {
+      LogModesOnHotplug();
+    }
   } else {
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
   }
@@ -1390,4 +1397,60 @@ std::pair<uint32_t, uint32_t> HwcDisplay::GetSize() const {
                         config->mode.GetRawMode().vdisplay);
 }
 
+void HwcDisplay::LogModesOnHotplug() {
+  if (!display_mode_reporter_) {
+    return;
+  }
+
+  const HwcDisplay::DisplayType display_type = GetDisplayType();
+  if (display_type != HwcDisplay::DisplayType::kInternal &&
+      display_type != HwcDisplay::DisplayType::kExternal) {
+    return;
+  }
+
+  using ModeAtom = DisplayHotplugConnectModeDetectedAtomReporter::Atom;
+  std::vector<ModeAtom> submitted_atoms;
+  for (const auto &[id, hwc_mode] : configs_.hwc_configs) {
+    const DrmMode &mode = hwc_mode.mode;
+    const drmModeModeInfo &raw_mode = mode.GetRawMode();
+    const bool is_preferred = (raw_mode.type & DRM_MODE_TYPE_PREFERRED) != 0;
+
+    constexpr float kMmPerInch = 25.4;
+    const auto [width_mm, height_mm] = GetDisplayBoundsMm();
+    int32_t dpi_x = -1;
+    if (width_mm > 0) {
+      dpi_x = static_cast<int32_t>(
+          lround((static_cast<float>(raw_mode.hdisplay) * kMmPerInch) /
+                 static_cast<float>(width_mm)));
+    }
+    int32_t dpi_y = dpi_x;
+    if (height_mm > 0) {
+      dpi_y = static_cast<int32_t>(
+          lround((static_cast<float>(raw_mode.vdisplay) * kMmPerInch) /
+                 static_cast<float>(height_mm)));
+    }
+
+    using AtomDisplayType = DisplayHotplugConnectModeDetectedAtomReporter::
+        DisplayType;
+    const ModeAtom atom =
+        {.display_handle = handle_,
+         .resolution_x = raw_mode.hdisplay,
+         .resolution_y = raw_mode.vdisplay,
+         .refresh_rate = static_cast<int32_t>(lround(mode.GetVRefresh())),
+         .dpi_x = dpi_x,
+         .dpi_y = dpi_y,
+         .display_type = display_type == HwcDisplay::DisplayType::kInternal
+                             ? AtomDisplayType::kInternal
+                             : AtomDisplayType::kExternal,
+         .is_preferred = is_preferred};
+
+    if (std::find(submitted_atoms.begin(), submitted_atoms.end(), atom) !=
+        submitted_atoms.end()) {
+      continue;
+    }
+
+    display_mode_reporter_->PushAtom(atom);
+    submitted_atoms.push_back(atom);
+  }
+}
 }  // namespace android::drm_hwcomposer
