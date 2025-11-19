@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "compositor/DisplayInfo.h"
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
@@ -47,6 +48,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
   virtual void SendRefreshEventToClient(DisplayHandle display_handle) = 0;
   virtual void SendHotplugEventToClient(DisplayHandle display_handle,
                                         enum DisplayStatus display_status) = 0;
+  virtual void SendHdcpLevelsChangedEventToClient(
+      DisplayHandle display_handle,
+      std::optional<enum HdcpContentType> current_hdcp_level) = 0;
 
   // CompositionStatsProvider:
   auto PullCompositionStats()

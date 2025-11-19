@@ -18,6 +18,7 @@
 
 #include <hardware/hwcomposer2.h>
 
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
 
@@ -39,6 +40,9 @@ class DrmHwcTwo : public DrmHwc {
   void SendRefreshEventToClient(DisplayHandle display_handle) override;
   void SendHotplugEventToClient(DisplayHandle display_handle,
                                 DisplayStatus display_status) override;
+  void SendHdcpLevelsChangedEventToClient(
+      DisplayHandle display_handle,
+      std::optional<enum HdcpContentType> current_hdcp_level) override;
 
   const std::string& RefreshStateDump();
   const std::string& GetLastStateDump() const {

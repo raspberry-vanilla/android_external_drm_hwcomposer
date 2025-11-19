@@ -19,6 +19,7 @@
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <android-base/thread_annotations.h>
 
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
 
@@ -52,6 +53,10 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   void SendHotplugEventToClient(
       ::android::drm_hwcomposer::DisplayHandle display_handle,
       DrmHwc::DisplayStatus display_status) override;
+  void SendHdcpLevelsChangedEventToClient(
+      ::android::drm_hwcomposer::DisplayHandle display_handle,
+      std::optional<enum ::android::drm_hwcomposer::HdcpContentType>
+          current_hdcp_level) override;
 
   static auto GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
       -> std::shared_ptr<Hwc3Display>;

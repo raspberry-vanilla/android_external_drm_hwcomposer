@@ -117,6 +117,12 @@ void DrmHwcTwo::SendRefreshEventToClient(DisplayHandle display_handle) {
   }
 }
 
+void DrmHwcTwo::SendHdcpLevelsChangedEventToClient(
+    DisplayHandle /*display_handle*/,
+    std::optional<enum HdcpContentType> /*current_hdcp_level*/) {
+  // Stub for a Pure virtual method
+}
+
 const std::string& DrmHwcTwo::RefreshStateDump() {
   last_state_dump_ = DumpState();
   return last_state_dump_;
