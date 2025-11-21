@@ -85,6 +85,14 @@ auto inline property_get_bool(const char *key, int8_t default_value) -> int8_t {
 namespace android::drm_hwcomposer {
 
 /**
+ * Determine if color pipeline feature is enabled. This uses the color pipeline
+ * plane property to configure color settings instead of color_encoding etc.
+ */
+auto Properties::UseColorPipeline() -> bool {
+  return (property_get_bool("vendor.hwc.drm.enable_color_pipeline", 0) != 0);
+}
+
+/**
  * @brief Determine if the "Present Not Reliable" property is enabled.
  *
  * @return boolean

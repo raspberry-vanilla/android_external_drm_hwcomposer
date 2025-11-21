@@ -53,6 +53,8 @@ class DrmProperty {
 
   auto GetValue() const -> std::optional<uint64_t>;
 
+  auto GetEnumValues() const -> std::vector<uint64_t>;
+
   bool IsImmutable() const {
     return id_ != 0 && (flags_ & DRM_MODE_PROP_IMMUTABLE) != 0;
   }
@@ -77,7 +79,7 @@ class DrmProperty {
 
   template <class E>
   auto AddEnumToMapReverse(const std::string &name, E value,
-                           std::map<uint64_t, E> &map) -> bool;
+                           std::map<uint64_t, E> &map) const -> bool;
 
   auto GetEnumMask(uint64_t &mask) -> bool;
 
@@ -132,7 +134,7 @@ auto DrmProperty::AddEnumToMap(const std::string &name, E key,
 
 template <class E>
 auto DrmProperty::AddEnumToMapReverse(const std::string &name, E value,
-                                      std::map<uint64_t, E> &map) -> bool {
+                                      std::map<uint64_t, E> &map) const -> bool {
   uint64_t enum_value = UINT64_MAX;
   int err = 0;
   std::tie(enum_value, err) = GetEnumValueWithName(name);

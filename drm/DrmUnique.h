@@ -21,6 +21,8 @@
 #include <functional>
 #include <memory>
 
+#include "drm_mode.h"
+
 namespace android::drm_hwcomposer {
 
 template <typename T>
@@ -77,6 +79,13 @@ auto inline MakeDrmModePropertyBlobUnique(int fd, uint32_t blob_id) {
                                    [](drmModePropertyBlobRes *it) {
                                      drmModeFreePropertyBlob(it);
                                    });
+}
+
+using DrmModeColorOpUnique = DUniquePtr<drmModeObjectProperties>;
+auto inline MakeDrmModeColorOpUnique(int fd, uint32_t color_op_id) {
+  return DrmModeColorOpUnique(
+      drmModeObjectGetProperties(fd, color_op_id, DRM_MODE_OBJECT_COLOROP),
+      [](drmModeObjectProperties *it) { drmModeFreeObjectProperties(it); });
 }
 
 using DrmModeResUnique = DUniquePtr<drmModeRes>;

@@ -61,6 +61,10 @@ class ResourceManager {
     return ctm_handling_;
   }
 
+  bool UseColorPipeline() const {
+    return color_pipeline_enabled_;
+  }
+
   auto &GetMainLock() {
     return main_lock_;
   }
@@ -82,6 +86,7 @@ class ResourceManager {
   // Android properties:
   bool scale_with_gpu_{};
   CtmHandling ctm_handling_{};
+  bool color_pipeline_enabled_{};
 
   std::shared_ptr<UEventListener> uevent_listener_;
 

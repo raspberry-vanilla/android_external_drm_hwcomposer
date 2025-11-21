@@ -28,6 +28,7 @@
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmFbImporter.h"
+#include "drm/ResourceManager.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
@@ -39,6 +40,24 @@ void ClipSourceCrop(FRect &src, const BufferInfo &buffer_info) {
   src.top = std::max(src.top, 0.F);
   src.right = std::min(src.right, static_cast<float>(buffer_info.width));
   src.bottom = std::min(src.bottom, static_cast<float>(buffer_info.height));
+}
+
+bool VerifyColorPipeline(
+    std::vector<std::unique_ptr<DrmColorOp>> &color_pipeline,
+    std::map<uint64_t, ColorOpType> &color_op_type_enum_map) {
+  if (color_pipeline.empty() || color_op_type_enum_map.empty()) {
+    return false;
+  }
+
+  for (const auto &color_op : color_pipeline) {
+    // Verify 3x4 CTM operation is present
+    const auto type = color_op->GetTypeProperty().GetValue().value_or(0);
+    if (color_op_type_enum_map.at(type) == ColorOpType::kMatrix3x4) {
+      return true;
+    }
+  }
+
+  return false;
 }
 }  // namespace
 
@@ -60,6 +79,7 @@ auto DrmPlane::CreateInstance(DrmDevice &dev, uint32_t plane_id)
   return plane;
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 int DrmPlane::Init() {
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   formats_ = {plane_->formats, plane_->formats + plane_->count_formats};
@@ -119,7 +139,7 @@ int DrmPlane::Init() {
 
   GetPlaneProperty("IN_FENCE_FD", in_fence_fd_property_, Presence::kOptional);
 
-  if (HasNonRgbFormat()) {
+  if (!drm_->GetResMan().UseColorPipeline() && HasNonRgbFormat()) {
     if (GetPlaneProperty("COLOR_ENCODING", color_encoding_property_,
                          Presence::kOptional)) {
       color_encoding_property_.AddEnumToMap("ITU-R BT.709 YCbCr",
@@ -144,6 +164,51 @@ int DrmPlane::Init() {
     }
   }
 
+  if (drm_->GetResMan().UseColorPipeline() &&
+      GetPlaneProperty("COLOR_PIPELINE", color_pipeline_property_,
+                       Presence::kOptional)) {
+    // Get color pipeline start nodes
+    const auto color_pipelines = color_pipeline_property_.GetEnumValues();
+    for (const uint64_t &color_pipeline_start_id : color_pipelines) {
+      int color_op_index = 0;
+      uint64_t color_op_id = color_pipeline_start_id;
+
+      // Map all color ops in the pipeline
+      while (color_op_id > 0) {
+        auto color_op = DrmColorOp::CreateInstance(*drm_, color_op_id,
+                                                   color_op_index++);
+        if (!color_op) {
+          ALOGW("Found invalid color op with id %lu", color_op_id);
+          break;
+        }
+        color_op_id = color_op->GetNextProperty().GetValue().value_or(0);
+        color_pipeline_.push_back(std::move(color_op));
+      }
+
+      // Populate color op types mapping
+      if (!color_pipeline_.empty()) {
+        const auto &color_op = color_pipeline_.front();
+        color_op->GetTypeProperty()
+            .AddEnumToMapReverse("3x4 Matrix", ColorOpType::kMatrix3x4,
+                                 color_op_type_enum_map_);
+        color_op->GetTypeProperty()
+            .AddEnumToMapReverse("1D LUT", ColorOpType::k1DLut,
+                                 color_op_type_enum_map_);
+        color_op->GetTypeProperty()
+            .AddEnumToMapReverse("1D LUT Multi Segmented",
+                                 ColorOpType::k1DLutMultiSegmented,
+                                 color_op_type_enum_map_);
+      }
+
+      // Verify all necessary color ops are present
+      if (!VerifyColorPipeline(color_pipeline_, color_op_type_enum_map_)) {
+        color_pipeline_.clear();
+      } else {
+        break;
+      }
+    }
+  }
+
   if (type_ == DRM_PLANE_TYPE_CURSOR &&
       GetPlaneProperty("SIZE_HINTS", size_hints_property_,
                        Presence::kOptional)) {
@@ -155,6 +220,7 @@ int DrmPlane::Init() {
 
   return 0;
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 bool DrmPlane::IsCrtcSupported(const DrmCrtc &crtc) const {
   auto crtc_prop_optval = crtc_property_.GetValue();
@@ -254,7 +320,8 @@ static int To1616FixPt(float in) {
 auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
                               uint32_t zpos, uint32_t crtc_id,
                               DstRectInfo &whole_display_rect,
-                              DrmModeUserPropertyBlobUnique &damage_out) const
+                              DrmModeUserPropertyBlobUnique &damage_out,
+                              DrmModeUserPropertyBlobUnique &ctm_3x4) const
     -> int {
   if (!layer.fb || !layer.bi) {
     ALOGE("%s: Invalid arguments", __func__);
@@ -351,16 +418,23 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
     return -EINVAL;
   }
 
-  if (color_encoding_enum_map_.count(layer.bi->color_space) != 0 &&
-      !color_encoding_property_.AtomicSet(pset, color_encoding_enum_map_.at(
-                                                    layer.bi->color_space))) {
-    return -EINVAL;
-  }
+  if (drm_->GetResMan().UseColorPipeline()) {
+    if (color_pipeline_property_ &&
+        AtomicSetColorPipeline(pset, ctm_3x4) != 0) {
+      return -EINVAL;
+    }
+  } else {
+    if (color_encoding_enum_map_.count(layer.bi->color_space) != 0 &&
+        !color_encoding_property_.AtomicSet(pset, color_encoding_enum_map_.at(
+                                                      layer.bi->color_space))) {
+      return -EINVAL;
+    }
 
-  if (color_range_enum_map_.count(layer.bi->sample_range) != 0 &&
-      !color_range_property_.AtomicSet(pset, color_range_enum_map_.at(
-                                                 layer.bi->sample_range))) {
-    return -EINVAL;
+    if (color_range_enum_map_.count(layer.bi->sample_range) != 0 &&
+        !color_range_property_.AtomicSet(pset, color_range_enum_map_.at(
+                                                   layer.bi->sample_range))) {
+      return -EINVAL;
+    }
   }
 
   if (fb_damage_clips_property_) {
@@ -397,6 +471,52 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
 auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
   if (!crtc_property_.AtomicSet(pset, 0) || !fb_property_.AtomicSet(pset, 0)) {
     return -EINVAL;
+  }
+
+  return 0;
+}
+
+auto DrmPlane::AtomicSetColorPipeline(
+    drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_3x4) const
+    -> int {
+  if (color_pipeline_.empty()) {
+    ALOGW("color_pipeline_ is empty");
+    return 0;
+  }
+
+  uint64_t color_op_id = color_pipeline_.front()->GetId();
+  if (!color_pipeline_property_.AtomicSet(pset, color_op_id)) {
+    ALOGE("Failed to set COLOR_PIPELINE to %lu", color_op_id);
+    return -EINVAL;
+  }
+
+  for (const auto &color_op : color_pipeline_) {
+    switch (color_op_type_enum_map_.at(
+        (color_op->GetTypeProperty().GetValue().value_or(0)))) {
+      case ColorOpType::kMatrix3x4:
+        if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
+          ALOGE("Failed to set BYPASS property on %s",
+                color_op->DumpState().c_str());
+          return -EINVAL;
+        }
+        if (!ctm_3x4 ||
+            !color_op->GetDataProperty().AtomicSet(pset, *ctm_3x4)) {
+          ALOGE("Failed to set DATA property on %s",
+                color_op->DumpState().c_str());
+          return -EINVAL;
+        }
+        break;
+      case ColorOpType::k1DLut:
+        [[fallthrough]];
+      case ColorOpType::k1DLutMultiSegmented:
+        [[fallthrough]];
+      default:
+        if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
+          ALOGE("Failed to set BYPASS property on %s",
+                color_op->DumpState().c_str());
+          return -EINVAL;
+        }
+    }
   }
 
   return 0;

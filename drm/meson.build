@@ -1,6 +1,7 @@
 src_common += files(
     'DrmAtomicStateManager.cpp',
     'DrmConnector.cpp',
+    'DrmColorOp.cpp',
     'DrmCrtc.cpp',
     'DrmDevice.cpp',
     'DrmDisplayPipeline.cpp',

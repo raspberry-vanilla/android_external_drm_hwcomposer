@@ -25,6 +25,7 @@
 #include "drm/DrmDevice.h"
 #include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
+#include "drm/ResourceManager.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
@@ -63,9 +64,11 @@ auto DrmCrtc::CreateInstance(DrmDevice &dev, uint32_t crtc_id, uint32_t index)
     return {};
   }
 
-  ret = GetCrtcProperty(dev, *c, "CTM", &c->ctm_property_);
-  if (ret != 0) {
-    ALOGV("Missing optional CTM property");
+  if (!dev.GetResMan().UseColorPipeline()) {
+    ret = GetCrtcProperty(dev, *c, "CTM", &c->ctm_property_);
+    if (ret != 0) {
+      ALOGV("Missing optional CTM property");
+    }
   }
 
   return c;

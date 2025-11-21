@@ -80,6 +80,7 @@ filegroup {
         "compositor/LayerToPlaneJoiningPlan.cpp",
 
         "drm/DrmAtomicStateManager.cpp",
+        "drm/DrmColorOp.cpp",
         "drm/DrmConnector.cpp",
         "drm/DrmCrtc.cpp",
         "drm/DrmDevice.cpp",
@@ -282,6 +283,7 @@ cc_test_host {
         "compositor/FlatteningControllerTests.cpp",
         "compositor/FlatteningEventAtomReporter.cpp",
         "drm/DrmAtomicStateManager.cpp",
+        "drm/DrmColorOp.cpp",
         "drm/DrmConnector.cpp",
         "drm/DrmCrtc.cpp",
         "drm/DrmDevice.cpp",

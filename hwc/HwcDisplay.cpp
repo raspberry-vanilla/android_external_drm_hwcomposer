@@ -54,8 +54,6 @@ using FlattenReason = CompositionPlanner::FlattenReason;
 namespace {
 
 constexpr auto kFlatteningTimeout = 1s;
-constexpr int kCtmRows = 3;
-constexpr int kCtmCols = 3;
 
 bool float_equals(float a, float b) {
   const float epsilon = 0.001F;
@@ -74,15 +72,17 @@ uint64_t To3132FixPt(float in) {
 bool TransformHasOffsetValue(const float *matrix) {
   for (int i = 12; i < 14; i++) {
     if (!float_equals(matrix[i], 0.F)) {
-      ALOGW("DRM API does not support CTM with offsets.");
       return true;
     }
   }
   return false;
 }
 
-auto ToColorTransform(const std::array<float, 16> &color_transform_matrix) {
-  /* HAL provides a 4x4 float type matrix:
+template <typename T>
+std::shared_ptr<T> ToColorTransform(
+    const std::array<float, 16> &color_transform_matrix,
+    const bool output_is_3x4_matrix) {
+  /* HAL provides a transposed 4x4 float type matrix:
    * | 0  1  2  3|
    * | 4  5  6  7|
    * | 8  9 10 11|
@@ -92,7 +92,18 @@ auto ToColorTransform(const std::array<float, 16> &color_transform_matrix) {
    * G_out = R*1 + G*5 + B*9 + 13
    * B_out = R*2 + G*6 + B*10 + 14
    *
-   * DRM expects a 3x3 s31.32 fixed point matrix:
+   * drm_color_ctm_3x4 expects a 3x4 s31.32 fixed point matrix:
+   * out   matrix          in
+   * |R|   |0  1  2  3 |   | R |
+   * |G| = |4  5  6  7 | x | G |
+   * |B|   |8  9  10 11|   | B |
+   *                       |1.0|
+   *
+   * R_out = R*0 + G*1 + B*2 + 3
+   * G_out = R*4 + G*5 + B*6 + 7
+   * B_out = R*8 + G*9 + B*10 + 11
+   *
+   * drm_color_ctm expects a 3x3 s31.32 fixed point matrix:
    * out   matrix    in
    * |R|   |0 1 2|   |R|
    * |G| = |3 4 5| x |G|
@@ -102,15 +113,29 @@ auto ToColorTransform(const std::array<float, 16> &color_transform_matrix) {
    * G_out = R*3 + G*4 + B*5
    * B_out = R*6 + G*7 + B*8
    */
-  auto color_matrix = std::make_shared<drm_color_ctm>();
-  for (int i = 0; i < kCtmCols; i++) {
-    for (int j = 0; j < kCtmRows; j++) {
-      constexpr int kInCtmRows = 4;
-      color_matrix->matrix[(i * kCtmRows) + j] = To3132FixPt(
-          color_transform_matrix[(j * kInCtmRows) + i]);
+  std::shared_ptr<T> color_matrix = std::make_shared<T>();
+  const int rows = output_is_3x4_matrix ? 4 : 3;
+  constexpr int cols = 3;
+  constexpr int halRows = 4;
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      color_matrix->matrix[(i * rows) + j] = To3132FixPt(
+          color_transform_matrix[(j * halRows) + i]);
     }
   }
   return color_matrix;
+}
+
+std::shared_ptr<drm_color_ctm> ToColorTransform(
+    const std::array<float, 16> &color_transform_matrix) {
+  return ToColorTransform<drm_color_ctm>(color_transform_matrix,
+                                         /*output_is_3x4_matrix=*/false);
+}
+
+std::shared_ptr<drm_color_ctm_3x4> ToColorTransform3x4(
+    const std::array<float, 16> &color_transform_matrix) {
+  return ToColorTransform<drm_color_ctm_3x4>(color_transform_matrix,
+                                             /*output_is_3x4_matrix=*/true);
 }
 
 }  // namespace
@@ -145,6 +170,7 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
   writeback_layer_ = std::make_unique<HwcLayer>(this);
 
   identity_color_matrix_ = ToColorTransform(kIdentityMatrix);
+  identity_color_matrix_3x4_ = ToColorTransform3x4(kIdentityMatrix);
 
   display_mode_reporter_ = DisplayHotplugConnectModeDetectedAtomReporter::
       Create();
@@ -170,11 +196,13 @@ void HwcDisplay::SetColorTransformMatrix(
   if (!ctm_has_offset_) {
     color_matrix_ = ToColorTransform(color_transform_matrix);
   }
+  color_matrix_3x4_ = ToColorTransform3x4(color_transform_matrix);
 }
 
 void HwcDisplay::SetColorMatrixToIdentity() {
   ctm_has_offset_ = false;
   color_matrix_ = identity_color_matrix_;
+  color_matrix_3x4_ = identity_color_matrix_3x4_;
   color_transform_is_identity_ = true;
 }
 
@@ -853,7 +881,11 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const std::optional<LayerData> &modeset_layer) {
   AtomicCommitArgs args{};
 
-  args.color_matrix = color_matrix_;
+  if (hwc_->GetResMan().UseColorPipeline()) {
+    args.color_matrix_3x4 = color_matrix_3x4_;
+  } else {
+    args.color_matrix = color_matrix_;
+  }
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.hdr_metadata = hdr_metadata_;
@@ -964,7 +996,11 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   AtomicCommitArgs a_args;
-  a_args.color_matrix = color_matrix_;
+  if (hwc_->GetResMan().UseColorPipeline()) {
+    a_args.color_matrix_3x4 = color_matrix_3x4_;
+  } else {
+    a_args.color_matrix = color_matrix_;
+  }
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.hdr_metadata = hdr_metadata_;
@@ -1032,6 +1068,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   if (client_layer_count == layers_.size() &&
       hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
     a_args.color_matrix = identity_color_matrix_;
+    a_args.color_matrix_3x4 = identity_color_matrix_3x4_;
   }
 
   if (use_client_layer) {
@@ -1185,7 +1222,8 @@ bool HwcDisplay::CtmByGpu() const {
   if (color_transform_is_identity_)
     return false;
 
-  if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
+  if (!hwc_->GetResMan().UseColorPipeline() &&
+      GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
     return false;
 
   if (hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)

@@ -36,6 +36,7 @@
 #include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
 #include "drm/ResourceManager.h"
+#include "drm/drm.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -64,6 +65,7 @@ DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
   drm_fb_importer_ = std::make_unique<DrmFbImporter>(*this);
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 auto DrmDevice::Init(const char *path) -> int {
   /* TODO: Use drmOpenControl here instead */
   fd_ = MakeSharedFd(open(path, O_RDWR | O_CLOEXEC));
@@ -91,6 +93,11 @@ auto DrmDevice::Init(const char *path) -> int {
     ALOGI("Failed to set writeback cap %d", ret);
   }
 #endif
+
+  if (res_man_->UseColorPipeline()) {
+    ret = drmSetClientCap(*GetFd(), DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE, 1);
+    ALOGW_IF(ret != 0, "Failed to set color pipeline cap %d", ret);
+  }
 
   uint64_t cap_value = 0;
   if (drmGetCap(*GetFd(), DRM_CAP_ADDFB2_MODIFIERS, &cap_value) != 0) {
@@ -172,6 +179,7 @@ auto DrmDevice::Init(const char *path) -> int {
 
   return 0;
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 auto DrmDevice::RegisterUserPropertyBlob(void *data, size_t length) const
     -> DrmModeUserPropertyBlobUnique {

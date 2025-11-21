@@ -84,8 +84,8 @@ void ResourceManager::Init() {
   displays_.insert(display_names.begin(), display_names.end());
 
   scale_with_gpu_ = Properties::ScaleWithGpu();
-
   ctm_handling_ = Properties::GetCtmHandling();
+  color_pipeline_enabled_ = Properties::UseColorPipeline();
 
   if (BufferInfoGetter::GetInstance() == nullptr) {
     ALOGE("Failed to initialize BufferInfoGetter");

@@ -21,6 +21,7 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
 
@@ -328,6 +329,8 @@ class HwcDisplay {
   uint16_t virtual_disp_height_{};
   std::shared_ptr<drm_color_ctm> color_matrix_;
   std::shared_ptr<drm_color_ctm> identity_color_matrix_;
+  std::shared_ptr<drm_color_ctm_3x4> color_matrix_3x4_;
+  std::shared_ptr<drm_color_ctm_3x4> identity_color_matrix_3x4_;
   bool color_transform_is_identity_{};
   bool ctm_has_offset_ = false;
   ContentType content_type_ = ContentType::kNoData;
