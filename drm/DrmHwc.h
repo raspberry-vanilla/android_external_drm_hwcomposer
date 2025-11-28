@@ -19,6 +19,7 @@
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
 #include "stats/CompositionStats.h"
+#include "stats/DisplayRefreshRatesChangedAtomReporter.h"
 
 namespace android::drm_hwcomposer {
 
@@ -85,6 +86,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
   void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) override;
 
+  // Should be done for all successful modesets (full and seamless).
+  void LogRefreshRateChanges();
+
  protected:
   auto &Displays() {
     return displays_;
@@ -100,6 +104,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
 
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
   CompositionStatsTracker dump_stats_tracker_;
+
+  std::unique_ptr<DisplayRefreshRatesChangedAtomReporter>
+      refresh_rates_reporter_;
 };
 
 }  // namespace android::drm_hwcomposer

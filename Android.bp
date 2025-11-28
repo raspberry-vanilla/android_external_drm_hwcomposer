@@ -345,6 +345,8 @@ drm_hwcomposer_atom_reporter_library {
                 srcs: [
                     "compositor/FlatteningEventAtomReporterDesktop.cpp",
                     "stats/CompositionStatsAtomReporterDesktop.cpp",
+                    "stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp",
+                    "stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp",
                 ],
                 shared_libs: [
                     "android.frameworks.stats-V2-ndk",
@@ -356,6 +358,8 @@ drm_hwcomposer_atom_reporter_library {
                 srcs: [
                     "compositor/FlatteningEventAtomReporter.cpp",
                     "stats/CompositionStatsAtomReporter.cpp",
+                    "stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp",
+                    "stats/DisplayRefreshRatesChangedAtomReporter.cpp",
                 ],
             },
         },

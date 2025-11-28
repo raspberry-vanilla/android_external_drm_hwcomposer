@@ -35,6 +35,7 @@ using aidl::android::hardware::graphics::common::Hdr;
 namespace android::drm_hwcomposer {
 
 class ChangedLayer;
+class DisplayHotplugConnectModeDetectedAtomReporter;
 class DrmHwc;
 class EdidWrapper;
 class FlatteningController;
@@ -299,6 +300,8 @@ class HwcDisplay {
     return edid_wrapper_;
   }
 
+  void LogModesOnHotplug();
+
   HwcDisplayConfigs configs_;
 
   DrmHwc *const hwc_;
@@ -344,6 +347,9 @@ class HwcDisplay {
   HwcDisplay::HdcpState hdcp_state_ = HdcpState::kUndesired;
 
   std::shared_ptr<FrontendDisplayBase> frontend_private_data_;
+
+  std::unique_ptr<DisplayHotplugConnectModeDetectedAtomReporter>
+      display_mode_reporter_;
 };
 
 }  // namespace android::drm_hwcomposer

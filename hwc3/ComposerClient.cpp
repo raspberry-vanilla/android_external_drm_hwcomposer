@@ -1320,6 +1320,7 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
       return ToBinderStatus(hwc3::Error::kBadConfig);
     #endif
     case HwcDisplay::ConfigError::kNone:
+      hwc_->LogRefreshRateChanges();
       return ndk::ScopedAStatus::ok();
   }
 }
