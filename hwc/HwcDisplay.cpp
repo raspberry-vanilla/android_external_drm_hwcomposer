@@ -642,19 +642,35 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   if (IsInHeadlessMode()) {
     return true;
   }
+
   if (enabled) {
-    /*
-     * Setting the display to active before we have a composition
-     * can break some drivers, so skip setting a_args.active to
-     * true, as the next composition frame will implicitly activate
-     * the display
-     */
-    return GetPipe().atomic_state_manager->ActivateDisplayUsingDPMS() == 0;
+    if (GetPipe().atomic_state_manager->IsCrtcActive()) {
+      return true;
+    }
+
+    if (GetConfig(configs_.active_config_id)) {
+      if (SetConfig(configs_.active_config_id) != ConfigError::kNone) {
+        ALOGE("Failed to set config to re-enable display after teardown.");
+        return false;
+      }
+    } else {
+      /*
+       * Setting the display to active before we have a composition
+       * can break some drivers, so skip setting a_args.active to
+       * true, as the next composition frame will implicitly activate
+       * the display
+       */
+      if (GetPipe().atomic_state_manager->ActivateDisplayUsingDPMS() != 0) {
+        return false;
+      }
+    }
+    return true;
   };
 
   // Disable the display.
   AtomicCommitArgs a_args{};
   a_args.active = false;
+  a_args.teardown = true;
 
   const bool commit_success = GetPipe()
                                   .atomic_state_manager->ExecuteAtomicCommit(
