@@ -297,21 +297,21 @@ int DrmConnector::UpdateModes() {
 
     if (!exists) {
       DrmMode m(&connector_->modes[i]);
-      ALOGV("Supported mode %dx%d@%fHz for display in connector %s",
+      ALOGI("Supported mode %dx%d@%fHz for display in connector %s",
           m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
           m.GetVRefresh(), GetName().c_str());
       if (xres && yres) {
         if (!rate && m.GetRawMode().hdisplay == xres
             && m.GetRawMode().vdisplay == yres) {
-          rate = m.GetVRefresh();
+          rate = uint32_t(m.GetVRefresh());
         }
         if (m.GetRawMode().hdisplay != xres
             || m.GetRawMode().vdisplay != yres
-            || m.GetVRefresh() != rate) {
+            || uint32_t(m.GetVRefresh()) != rate) {
           continue;
         }
       }
-      ALOGD("Add mode %dx%d@%fHz for display in connector %s",
+      ALOGI("Add mode %dx%d@%fHz for display in connector %s",
           m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
           m.GetVRefresh(), GetName().c_str());
       modes_.emplace_back(m);
