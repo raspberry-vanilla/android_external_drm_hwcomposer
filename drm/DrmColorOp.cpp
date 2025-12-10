@@ -20,6 +20,7 @@
 
 #include <xf86drmMode.h>
 
+#include <cinttypes>
 #include <cstdint>
 #include <sstream>
 
@@ -49,7 +50,7 @@ auto DrmColorOp::CreateInstance(DrmDevice &dev, uint64_t color_op_id,
                                 uint32_t index) -> std::unique_ptr<DrmColorOp> {
   auto color_op = MakeDrmModeColorOpUnique(*dev.GetFd(), color_op_id);
   if (!color_op) {
-    ALOGE("Failed to get ColorOp %lu, index %d", color_op_id, index);
+    ALOGE("Failed to get ColorOp %" PRIu64 ", index %d", color_op_id, index);
     return {};
   }
 

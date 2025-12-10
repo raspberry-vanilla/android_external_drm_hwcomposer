@@ -178,7 +178,7 @@ int DrmPlane::Init() {
         auto color_op = DrmColorOp::CreateInstance(*drm_, color_op_id,
                                                    color_op_index++);
         if (!color_op) {
-          ALOGW("Found invalid color op with id %lu", color_op_id);
+          ALOGW("Found invalid color op with id %" PRIu64, color_op_id);
           break;
         }
         color_op_id = color_op->GetNextProperty().GetValue().value_or(0);
@@ -486,7 +486,7 @@ auto DrmPlane::AtomicSetColorPipeline(
 
   uint64_t color_op_id = color_pipeline_.front()->GetId();
   if (!color_pipeline_property_.AtomicSet(pset, color_op_id)) {
-    ALOGE("Failed to set COLOR_PIPELINE to %lu", color_op_id);
+    ALOGE("Failed to set COLOR_PIPELINE to %" PRIu64, color_op_id);
     return -EINVAL;
   }
 
