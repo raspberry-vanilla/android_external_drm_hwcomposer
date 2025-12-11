@@ -27,7 +27,7 @@
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "hwc/HwcDisplay.h"
-#include "stats/CompositionStats.h"
+#include "stats/Stats.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 
@@ -222,6 +222,26 @@ auto DrmHwc::PullCompositionStats()
   return stats;
 }
 
+auto DrmHwc::PullActiveDisplayCounts() -> ActiveDisplayCounts {
+  ActiveDisplayCounts counts;
+  for (const auto &[_, display] : displays_) {
+    if (!display->GetDisplayEnabled()) {
+      continue;
+    }
+
+    const HwcDisplay::DisplayType display_type = display->GetDisplayType();
+    if (display_type == HwcDisplay::DisplayType::kVirtual) {
+      counts.num_virtual_displays++;
+    } else {
+      counts.num_active_physical_displays++;
+      if (display_type == HwcDisplay::DisplayType::kExternal) {
+        counts.num_active_external_displays++;
+      }
+    }
+  }
+  return counts;
+}
+
 std::string DrmHwc::DumpState() {
   std::stringstream output;
 
@@ -243,7 +263,7 @@ std::string DrmHwc::DumpState() {
     total_cumulative += cumulative;
     total_delta += delta;
   };
-  dump_stats_tracker_.ReportStats(callback);
+  dump_stats_tracker_.ReportCompositionStats(callback);
 
   for (const auto &[display_handle, display_stats] : total_stats) {
     const auto *display = GetDisplay(display_handle);

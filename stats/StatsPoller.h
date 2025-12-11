@@ -23,20 +23,22 @@
 
 #include <android-base/thread_annotations.h>
 
-#include "stats/CompositionStats.h"
+#include "stats/Stats.h"
 
 namespace android::drm_hwcomposer {
 
 class CompositionStatsAtomReporter;
+class CountActiveDisplaysReporter;
 
-// CompositionStatsPoller periodically polls the CompositionStatsProvider for
-// the current CompositionStats. It then pushes the stats delta to the
-// CompositionStatsAtomReporter.
-class CompositionStatsPoller {
+// StatsPoller periodically polls the StatsProvider for various
+// stats. It then pushes the stats delta to the CompositionStatsAtomReporter.
+class StatsPoller {
  public:
-  CompositionStatsPoller(std::unique_ptr<CompositionStatsAtomReporter> reporter,
-                         CompositionStatsProvider* provider);
-  ~CompositionStatsPoller();
+  StatsPoller(std::unique_ptr<CompositionStatsAtomReporter> stats_reporter,
+              std::unique_ptr<CountActiveDisplaysReporter>
+                  count_active_displays_reporter,
+              StatsProvider* provider);
+  ~StatsPoller();
 
  private:
   void PollFunc();
@@ -49,8 +51,9 @@ class CompositionStatsPoller {
   bool exit_ GUARDED_BY(mutex_) = false;
 
   // Only accessed from the helper thread.
-  CompositionStatsTracker tracker_;
-  std::unique_ptr<CompositionStatsAtomReporter> reporter_;
+  StatsTracker tracker_;
+  std::unique_ptr<CompositionStatsAtomReporter> stats_reporter_;
+  std::unique_ptr<CountActiveDisplaysReporter> count_active_displays_reporter_;
 };
 
 }  // namespace android::drm_hwcomposer

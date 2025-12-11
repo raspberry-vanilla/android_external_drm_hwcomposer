@@ -166,6 +166,8 @@ class HwcDisplay {
   // Enable or disable the display.
   bool SetDisplayEnabled(bool enabled);
 
+  bool GetDisplayEnabled() const;
+
   auto GetFrontendPrivateData() -> std::shared_ptr<FrontendDisplayBase> {
     return frontend_private_data_;
   }

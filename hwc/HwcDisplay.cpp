@@ -39,8 +39,8 @@
 #include "drm/DrmHwc.h"
 #include "drm/VSyncWorker.h"
 #include "hwc/HwcLayer.h"
-#include "stats/CompositionStats.h"
 #include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
+#include "stats/Stats.h"
 #include "utils/EdidWrapper.h"
 #include "utils/log.h"
 #include "utils/properties.h"
@@ -677,6 +677,14 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
                                       a_args);
   ALOGE_IF(!commit_success, "Failed to apply the dpms composition.");
   return commit_success;
+}
+
+bool HwcDisplay::GetDisplayEnabled() const {
+  if (IsInHeadlessMode()) {
+    return true;
+  }
+
+  return GetPipe().atomic_state_manager->IsCrtcActive();
 }
 
 void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {

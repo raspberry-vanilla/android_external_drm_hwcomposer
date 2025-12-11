@@ -27,7 +27,7 @@
 
 #include "compositor/CompositionPlanner.h"
 #include "desktopatoms.h"
-#include "stats/CompositionStats.h"
+#include "stats/Stats.h"
 #include "utils/log.h"
 
 using aidl::android::frameworks::stats::IStats;

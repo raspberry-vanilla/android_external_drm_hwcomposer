@@ -19,15 +19,14 @@
 #include "compositor/DisplayInfo.h"
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
-#include "stats/CompositionStats.h"
 #include "stats/DisplayRefreshRatesChangedAtomReporter.h"
+#include "stats/Stats.h"
 
 namespace android::drm_hwcomposer {
 
 struct DrmDisplayPipeline;
 
-class DrmHwc : public PipelineToFrontendBindingInterface,
-               public CompositionStatsProvider {
+class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
  public:
   DrmHwc();
   ~DrmHwc() override = default;
@@ -52,9 +51,10 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
       DisplayHandle display_handle,
       std::optional<enum HdcpContentType> current_hdcp_level) = 0;
 
-  // CompositionStatsProvider:
+  // StatsProvider:
   auto PullCompositionStats()
       -> std::map<CompositionAttributes, CompositionStats> override;
+  auto PullActiveDisplayCounts() -> ActiveDisplayCounts override;
 
   std::string DumpState();
 
@@ -107,7 +107,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface,
   std::vector<DisplayHandle> displays_for_removal_list_;
 
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
-  CompositionStatsTracker dump_stats_tracker_;
+  StatsTracker dump_stats_tracker_;
 
   std::unique_ptr<DisplayRefreshRatesChangedAtomReporter>
       refresh_rates_reporter_;

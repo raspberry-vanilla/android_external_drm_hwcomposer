@@ -101,10 +101,11 @@ SKIP_FILES := \
     compositor/FlatteningControllerTests.cpp \
     compositor/FlatteningEventAtomReporterDesktop.cpp \
     drm/DrmDisplayPipelineTest.cpp \
-    stats/CompositionStatsTest.cpp \
     stats/CompositionStatsAtomReporterDesktop.cpp \
+    stats/CountActiveDisplaysReporterDesktop.cpp \
     stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp \
     stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp \
+    stats/StatsTest.cpp \
 
 BUILD_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -path '*.cpp')
 SKIP_FILES_path := $(foreach file,$(SKIP_FILES),$(SRC_DIR)/$(file))

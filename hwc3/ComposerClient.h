@@ -27,7 +27,7 @@ using AidlPixelFormat = aidl::android::hardware::graphics::common::PixelFormat;
 using AidlNativeHandle = aidl::android::hardware::common::NativeHandle;
 
 namespace android::drm_hwcomposer {
-class CompositionStatsPoller;
+class StatsPoller;
 class HwcDisplay;
 }  // namespace android::drm_hwcomposer
 
@@ -187,8 +187,7 @@ class ComposerClient : public BnComposerClient {
 
   std::unique_ptr<DrmHwcThree> hwc_;
 
-  std::unique_ptr<::android::drm_hwcomposer::CompositionStatsPoller>
-      stats_poller_;
+  std::unique_ptr<::android::drm_hwcomposer::StatsPoller> stats_poller_;
 };
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

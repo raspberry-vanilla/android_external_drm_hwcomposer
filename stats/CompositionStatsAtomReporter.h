@@ -19,7 +19,7 @@
 #include <memory>
 
 #include "compositor/CompositionPlanner.h"
-#include "stats/CompositionStats.h"
+#include "stats/Stats.h"
 
 namespace android::drm_hwcomposer {
 

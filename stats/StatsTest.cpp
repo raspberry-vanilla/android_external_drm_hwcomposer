@@ -21,7 +21,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "stats/CompositionStats.h"
+#include "stats/Stats.h"
 
 using ::testing::Eq;
 using ::testing::NiceMock;
@@ -70,14 +70,14 @@ static std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
-class MockCompositionStatsProvider : public CompositionStatsProvider {
+class MockStatsProvider : public StatsProvider {
  public:
   MOCK_METHOD((std::map<CompositionAttributes, CompositionStats>),
               PullCompositionStats, (), (override));
 };
 
 // Helper class to facilitate passing std::function to the
-// CompositionStatsTracker and use gmock to validate expectations.
+// StatsTracker and use gmock to validate expectations.
 class MockStatsCallback {
  public:
   // Set expectations on the Invoke mock method.
@@ -86,21 +86,21 @@ class MockStatsCallback {
                const CompositionStats&),
               ());
 
-  // Pass this to CompositionStatsTracker::ReportStats.
-  CompositionStatsTracker::Callback AsStdFunction() {
+  // Pass this to StatsTracker::ReportCompositionStats.
+  StatsTracker::Callback AsStdFunction() {
     return [this](const CompositionAttributes& a, const CompositionStats& c,
                   const CompositionStats& d) { this->Invoke(a, c, d); };
   }
 };
 
-class CompositionStatsTrackerTest : public ::testing::Test {
+class StatsTrackerTest : public ::testing::Test {
  protected:
-  std::unique_ptr<NiceMock<MockCompositionStatsProvider>> mock_provider_;
-  std::unique_ptr<CompositionStatsTracker> tracker_;
+  std::unique_ptr<NiceMock<MockStatsProvider>> mock_provider_;
+  std::unique_ptr<StatsTracker> tracker_;
 
   void SetUp() override {
-    mock_provider_ = std::make_unique<NiceMock<MockCompositionStatsProvider>>();
-    tracker_ = std::make_unique<CompositionStatsTracker>(mock_provider_.get());
+    mock_provider_ = std::make_unique<NiceMock<MockStatsProvider>>();
+    tracker_ = std::make_unique<StatsTracker>(mock_provider_.get());
   }
 
   // Helper method to create sample stats. Actual values don't really matter.
@@ -118,8 +118,9 @@ class CompositionStatsTrackerTest : public ::testing::Test {
   }
 };
 
-// Initial call to ReportStats reports the same stats for cumulative and delta.
-TEST_F(CompositionStatsTrackerTest, ReportStatsInitialCall) {
+// Initial call to ReportCompositionStats reports the same stats for cumulative
+// and delta.
+TEST_F(StatsTrackerTest, ReportCompositionStatsInitialCall) {
   const CompositionAttributes attr{.display_handle = 1};
   const CompositionStats current_stats = CreateStats(100);
   const std::map<CompositionAttributes, CompositionStats> provider_result{
@@ -134,11 +135,12 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsInitialCall) {
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr), Eq(current_stats), Eq(current_stats)));
 
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
-// Subsequent calls to ReportStats with no change in cumulative stats.
-TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallNoChange) {
+// Subsequent calls to ReportCompositionStats with no change in cumulative
+// stats.
+TEST_F(StatsTrackerTest, ReportCompositionStatsSubsequentCallNoChange) {
   const CompositionAttributes attr{.display_handle = 1};
   const CompositionStats stats = CreateStats(100);
   const std::map<CompositionAttributes, CompositionStats> provider_result{
@@ -153,15 +155,15 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallNoChange) {
 
   // Initial call.
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(stats)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call. Delta should be zero.
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(zero_delta)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Test that the delta is reported as expected.
-TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallWithChange) {
+TEST_F(StatsTrackerTest, ReportCompositionStatsSubsequentCallWithChange) {
   const CompositionAttributes attr{.display_handle = 1};
   const CompositionStats stats1 = CreateStats(100);
   const CompositionStats stats2 = CreateStats(150);
@@ -177,17 +179,17 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsSubsequentCallWithChange) {
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats1), Eq(stats1)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call with updated stats and non-trivial delta.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats2), Eq(expected_delta)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Test that stats for multiple attributes are reported correctly.
-TEST_F(CompositionStatsTrackerTest, ReportStatsMultipleAttributes) {
+TEST_F(StatsTrackerTest, ReportCompositionStatsMultipleAttributes) {
   const CompositionAttributes attr1{.display_handle = 10};
   const CompositionAttributes attr2{.display_handle = 20};
   const CompositionStats attr1_stats1 = CreateStats(100);
@@ -214,7 +216,7 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsMultipleAttributes) {
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats1), Eq(attr2_expected_delta1)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Updated call. Ordering between attributes doesn't matter.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
@@ -223,22 +225,22 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsMultipleAttributes) {
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats2), Eq(attr2_expected_delta2)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // No entries in the provider result.
-TEST_F(CompositionStatsTrackerTest, ReportStatsEmptyResult) {
+TEST_F(StatsTrackerTest, ReportCompositionStatsEmptyResult) {
   const std::map<CompositionAttributes, CompositionStats> empty_result{};
 
   // StrictMock will fail if there are any unexpected calls to Invoke.
   StrictMock<MockStatsCallback> mock_callback;
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
       .WillOnce(Return(empty_result));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
-// Attributes added in between calls to ReportStats.
-TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesAdded) {
+// Attributes added in between calls to ReportCompositionStats.
+TEST_F(StatsTrackerTest, ReportCompositionStatsAttributesAdded) {
   const CompositionAttributes attr1{.display_handle = 10};
   const CompositionAttributes attr2{.display_handle = 20};
   const CompositionStats attr1_stats1 = CreateStats(100);
@@ -261,7 +263,7 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesAdded) {
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call has both attributes.
   EXPECT_CALL(*mock_provider_, PullCompositionStats())
@@ -270,11 +272,11 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesAdded) {
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
-// Attributes removed in between calls to ReportStats.
-TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesRemoved) {
+// Attributes removed in between calls to ReportCompositionStats.
+TEST_F(StatsTrackerTest, ReportCompositionStatsAttributesRemoved) {
   const CompositionAttributes attr1{.display_handle = 10};
   const CompositionAttributes attr2{.display_handle = 20};
   const CompositionStats attr1_stats1 = CreateStats(100);
@@ -299,7 +301,7 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesRemoved) {
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call has only attr1. StrictMock will fail if Invoke is called
   // for attr2.
@@ -307,7 +309,7 @@ TEST_F(CompositionStatsTrackerTest, ReportStatsAttributesRemoved) {
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
-  tracker_->ReportStats(mock_callback.AsStdFunction());
+  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 }  // namespace android::drm_hwcomposer

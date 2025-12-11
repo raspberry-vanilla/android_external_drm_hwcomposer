@@ -60,8 +60,6 @@ class DisplayHotplugConnectModeDetectedAtomReporterDesktop
     : public DisplayHotplugConnectModeDetectedAtomReporter {
  public:
   void PushAtom(Atom atom) override {
-    ALOGE("zzzz DisplayHotplugConnectModeDetected");
-
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
     const char* deprecated_reverse_domain_name = "";

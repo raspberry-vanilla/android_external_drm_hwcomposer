@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "CompositionStats.h"
+#include "Stats.h"
 
 namespace android::drm_hwcomposer {
 
@@ -53,7 +53,7 @@ CompositionStats operator-(const CompositionStats& a,
           a.used_plane_count - b.used_plane_count};
 }
 
-void CompositionStatsTracker::ReportStats(const Callback& callback) {
+void StatsTracker::ReportCompositionStats(const Callback& callback) {
   auto new_stats = provider_->PullCompositionStats();
   for (const auto& [attributes, cumulative_stats] : new_stats) {
     const auto it = previous_stats_.find(attributes);
@@ -63,6 +63,10 @@ void CompositionStatsTracker::ReportStats(const Callback& callback) {
     callback(attributes, cumulative_stats, delta);
   }
   previous_stats_ = new_stats;
+}
+
+ActiveDisplayCounts StatsTracker::CountActiveDisplays() {
+  return provider_->PullActiveDisplayCounts();
 }
 
 }  // namespace android::drm_hwcomposer

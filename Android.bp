@@ -103,8 +103,8 @@ filegroup {
         "hwc/HwcDisplayConfigs.cpp",
         "hwc/HwcLayer.cpp",
 
-        "stats/CompositionStats.cpp",
-        "stats/CompositionStatsPoller.cpp",
+        "stats/Stats.cpp",
+        "stats/StatsPoller.cpp",
 
         "utils/LibdisplayEdidWrapper.cpp",
         "utils/fd.cpp",
@@ -293,8 +293,8 @@ cc_test_host {
         "drm/DrmMode.cpp",
         "drm/DrmPlane.cpp",
         "drm/DrmProperty.cpp",
-        "stats/CompositionStats.cpp",
-        "stats/CompositionStatsTest.cpp",
+        "stats/Stats.cpp",
+        "stats/StatsTest.cpp",
         "utils/fd.cpp",
         "utils/properties.cpp",
     ],
@@ -347,6 +347,7 @@ drm_hwcomposer_atom_reporter_library {
                 srcs: [
                     "compositor/FlatteningEventAtomReporterDesktop.cpp",
                     "stats/CompositionStatsAtomReporterDesktop.cpp",
+                    "stats/CountActiveDisplaysReporterDesktop.cpp",
                     "stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp",
                     "stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp",
                 ],
@@ -360,6 +361,7 @@ drm_hwcomposer_atom_reporter_library {
                 srcs: [
                     "compositor/FlatteningEventAtomReporter.cpp",
                     "stats/CompositionStatsAtomReporter.cpp",
+                    "stats/CountActiveDisplaysReporter.cpp",
                     "stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp",
                     "stats/DisplayRefreshRatesChangedAtomReporter.cpp",
                 ],
