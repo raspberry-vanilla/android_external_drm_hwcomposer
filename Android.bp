@@ -113,14 +113,6 @@ filegroup {
 }
 
 filegroup {
-    name: "drm_hwcomposer_hwc2",
-    srcs: [
-        "hwc2_device/DrmHwcTwo.cpp",
-        "hwc2_device/hwc2_device.cpp",
-    ],
-}
-
-filegroup {
     name: "drm_hwcomposer_hwc3",
     srcs: [
         "hwc3/Composer.cpp",

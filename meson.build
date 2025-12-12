@@ -32,11 +32,6 @@ src_common = files(
     'utils/properties.cpp',
 )
 
-srcs_hwc2_device = [
-    'hwc2_device/hwc2_device.cpp',
-    'hwc2_device/DrmHwcTwo.cpp',
-]
-
 deps = [
     dependency('base'),
     dependency('cutils'),
@@ -83,5 +78,4 @@ drmhwc_common = static_library(
     dependencies : deps,
 )
 
-subdir('hwc2_device')
 subdir('hwc3')
