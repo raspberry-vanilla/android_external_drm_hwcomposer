@@ -74,6 +74,7 @@ class MockStatsProvider : public StatsProvider {
  public:
   MOCK_METHOD((std::map<CompositionAttributes, CompositionStats>),
               PullCompositionStats, (), (override));
+  MOCK_METHOD(ActiveDisplayCounts, PullActiveDisplayCounts, (), (override));
 };
 
 // Helper class to facilitate passing std::function to the
