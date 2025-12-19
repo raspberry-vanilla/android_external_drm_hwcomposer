@@ -1399,6 +1399,10 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
 
   const HwcDisplayConfig *active_config = GetCurrentConfig();
   if (client_layer_.IsLayerUsableAsDevice() && active_config &&
+      // Reuse the client layer only when the CRTC is already active. After a
+      // teardown (power-off), the cached buffer may contain stale content that we
+      // do not want to rescan on modeset.
+      GetPipe().atomic_state_manager->IsCrtcActive() &&
       active_config->mode.GetRawMode().hdisplay == new_width &&
       active_config->mode.GetRawMode().vdisplay == new_height) {
     ALOGV("Use existing client_layer for config.");
