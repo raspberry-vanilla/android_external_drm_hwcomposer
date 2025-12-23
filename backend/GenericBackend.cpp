@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "drmhwc"
+
 #include "GenericBackend.h"
 
 #include "backend/BackendManager.h"
+#include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/GenericCompositionPlanner.h"
 #include "drm/DrmConnector.h"
@@ -38,6 +41,20 @@ std::unique_ptr<DrmDisplayPipeline> GenericBackend::CreatePipeline(
     pipeline->backend = CreateCompositionPlanner();
   }
   return pipeline;
+}
+
+std::unique_ptr<BufferInfoGetter> GenericBackend::CreateBufferInfoGetter() {
+  std::unique_ptr<BufferInfoGetter> info_getter;
+#if defined(USE_IMAPPER4_METADATA_API)
+  info_getter = BufferInfoMapperMetadata::CreateInstance();
+  if (!info_getter) {
+    ALOGW("Generic buffer getter is not available. Falling back to legacy...");
+  }
+#endif
+  if (!info_getter) {
+    info_getter = LegacyBufferInfoGetter::CreateInstance();
+  }
+  return info_getter;
 }
 
 std::unique_ptr<CompositionPlanner> GenericBackend::CreateCompositionPlanner() {

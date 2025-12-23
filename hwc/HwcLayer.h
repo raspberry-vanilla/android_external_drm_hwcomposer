@@ -21,6 +21,7 @@
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/LayerData.h"
+#include "hwc/HwcBufferCache.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -35,17 +36,13 @@ class FrontendLayerBase {
 class HwcLayer {
  public:
   struct Buffer {
-    int32_t slot_id;
-    std::optional<BufferInfo> bi;
-  };
-  struct Slot {
-    int32_t slot_id;
+    BufferInfo bi;
+    std::shared_ptr<DrmFbIdHandle> fb;
     SharedFd fence;
   };
   // A set of properties to be validated.
   struct LayerProperties {
-    std::optional<Buffer> slot_buffer;
-    std::optional<Slot> active_slot;
+    std::optional<Buffer> buffer;
     std::optional<BufferBlendMode> blend_mode;
     std::optional<BufferColorSpace> color_space;
     std::optional<BufferSampleRange> sample_range;
@@ -58,8 +55,7 @@ class HwcLayer {
     std::optional<DamageInfo> damage;
   };
 
-  explicit HwcLayer(HwcDisplay *parent_display) : parent_(parent_display){};
-
+  explicit HwcLayer(HwcDisplay *parent_display);
   CompositionType GetSfType() const {
     return sf_type_;
   }
@@ -88,10 +84,6 @@ class HwcLayer {
     return z_order_;
   }
 
-  LayerData &GetLayerData() {
-    return layer_data_;
-  }
-
   const LayerData &GetLayerData() const {
     return layer_data_;
   }
@@ -111,6 +103,8 @@ class HwcLayer {
   uint32_t GetPixOps() const;
 
  private:
+  void PopulateLayerData();
+
   // sf_type_ stores the initial type given to us by surfaceflinger,
   // validated_type_ stores the type after running ValidateDisplay
   CompositionType sf_type_ = CompositionType::kInvalid;
@@ -136,18 +130,10 @@ class HwcLayer {
 
   std::shared_ptr<FrontendLayerBase> frontend_private_data_;
 
-  std::optional<int32_t> active_slot_id_;
-  struct BufferSlot {
-    BufferInfo bi;
-    std::shared_ptr<DrmFbIdHandle> fb;
-  };
-  std::map<int32_t /*slot*/, BufferSlot> slots_;
-
-  bool ImportFb(BufferSlot &slot) const;
+  bool has_buffer_set_ = false;
 
  public:
-  void PopulateLayerData();
-  void ClearSlots();
+  void InvalidateBuffer();
   bool IsLayerUsableAsDevice() const;
 };
 

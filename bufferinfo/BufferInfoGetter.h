@@ -19,6 +19,7 @@
 #include <drm/drm_fourcc.h>
 #include <hardware/gralloc.h>
 
+#include <memory>
 #include <optional>
 
 #include "utils/log.h"
@@ -32,16 +33,22 @@ namespace android::drm_hwcomposer {
 using BufferUniqueId = uint64_t;
 
 struct BufferInfo;
+class GrallocBufferHandle;
 
 class BufferInfoGetter {
  public:
   virtual ~BufferInfoGetter() = default;
+
+  // Import the buffer_handle_t into this process. The imported buffer_handle_t
+  // will be released when the GrallocBufferHandle is destructed.
+  virtual std::shared_ptr<GrallocBufferHandle> Import(buffer_handle_t handle);
 
   virtual auto GetBoInfo(buffer_handle_t handle)
       -> std::optional<BufferInfo> = 0;
 
   virtual std::optional<BufferUniqueId> GetUniqueId(buffer_handle_t handle);
 
+  static void Init(std::unique_ptr<BufferInfoGetter> getter);
   static BufferInfoGetter *GetInstance();
 
   static bool IsDrmFormatRgb(uint32_t drm_format);

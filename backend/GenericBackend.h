@@ -32,6 +32,11 @@ class GenericBackend : public BackendManager::Backend {
   std::unique_ptr<DrmDisplayPipeline> CreatePipeline(
       DrmConnector& connector) override;
 
+  // Create a default BufferInfoGetter. By default this will create a
+  // BufferInfoMapperMetadata, and fall back to LegacyBufferInfoGetter if that
+  // fails.
+  std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter() override;
+
  protected:
   explicit GenericBackend(const std::string& name);
 

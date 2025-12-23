@@ -96,11 +96,14 @@ clean:
 # clang-tidy picks up gtest and gmock headers
 # IStats includes are not available in aospless
 SKIP_FILES := \
+    bufferinfo/GrallocBufferCacheTest.cpp \
     compositor/FlatteningControllerTests.cpp \
     compositor/FlatteningEventAtomReporterDesktop.cpp \
     drm/DrmDisplayPipelineTest.cpp \
+    hwc/HwcBufferCacheTest.cpp \
     stats/CompositionStatsAtomReporterDesktop.cpp \
     stats/CountActiveDisplaysReporterDesktop.cpp \
+    stats/DisplayConfigurationResultReporterDesktop.cpp \
     stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp \
     stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp \
     stats/StatsTest.cpp \

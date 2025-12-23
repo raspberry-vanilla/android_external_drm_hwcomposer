@@ -73,6 +73,8 @@ filegroup {
     srcs: [
         "bufferinfo/BufferInfoGetter.cpp",
         "bufferinfo/BufferInfoMapperMetadata.cpp",
+        "bufferinfo/GrallocBufferCache.cpp",
+        "bufferinfo/GrallocBufferHandle.cpp",
 
         "compositor/CompositionPlanner.cpp",
         "compositor/FlatteningController.cpp",
@@ -99,6 +101,7 @@ filegroup {
         "backend/ClientBackend.cpp",
         "backend/GenericBackend.cpp",
 
+        "hwc/HwcBufferCache.cpp",
         "hwc/HwcDisplay.cpp",
         "hwc/HwcDisplayConfigs.cpp",
         "hwc/HwcLayer.cpp",
@@ -271,6 +274,8 @@ cc_test_host {
     name: "drm_hwcomposer_unittests",
     srcs: [
         "bufferinfo/BufferInfoGetter.cpp",
+        "bufferinfo/GrallocBufferCache.cpp",
+        "bufferinfo/GrallocBufferCacheTest.cpp",
         "compositor/FlatteningController.cpp",
         "compositor/FlatteningControllerTests.cpp",
         "compositor/FlatteningEventAtomReporter.cpp",
@@ -285,8 +290,11 @@ cc_test_host {
         "drm/DrmMode.cpp",
         "drm/DrmPlane.cpp",
         "drm/DrmProperty.cpp",
+        "hwc/HwcBufferCache.cpp",
+        "hwc/HwcBufferCacheTest.cpp",
         "stats/Stats.cpp",
         "stats/StatsTest.cpp",
+        "tests/host_test_stubs.cpp",
         "utils/fd.cpp",
         "utils/properties.cpp",
     ],
@@ -340,6 +348,7 @@ drm_hwcomposer_atom_reporter_library {
                     "compositor/FlatteningEventAtomReporterDesktop.cpp",
                     "stats/CompositionStatsAtomReporterDesktop.cpp",
                     "stats/CountActiveDisplaysReporterDesktop.cpp",
+                    "stats/DisplayConfigurationResultReporterDesktop.cpp",
                     "stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp",
                     "stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp",
                 ],
@@ -354,6 +363,7 @@ drm_hwcomposer_atom_reporter_library {
                     "compositor/FlatteningEventAtomReporter.cpp",
                     "stats/CompositionStatsAtomReporter.cpp",
                     "stats/CountActiveDisplaysReporter.cpp",
+                    "stats/DisplayConfigurationResultReporter.cpp",
                     "stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp",
                     "stats/DisplayRefreshRatesChangedAtomReporter.cpp",
                 ],

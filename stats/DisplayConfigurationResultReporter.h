@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,28 @@
 
 #pragma once
 
-#include "bufferinfo/BufferInfoGetter.h"
-
 #include <memory>
 
 namespace android::drm_hwcomposer {
 
-struct BufferInfo;
-
-class BufferInfoMapperMetadata : public BufferInfoGetter {
+class DisplayConfigurationResultReporter {
  public:
-  using BufferInfoGetter::BufferInfoGetter;
+  static std::unique_ptr<DisplayConfigurationResultReporter> Create();
 
-  auto GetBoInfo(buffer_handle_t handle) -> std::optional<BufferInfo> override;
-
-  static int GetFds(buffer_handle_t handle, BufferInfo *bo);
-
-  static std::unique_ptr<BufferInfoGetter> CreateInstance();
+  enum class DisplayType {
+    kUnspecified = 0,
+    kInternal,
+    kExternal,
+  };
+  struct Atom {
+    int64_t display_handle;
+    bool success;
+    bool is_seamless;
+    DisplayType display_type;
+  };
+  // Pushes a Vendor Atom to IStats::reportVendorAtom.
+  virtual void PushAtom(const Atom& atom) = 0;
+  virtual ~DisplayConfigurationResultReporter() = default;
 };
 
 }  // namespace android::drm_hwcomposer

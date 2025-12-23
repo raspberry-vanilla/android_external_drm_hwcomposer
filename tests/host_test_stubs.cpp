@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,25 +14,21 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include "bufferinfo/BufferInfoGetter.h"
-
-#include <memory>
+#include "bufferinfo/GrallocBufferHandle.h"
 
 namespace android::drm_hwcomposer {
 
-struct BufferInfo;
+// Stub for GrallocBufferHandle::Create
+std::shared_ptr<GrallocBufferHandle> GrallocBufferHandle::Create(
+    buffer_handle_t handle) {
+  auto gralloc_handle = std::shared_ptr<GrallocBufferHandle>(
+      new GrallocBufferHandle());
+  gralloc_handle->imported_handle_ = handle;
+  return gralloc_handle;
+}
 
-class BufferInfoMapperMetadata : public BufferInfoGetter {
- public:
-  using BufferInfoGetter::BufferInfoGetter;
-
-  auto GetBoInfo(buffer_handle_t handle) -> std::optional<BufferInfo> override;
-
-  static int GetFds(buffer_handle_t handle, BufferInfo *bo);
-
-  static std::unique_ptr<BufferInfoGetter> CreateInstance();
-};
+// Stub for GrallocBufferHandle::~GrallocBufferHandle
+// Do not release the handle, since it wasn't imported.
+GrallocBufferHandle::~GrallocBufferHandle() = default;
 
 }  // namespace android::drm_hwcomposer

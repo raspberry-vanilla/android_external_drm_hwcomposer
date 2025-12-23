@@ -36,9 +36,11 @@
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmFbImporter.h"
 #include "drm/DrmHwc.h"
 #include "drm/VSyncWorker.h"
 #include "hwc/HwcLayer.h"
+#include "stats/DisplayConfigurationResultReporter.h"
 #include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
 #include "stats/Stats.h"
 #include "utils/EdidWrapper.h"
@@ -174,6 +176,7 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
 
   display_mode_reporter_ = DisplayHotplugConnectModeDetectedAtomReporter::
       Create();
+  config_result_reporter_ = DisplayConfigurationResultReporter::Create();
 }
 
 void HwcDisplay::SetColorTransformMatrix(
@@ -301,7 +304,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   AtomicCommitArgs commit_args = CreateModesetCommit(new_config,
                                                      modeset_layer_data);
   commit_args.blocking = true;
-  if (!GetPipe().atomic_state_manager->ExecuteAtomicCommit(commit_args)) {
+  if (!ExecuteAtomicCommit(commit_args)) {
     ALOGE("Blocking config failed.");
     return HwcDisplay::ConfigError::kConfigFailed;
   }
@@ -375,12 +378,6 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
   for (auto &l : layers_) {
     l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
                                        CompositionType::kClient);
-
-    /* Populate layer data for layers that might be mapped to a drm plane. */
-    if (l.second.GetSfType() == CompositionType::kDevice ||
-        l.second.GetSfType() == CompositionType::kCursor) {
-      l.second.PopulateLayerData();
-    }
   }
 
   // Notify the flattening controller of a new frame.
@@ -587,7 +584,7 @@ auto HwcDisplay::GetPort() const -> uint8_t {
   return handle_; /* TODO: What should be here? */
 }
 
-auto HwcDisplay::GetDisplayType() -> DisplayType {
+auto HwcDisplay::GetDisplayType() const -> DisplayType {
   if (is_virtual_) {
     return kVirtual;
   }
@@ -672,9 +669,7 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   a_args.active = false;
   a_args.teardown = true;
 
-  const bool commit_success = GetPipe()
-                                  .atomic_state_manager->ExecuteAtomicCommit(
-                                      a_args);
+  const bool commit_success = ExecuteAtomicCommit(a_args);
   ALOGE_IF(!commit_success, "Failed to apply the dpms composition.");
   return commit_success;
 }
@@ -708,11 +703,11 @@ void HwcDisplay::Deinit() {
   if (pipeline_ != nullptr) {
     AtomicCommitArgs a_args{};
     a_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
-    GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
+    ExecuteAtomicCommit(a_args);
     a_args.composition = {};
     a_args.active = false;
     a_args.teardown = true;
-    GetPipe().atomic_state_manager->ExecuteAtomicCommit(a_args);
+    ExecuteAtomicCommit(a_args);
 
     validated_composition_.reset();
     flatcon_.reset();
@@ -722,8 +717,6 @@ void HwcDisplay::Deinit() {
     vsync_worker_->StopThread();
     vsync_worker_ = {};
   }
-
-  client_layer_.ClearSlots();
 }
 
 bool HwcDisplay::Init() {
@@ -933,6 +926,20 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   return args;
 }
 
+bool HwcDisplay::ExecuteAtomicCommit(AtomicCommitArgs &a_args) const {
+  const bool commit_result = GetPipe()
+                                 .atomic_state_manager->ExecuteAtomicCommit(
+                                     a_args);
+
+  // Log successful modesets (seamless and full), including teardowns.
+  if (!a_args.test_only && (a_args.display_mode || a_args.teardown)) {
+    const bool blocking = a_args.blocking || a_args.active || a_args.teardown;
+    LogConfigResult(blocking, commit_result);
+  }
+
+  return commit_result;
+}
+
 void HwcDisplay::WaitForPresentTime(int64_t present_time,
                                     uint32_t vsync_period_ns) {
   const int64_t current_time = ResourceManager::GetTimeMonotonicNs();
@@ -1002,7 +1009,7 @@ bool HwcDisplay::TestComposition(
     return false;
   }
   a_args->test_only = true;
-  if (GetPipe().atomic_state_manager->ExecuteAtomicCommit(*a_args)) {
+  if (ExecuteAtomicCommit(*a_args)) {
     // Put the composition plan into the newly-validated composition. Its owner
     // is responsible for keeping it alive until commit.
     composition.composition_plan = a_args->composition;
@@ -1156,7 +1163,6 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   if (pipeline_->writeback_connector) {
-    writeback_layer_->PopulateLayerData();
     if (!writeback_layer_->IsLayerUsableAsDevice()) {
       ALOGE("Writeback layer not usable by DRM/KMS - no valid buffer set");
       return std::nullopt;
@@ -1181,16 +1187,6 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     return false;
   }
 
-  // Client layer needs to be populated after validation since the client may
-  // not provide a new buffer until after validation.
-  if (std::any_of(validated_composition_->composition_types.begin(),
-                  validated_composition_->composition_types.end(),
-                  [](const auto &pair) -> bool {
-                    return pair.second == CompositionType::kClient;
-                  })) {
-    client_layer_.PopulateLayerData();
-  }
-
   auto a_args = CreateFrameUpdateCommit(validated_composition_.value());
   // |validated_composition_| can safely be reset now. |a_args| holds its own
   // pointer to the plan which will remain in scope until the commit is finished
@@ -1202,7 +1198,7 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     return false;
   }
 
-  if (!GetPipe().atomic_state_manager->ExecuteAtomicCommit(*a_args)) {
+  if (!ExecuteAtomicCommit(*a_args)) {
     ALOGE("Failed to commit the frame composition.");
     return false;
   }
@@ -1410,24 +1406,22 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   }
 
   ALOGV("Allocate modeset buffer.");
-  auto modeset_buffer = GetPipe().device->CreateBufferForModeset(new_width,
-                                                                 new_height);
+  std::optional<BufferInfo>
+      modeset_buffer = GetPipe().device->CreateBufferForModeset(new_width,
+                                                                new_height);
   if (!modeset_buffer)
     return std::nullopt;
 
   auto modeset_layer = std::make_unique<HwcLayer>(this);
   modeset_layer->SetLayerProperties({
-      .slot_buffer = std::optional<HwcLayer::Buffer>({
-          .slot_id = 0,
-          .bi = modeset_buffer,
-      }),
-      .active_slot = std::optional<HwcLayer::Slot>({
-          .slot_id = 0,
+      .buffer = std::optional<HwcLayer::Buffer>({
+          .bi = modeset_buffer.value(),
+          .fb = GetPipe().device->GetDrmFbImporter().GetOrCreateFbId(
+              &modeset_buffer.value()),
           .fence = {},
       }),
       .blend_mode = BufferBlendMode::kNone,
   });
-  modeset_layer->PopulateLayerData();
 
   return modeset_layer->GetLayerData();
 }
@@ -1446,7 +1440,7 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
                                                        modeset_layer_data);
     commit_args.test_only = true;
     commit_args.seamless = true;
-    if (pipeline_->atomic_state_manager->ExecuteAtomicCommit(commit_args)) {
+    if (ExecuteAtomicCommit(commit_args)) {
       config.group_id = active_config->group_id;
     }
   }
@@ -1519,4 +1513,35 @@ void HwcDisplay::LogModesOnHotplug() {
     submitted_atoms.push_back(atom);
   }
 }
+
+void HwcDisplay::LogConfigResult(bool blocking, bool success) const {
+  if (!config_result_reporter_) {
+    return;
+  }
+
+  DisplayConfigurationResultReporter::DisplayType
+      display_type = DisplayConfigurationResultReporter::DisplayType::
+          kUnspecified;
+  switch (GetDisplayType()) {
+    case HwcDisplay::DisplayType::kInternal:
+      display_type = DisplayConfigurationResultReporter::DisplayType::kInternal;
+      break;
+    case HwcDisplay::DisplayType::kExternal:
+      display_type = DisplayConfigurationResultReporter::DisplayType::kExternal;
+      break;
+    default:
+      display_type = DisplayConfigurationResultReporter::DisplayType::
+          kUnspecified;
+      break;
+  }
+
+  const DisplayConfigurationResultReporter::Atom atom{
+      .display_handle = handle_,
+      .success = success,
+      .is_seamless = !blocking,
+      .display_type = display_type,
+  };
+  config_result_reporter_->PushAtom(atom);
+}
+
 }  // namespace android::drm_hwcomposer

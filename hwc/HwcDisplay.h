@@ -36,6 +36,7 @@ using aidl::android::hardware::graphics::common::Hdr;
 namespace android::drm_hwcomposer {
 
 class ChangedLayer;
+class DisplayConfigurationResultReporter;
 class DisplayHotplugConnectModeDetectedAtomReporter;
 class DrmHwc;
 class EdidWrapper;
@@ -158,7 +159,7 @@ class HwcDisplay {
   }
 
   // Physical displays are either internal or external.
-  auto GetDisplayType() -> DisplayType;
+  auto GetDisplayType() const -> DisplayType;
 
   // Enable or disable vsync callbacks.
   void SetVsyncCallbacksEnabled(bool enabled);
@@ -277,6 +278,8 @@ class HwcDisplay {
       const HwcDisplayConfig *config,
       const std::optional<LayerData> &modeset_layer);
 
+  bool ExecuteAtomicCommit(AtomicCommitArgs &a_args) const;
+
   // Sleep the current thread until |present_time| is closest to the next
   // expected vsync time.
   void WaitForPresentTime(int64_t present_time, uint32_t vsync_period_ns);
@@ -304,6 +307,7 @@ class HwcDisplay {
   }
 
   void LogModesOnHotplug();
+  void LogConfigResult(bool blocking, bool success) const;
 
   HwcDisplayConfigs configs_;
 
@@ -355,6 +359,7 @@ class HwcDisplay {
 
   std::unique_ptr<DisplayHotplugConnectModeDetectedAtomReporter>
       display_mode_reporter_;
+  std::unique_ptr<DisplayConfigurationResultReporter> config_result_reporter_;
 };
 
 }  // namespace android::drm_hwcomposer

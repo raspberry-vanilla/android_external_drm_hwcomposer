@@ -26,25 +26,15 @@
 
 namespace android::drm_hwcomposer {
 
+HwcLayer::HwcLayer(HwcDisplay* parent_display) : parent_(parent_display) {
+}
+
 void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
-  if (layer_properties.slot_buffer) {
-    auto slot_id = layer_properties.slot_buffer->slot_id;
-    if (!layer_properties.slot_buffer->bi) {
-      slots_.erase(slot_id);
-    } else {
-      slots_[slot_id] = {
-          .bi = layer_properties.slot_buffer->bi.value(),
-          .fb = {},
-      };
-      bool success = ImportFb(slots_[slot_id]);
-      ALOGE_IF(!success,
-               "Unable to create framebuffer object for layer %p slot %d", this,
-               slot_id);
-    }
-  }
-  if (layer_properties.active_slot) {
-    active_slot_id_ = layer_properties.active_slot->slot_id;
-    layer_data_.acquire_fence = layer_properties.active_slot->fence;
+  if (layer_properties.buffer) {
+    has_buffer_set_ = true;
+    layer_data_.bi = layer_properties.buffer->bi;
+    layer_data_.fb = layer_properties.buffer->fb;
+    layer_data_.acquire_fence = layer_properties.buffer->fence;
   }
   if (layer_properties.blend_mode) {
     blend_mode_ = layer_properties.blend_mode.value();
@@ -76,33 +66,17 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.damage) {
     layer_data_.pi.damage = layer_properties.damage.value();
   }
-}
 
-bool HwcLayer::ImportFb(BufferSlot& slot) const {
-  if (parent_->IsInHeadlessMode()) {
-    return true;
+  if (has_buffer_set_) {
+    PopulateLayerData();
   }
-
-  if (slot.fb == nullptr) {
-    auto& fb_importer = parent_->GetPipe().device->GetDrmFbImporter();
-    slot.fb = fb_importer.GetOrCreateFbId(&slot.bi);
-  }
-  return slot.fb != nullptr;
 }
 
 void HwcLayer::PopulateLayerData() {
-  if (!active_slot_id_.has_value()) {
-    ALOGE("Internal error: populate layer data called without active slot");
+  if (!layer_data_.bi) {
+    ALOGE("Internal error: PopulateLayerData called without valid bi.");
     return;
   }
-
-  if (slots_.count(*active_slot_id_) == 0) {
-    ALOGE("Internal error: active cache slot is not populated.");
-    return;
-  }
-
-  layer_data_.bi = slots_[*active_slot_id_].bi;
-  layer_data_.fb = slots_[*active_slot_id_].fb;
 
   if (blend_mode_ != BufferBlendMode::kUndefined) {
     layer_data_.bi->blend_mode = blend_mode_;
@@ -115,23 +89,18 @@ void HwcLayer::PopulateLayerData() {
   }
 }
 
-void HwcLayer::ClearSlots() {
-  slots_.clear();
-  active_slot_id_.reset();
+void HwcLayer::InvalidateBuffer() {
+  has_buffer_set_ = false;
 }
 
 /* Check that the layer has an active slot set, and there is a valid
    * framebuffer in the active slot.
  */
 bool HwcLayer::IsLayerUsableAsDevice() const {
-  if (!active_slot_id_.has_value()) {
+  if (!has_buffer_set_) {
     return false;
   }
-  auto it = slots_.find(*active_slot_id_);
-  if (it == slots_.end()) {
-    return false;
-  }
-  return it->second.fb != nullptr;
+  return layer_data_.fb != nullptr;
 }
 
 uint32_t HwcLayer::GetPixOps() const {

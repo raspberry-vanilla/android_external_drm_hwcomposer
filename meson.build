@@ -25,6 +25,7 @@ src_common = files(
     'stats/CompositionStatsAtomReporter.cpp',
     'stats/CountActiveDisplaysReporter.cpp',
     'stats/StatsPoller.cpp',
+    'stats/DisplayConfigurationResultReporter.cpp',
     'stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp',
     'stats/DisplayRefreshRatesChangedAtomReporter.cpp',
     'utils/fd.cpp',
@@ -69,6 +70,7 @@ hwc2_cpp_flags = [
 
 subdir('drm')
 subdir('bufferinfo')
+subdir('hwc')
 
 drmhwc_common = static_library(
     'drm_hwcomposer_common',

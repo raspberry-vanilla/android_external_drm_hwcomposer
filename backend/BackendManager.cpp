@@ -18,6 +18,7 @@
 
 #include "BackendManager.h"
 
+#include "bufferinfo/BufferInfoGetter.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -82,6 +83,17 @@ std::unique_ptr<DrmDisplayPipeline> BackendManager::CreatePipelineForConnector(
         connector.GetName().c_str(), driver_name.c_str());
 
   return backend->CreatePipeline(connector);
+}
+
+std::unique_ptr<BufferInfoGetter> BackendManager::CreateBufferInfoGetter() {
+  // If backend override is not specified, the generic backend will be used.
+  std::string backend_name = Properties::GetBackendOverride();
+  auto *backend = GetBackendByName(backend_name);
+  if (backend == nullptr) {
+    ALOGE("Failed to find backend");
+    return nullptr;
+  }
+  return backend->CreateBufferInfoGetter();
 }
 
 BackendManager::Backend *BackendManager::GetBackendByName(std::string &name) {

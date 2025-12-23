@@ -27,26 +27,25 @@
 #include <mutex>
 
 #include "bufferinfo/BufferInfoMapperMetadata.h"
+#include "bufferinfo/GrallocBufferHandle.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
-BufferInfoGetter *BufferInfoGetter::GetInstance() {
-  static std::unique_ptr<BufferInfoGetter> inst;
-  if (!inst) {
-#if defined(USE_IMAPPER4_METADATA_API)
-    inst.reset(BufferInfoMapperMetadata::CreateInstance());
-    if (!inst) {
-      ALOGW(
-          "Generic buffer getter is not available. Falling back to legacy...");
-    }
-#endif
-    if (!inst) {
-      inst = LegacyBufferInfoGetter::CreateInstance();
-    }
-  }
+// NOLINTNEXTLINE
+static std::unique_ptr<BufferInfoGetter> g_buffer_info_getter;
 
-  return inst.get();
+void BufferInfoGetter::Init(std::unique_ptr<BufferInfoGetter> getter) {
+  g_buffer_info_getter = std::move(getter);
+}
+
+BufferInfoGetter *BufferInfoGetter::GetInstance() {
+  return g_buffer_info_getter.get();
+}
+
+std::shared_ptr<GrallocBufferHandle> BufferInfoGetter::Import(
+    buffer_handle_t handle) {
+  return GrallocBufferHandle::Create(handle);
 }
 
 std::optional<BufferUniqueId> BufferInfoGetter::GetUniqueId(
