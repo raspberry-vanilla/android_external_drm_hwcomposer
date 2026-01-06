@@ -86,7 +86,6 @@ class DrmAtomicStateManager {
   ~DrmAtomicStateManager();
 
   bool ExecuteAtomicCommit(AtomicCommitArgs &args);
-  auto ActivateDisplayUsingDPMS() -> int;
   bool IsCrtcActive() const {
     return committed_frame_state_.crtc_active_state;
   }

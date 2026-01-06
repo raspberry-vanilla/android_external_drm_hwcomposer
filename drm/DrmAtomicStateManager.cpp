@@ -641,13 +641,4 @@ bool DrmAtomicStateManager::ExecuteAtomicCommit(AtomicCommitArgs &args) {
   return false;
 }
 
-auto DrmAtomicStateManager::ActivateDisplayUsingDPMS() -> int {
-  return drmModeConnectorSetProperty(*pipe_->device->GetFd(),
-                                     pipe_->connector->Get()->GetId(),
-                                     pipe_->connector->Get()
-                                         ->GetDpmsProperty()
-                                         .GetId(),
-                                     DRM_MODE_DPMS_ON);
-}
-
 }  // namespace android::drm_hwcomposer

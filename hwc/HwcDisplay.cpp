@@ -639,7 +639,8 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   if (IsInHeadlessMode()) {
     return true;
   }
-
+  // If the request is to enable the display, the CRTC is not active, and an
+  // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
     if (GetPipe().atomic_state_manager->IsCrtcActive()) {
       return true;
@@ -650,28 +651,23 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
         ALOGE("Failed to set config to re-enable display after teardown.");
         return false;
       }
-    } else {
-      /*
-       * Setting the display to active before we have a composition
-       * can break some drivers, so skip setting a_args.active to
-       * true, as the next composition frame will implicitly activate
-       * the display
-       */
-      if (GetPipe().atomic_state_manager->ActivateDisplayUsingDPMS() != 0) {
-        return false;
-      }
     }
-    return true;
-  };
+  }
 
-  // Disable the display.
+  // Set the display active state.
   AtomicCommitArgs a_args{};
-  a_args.active = false;
-  a_args.teardown = true;
+  a_args.blocking = true;
+  a_args.active = enabled;
+  if (!enabled) {
+    a_args.teardown = true;
+  }
 
   const bool commit_success = ExecuteAtomicCommit(a_args);
-  ALOGE_IF(!commit_success, "Failed to apply the dpms composition.");
-  return commit_success;
+  ALOGE_IF(!commit_success, "Failed to set display active: %s.",
+           enabled ? "enabled" : "disabled");
+  // If setting to |enabled|, log the error and return true. The next frame
+  // update will try to set it to active again.
+  return enabled || commit_success;
 }
 
 bool HwcDisplay::GetDisplayEnabled() const {
