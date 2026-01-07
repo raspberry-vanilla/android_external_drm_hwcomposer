@@ -30,6 +30,7 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
+#include "compositor/HdcpController.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
@@ -56,6 +57,7 @@ using FlattenReason = CompositionPlanner::FlattenReason;
 namespace {
 
 constexpr auto kFlatteningTimeout = 1s;
+constexpr auto kHdcpRetryTimeout = 1s;
 
 bool float_equals(float a, float b) {
   const float epsilon = 0.001F;
@@ -707,6 +709,7 @@ void HwcDisplay::Deinit() {
 
     validated_composition_.reset();
     flatcon_.reset();
+    hdcpcon_.reset();
   }
 
   if (vsync_worker_) {
@@ -729,6 +732,19 @@ bool HwcDisplay::Init() {
         .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
     flatcon_ = std::make_unique<FlatteningController>(handle_, flatcbk,
                                                       kFlatteningTimeout);
+
+    if (IsHdcpPropertyPresent()) {
+      ALOGI("HDCP properties found on display %d", int(handle_));
+      auto hdcpconcbks = (struct HdcpConCallbacks){
+          .notify_hdcp_status =
+              [this](std::optional<HdcpContentType> level) {
+                hwc_->SendHdcpLevelsChangedEventToClient(handle_, level);
+              },
+          .trigger_retry_frame =
+              [this]() { hwc_->SendRefreshEventToClient(handle_); }};
+      hdcpcon_ = std::make_unique<HdcpController>(&GetPipe(), hdcpconcbks,
+                                                  kHdcpRetryTimeout);
+    }
 
 #if HAS_LIBDISPLAY_INFO
     auto edid = LibdisplayEdidWrapper::Create(
@@ -866,9 +882,9 @@ auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
   return true;
 }
 
-auto HwcDisplay::StartHdcp(bool start) -> bool {
+auto HwcDisplay::StartHdcp() -> bool {
   /*
-   * Client can request to start Hdcp or Terminate Hdcp based on the bool start
+   * Client can request to start Hdcp
    * If Client requests to start Hdcp, internal state is set to kDesired
    * else the state stays as Undesired
    * Since the HDCP Content and Content Protection prop are optional
@@ -876,15 +892,38 @@ auto HwcDisplay::StartHdcp(bool start) -> bool {
    * return a false to indicate that the request to start/stop
    * HDCP cannot be completed.
    */
-  if (!IsHdcpPropertyPresent()) {
+  if (hdcpcon_ == nullptr) {
     ALOGE(
         "Client requested HDCP, but HDCP properties not available on that "
         "display");
     return false;
   }
-  if (start) {
-    ALOGI("Client requested to start HDCP");
-    hdcp_state_ = HwcDisplay::HdcpState::kDesired;
+  ALOGI("Client requested to start HDCP");
+  hdcpcon_->Start();
+  return true;
+}
+
+auto HwcDisplay::StopHdcp() -> bool {
+  /*
+   * Client or Kernel can Terminate Hdcp
+   * If Client or kernel requests to terminate hdcp, internal state is set to
+   * Undesired Since the HDCP Content and Content Protection prop are optional
+   * We need to make sure the connector has these properties else
+   * return a false to indicate that the request to start/stop
+   * HDCP cannot be completed.
+   */
+  if (hdcpcon_ == nullptr) {
+    ALOGE(
+        "Client requested HDCP, but HDCP properties not available on that "
+        "display");
+    return false;
+  }
+  // Client or Kernel requested HDCP termination. Only act if HDCP is currently
+  // enabled.
+  if (hdcpcon_ &&
+      hdcpcon_->GetHdcpState() == HdcpController::HdcpState::kEnabled) {
+    ALOGI(" Client or Kernel requested to terminate HDCP");
+    hdcpcon_->Terminate();
   }
   return true;
 }
@@ -1043,12 +1082,14 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.seamless = true;
   }
 
-  if (hdcp_state_ == HwcDisplay::HdcpState::kDesired) {
+  auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
+                             : HdcpController::HdcpState::kUndesired;
+  if (hdcp_state == HdcpController::HdcpState::kDesired) {
     ALOGI("Requesting HDCP to be enabled with Content Type 1");
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType1;
   }
-  if (hdcp_state_ == HwcDisplay::HdcpState::kRetry) {
+  if (hdcp_state == HdcpController::HdcpState::kRetry) {
     ALOGI("Retrying HDCP to be enabled with Content Type 0");
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType0;
@@ -1227,7 +1268,7 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
 
   if (a_args.hdcp_content_type.has_value() ||
       a_args.content_protection.has_value()) {
-    hdcp_state_ = HdcpState::kPending;
+    hdcpcon_->Requested();
   }
 }
 

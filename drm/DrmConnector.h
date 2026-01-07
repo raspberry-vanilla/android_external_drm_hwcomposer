@@ -81,6 +81,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   void UpdateContentProtection();
 
+  bool IsContentProtectionEnabled() const;
+
   auto &GetModes() const {
     return modes_;
   }

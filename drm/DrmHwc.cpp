@@ -176,6 +176,31 @@ void DrmHwc::NotifyDisplayLinkStatus(
                        DisplayStatus::kLinkTrainingFailed);
 }
 
+void DrmHwc::NotifyHdcpTermination(
+    std::shared_ptr<DrmDisplayPipeline> pipeline) {
+  if (display_handles_.count(pipeline) == 0) {
+    ALOGE("%s, can't find the display, pipeline: %p", __func__, pipeline.get());
+    return;
+  }
+
+  auto handle = display_handles_[pipeline];
+  if (displays_.count(handle) == 0) {
+    ALOGE("%s, can't find the display, handle: %" PRIu64, __func__, handle);
+    return;
+  }
+
+  HwcDisplay *display = displays_[handle].get();
+  if (display == nullptr) {
+    ALOGE("%s, display is null for handle: %" PRIu64, __func__, handle);
+    return;
+  }
+
+  // Trigger HwcDisplay to terminate HDCP negotiation.
+  if (!display->StopHdcp()) {
+    ALOGI("%s, StopHdcp() failed for display: %" PRIu64, __func__, handle);
+  }
+}
+
 std::optional<DisplayHandle> DrmHwc::CreateVirtualDisplay(uint32_t width,
                                                           uint32_t height) {
   ALOGI("Creating virtual display %dx%d", width, height);

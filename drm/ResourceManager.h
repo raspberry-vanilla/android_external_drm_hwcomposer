@@ -18,6 +18,7 @@
 
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 
@@ -36,6 +37,8 @@ class PipelineToFrontendBindingInterface {
   virtual bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline>) = 0;
   virtual void FinalizeDisplayBinding() = 0;
   virtual void NotifyDisplayLinkStatus(
+      std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
+  virtual void NotifyHdcpTermination(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
 };
 

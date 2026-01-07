@@ -172,6 +172,12 @@ void ResourceManager::UpdateFrontendDisplays() {
 
       // Handle the Content Protection Uevent to update its status
       conn->UpdateContentProtection();
+
+      // If content protection is not enabled anymore, inform frontend so it
+      // can terminate HDCP handling for this display.
+      if (!conn->IsContentProtectionEnabled()) {
+        frontend_interface_->NotifyHdcpTermination(attached_pipelines_[conn]);
+      }
     }
   }
   frontend_interface_->FinalizeDisplayBinding();

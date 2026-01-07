@@ -25,6 +25,7 @@
 #include <sync/sync.h>
 #include <utils/Trace.h>
 
+#include <algorithm>
 #include <cassert>
 
 #include "compositor/LayerData.h"

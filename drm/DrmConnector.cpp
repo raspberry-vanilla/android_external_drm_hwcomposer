@@ -339,6 +339,14 @@ void DrmConnector::UpdateContentProtection() {
   }
 }
 
+bool DrmConnector::IsContentProtectionEnabled() const {
+  auto content_protection_property_value = content_protection_property_
+                                               .GetValue();
+  return content_protection_property_value &&
+         (content_protection_property_value ==
+          DRM_MODE_CONTENT_PROTECTION_ENABLED);
+}
+
 std::optional<PanelOrientation> DrmConnector::GetPanelOrientation() {
   if (!panel_orientation_.GetValue().has_value()) {
     ALOGW("No panel orientation property available.");

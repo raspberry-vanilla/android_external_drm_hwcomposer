@@ -90,6 +90,10 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) override;
 
+  // Notify HDCP Termination from kernel Uevents
+  void NotifyHdcpTermination(
+      std::shared_ptr<DrmDisplayPipeline> pipeline) override;
+
   // Should be done for all successful modesets (full and seamless).
   void LogRefreshRateChanges();
 
