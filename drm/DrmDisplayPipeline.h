@@ -19,10 +19,11 @@
 #include <memory>
 #include <vector>
 
+#include <drm/DrmAtomicCommitSink.h>
+
 namespace android::drm_hwcomposer {
 
 class CompositionPlanner;
-class DrmAtomicStateManager;
 class DrmConnector;
 class DrmCrtc;
 class DrmDevice;
@@ -105,8 +106,8 @@ struct DrmDisplayPipeline {
   std::shared_ptr<BindingOwner<DrmCrtc>> crtc;
   std::shared_ptr<BindingOwner<DrmPlane>> primary_plane;
 
-  std::shared_ptr<DrmAtomicStateManager> atomic_state_manager;
-  std::unique_ptr<CompositionPlanner> backend;
+  std::unique_ptr<DrmAtomicCommitSink> atomic_commit_sink;
+  std::unique_ptr<CompositionPlanner> planner;
 };
 
 }  // namespace android::drm_hwcomposer

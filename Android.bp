@@ -54,7 +54,6 @@ cc_defaults {
 
     cppflags: [
         "-DHAS_LIBDISPLAY_INFO",
-        "-DHAS_LIBSYNC",
     ],
 
     cpp_std: "gnu++17",
@@ -279,7 +278,6 @@ cc_test_host {
         "compositor/FlatteningController.cpp",
         "compositor/FlatteningControllerTests.cpp",
         "compositor/FlatteningEventAtomReporter.cpp",
-        "drm/DrmAtomicStateManager.cpp",
         "drm/DrmColorOp.cpp",
         "drm/DrmConnector.cpp",
         "drm/DrmCrtc.cpp",

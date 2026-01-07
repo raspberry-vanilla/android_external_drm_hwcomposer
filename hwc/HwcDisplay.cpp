@@ -387,7 +387,7 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     flatcon_->NewFrame();
   }
 
-  validated_composition_.emplace(pipeline_->backend->ValidateDisplay(this));
+  validated_composition_.emplace(pipeline_->planner->ValidateDisplay(this));
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
@@ -454,7 +454,7 @@ auto HwcDisplay::PresentStagedComposition(
   // slower display. WaitLastFrame() should be called before
   // WaitForPresenttime(), otherwise  can lead to a situation where hwc sleeps
   // for up to 1.25 vsync period and blocks viable presents in SurfaceFlinger.
-  GetPipe().atomic_state_manager->WaitLastFrame();
+  GetPipe().atomic_commit_sink->WaitLastFrame();
 
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
@@ -642,7 +642,7 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
-    if (GetPipe().atomic_state_manager->IsCrtcActive()) {
+    if (GetPipe().atomic_commit_sink->IsActive()) {
       return true;
     }
 
@@ -662,7 +662,7 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
     a_args.teardown = true;
   }
 
-  const bool commit_success = ExecuteAtomicCommit(a_args);
+  const bool commit_success = ExecuteAtomicCommit(a_args).has_value();
   ALOGE_IF(!commit_success, "Failed to set display active: %s.",
            enabled ? "enabled" : "disabled");
   // If setting to |enabled|, log the error and return true. The next frame
@@ -675,7 +675,7 @@ bool HwcDisplay::GetDisplayEnabled() const {
     return true;
   }
 
-  return GetPipe().atomic_state_manager->IsCrtcActive();
+  return GetPipe().atomic_commit_sink->IsActive();
 }
 
 void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -922,15 +922,15 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   return args;
 }
 
-bool HwcDisplay::ExecuteAtomicCommit(AtomicCommitArgs &a_args) const {
-  const bool commit_result = GetPipe()
-                                 .atomic_state_manager->ExecuteAtomicCommit(
-                                     a_args);
+std::optional<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
+    AtomicCommitArgs &a_args) const {
+  auto commit_result = GetPipe().atomic_commit_sink->ExecuteAtomicCommit(
+      a_args);
 
   // Log successful modesets (seamless and full), including teardowns.
-  if (!a_args.test_only && (a_args.display_mode || a_args.teardown)) {
+  if (a_args.display_mode || a_args.teardown) {
     const bool blocking = a_args.blocking || a_args.active || a_args.teardown;
-    LogConfigResult(blocking, commit_result);
+    LogConfigResult(blocking, commit_result.has_value());
   }
 
   return commit_result;
@@ -1004,8 +1004,7 @@ bool HwcDisplay::TestComposition(
   if (!a_args) {
     return false;
   }
-  a_args->test_only = true;
-  if (ExecuteAtomicCommit(*a_args)) {
+  if (GetPipe().atomic_commit_sink->TestAtomicCommit(*a_args)) {
     // Put the composition plan into the newly-validated composition. Its owner
     // is responsible for keeping it alive until commit.
     composition.composition_plan = a_args->composition;
@@ -1101,8 +1100,6 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   if (use_client_layer) {
     z_map.emplace(client_z_order, &client_layer_);
     if (!client_layer_.IsLayerUsableAsDevice()) {
-      ALOGE_IF(!a_args.test_only,
-               "Client layer must be always usable by DRM/KMS");
       /* This may be normally triggered on validation of the first frame
        * containing CLIENT layer. At this moment client buffer is not yet
        * provided by the CLIENT.
@@ -1153,7 +1150,6 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
         CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers),
                                       cursor_layer);
     if (!a_args.composition) {
-      ALOGE_IF(!a_args.test_only, "Failed to create LayerToPlaneJoiningPlan");
       return std::nullopt;
     }
   }
@@ -1194,18 +1190,19 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     return false;
   }
 
-  if (!ExecuteAtomicCommit(*a_args)) {
+  auto result = ExecuteAtomicCommit(*a_args);
+  if (!result) {
     ALOGE("Failed to commit the frame composition.");
     return false;
   }
-  out_present_fence = a_args->out_fence;
-  ApplyCommitChanges(*a_args);
+  out_present_fence = result->present_fence;
+  ApplyCommitChanges(*a_args, *result);
   return true;
 }
 
-void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args) {
-  ALOGE_IF(a_args.test_only, "Applying commit changes for test_only args.");
-  writeback_complete_fence_ = a_args.out_writeback_complete_fence;
+void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
+                                    const AtomicCommitResult &result) {
+  writeback_complete_fence_ = result.writeback_complete_fence;
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.
     uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
@@ -1392,9 +1389,9 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   const HwcDisplayConfig *active_config = GetCurrentConfig();
   if (client_layer_.IsLayerUsableAsDevice() && active_config &&
       // Reuse the client layer only when the CRTC is already active. After a
-      // teardown (power-off), the cached buffer may contain stale content that we
-      // do not want to rescan on modeset.
-      GetPipe().atomic_state_manager->IsCrtcActive() &&
+      // teardown (power-off), the cached buffer may contain stale content that
+      // we do not want to rescan on modeset.
+      GetPipe().atomic_commit_sink->IsActive() &&
       active_config->mode.GetRawMode().hdisplay == new_width &&
       active_config->mode.GetRawMode().vdisplay == new_height) {
     ALOGV("Use existing client_layer for config.");
@@ -1434,9 +1431,8 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
   for (auto &[_, config] : configs_.hwc_configs) {
     AtomicCommitArgs commit_args = CreateModesetCommit(&config,
                                                        modeset_layer_data);
-    commit_args.test_only = true;
     commit_args.seamless = true;
-    if (ExecuteAtomicCommit(commit_args)) {
+    if (pipeline_->atomic_commit_sink->TestAtomicCommit(commit_args)) {
       config.group_id = active_config->group_id;
     }
   }

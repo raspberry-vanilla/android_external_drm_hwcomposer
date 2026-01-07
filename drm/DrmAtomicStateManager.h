@@ -27,6 +27,7 @@
 #include <android-base/thread_annotations.h>
 
 #include "compositor/LayerData.h"
+#include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmMode.h"
 #include "drm/drm_mode.h"
 #include "utils/fd.h"
@@ -40,65 +41,19 @@ class DrmFbIdHandle;
 class DrmPlane;
 
 struct DrmDisplayPipeline;
-struct LayerToPlaneJoiningPlan;
 
-enum class Colorspace;
-enum class ContentProtection;
-enum class ContentType;
-enum class HdcpContentType;
-
-struct AtomicCommitArgs {
-  /* inputs. All fields are optional, but at least one has to be specified */
-  bool test_only = false;
-  bool blocking = false;
-  bool teardown = false;
-  bool seamless = false;
-  std::optional<DrmMode> display_mode;
-  std::optional<bool> active;
-  std::shared_ptr<LayerToPlaneJoiningPlan> composition;
-  std::shared_ptr<drm_color_ctm> color_matrix;
-  std::shared_ptr<drm_color_ctm_3x4> color_matrix_3x4;
-  std::optional<Colorspace> colorspace;
-  std::optional<ContentType> content_type;
-  std::shared_ptr<hdr_output_metadata> hdr_metadata;
-  std::optional<HdcpContentType> hdcp_content_type;
-  std::optional<ContentProtection> content_protection;
-  std::optional<int32_t> min_bpc;
-
-  std::shared_ptr<DrmFbIdHandle> writeback_fb;
-  SharedFd writeback_release_fence;
-
-  /* out */
-  SharedFd out_writeback_complete_fence;
-  SharedFd out_fence;
-
-  /* helpers */
-  auto HasInputs() const -> bool {
-    return display_mode || active || composition;
-  }
-};
-
-class DrmAtomicStateManager {
+class DrmAtomicStateManager : public DrmAtomicCommitSink {
  public:
   static auto CreateInstance(DrmDisplayPipeline *pipe)
-      -> std::shared_ptr<DrmAtomicStateManager>;
+      -> std::unique_ptr<DrmAtomicStateManager>;
 
-  ~DrmAtomicStateManager();
+  ~DrmAtomicStateManager() override;
 
-  bool ExecuteAtomicCommit(AtomicCommitArgs &args);
-  bool IsCrtcActive() const {
-    return committed_frame_state_.crtc_active_state;
-  }
-
-  void StopThread() {
-    {
-      const std::lock_guard lock(mutex_);
-      exit_thread_ = true;
-    }
-    cv_.notify_all();
-  }
-
-  void WaitLastFrame();
+  bool TestAtomicCommit(AtomicCommitArgs &args) override;
+  std::optional<AtomicCommitResult> ExecuteAtomicCommit(
+      AtomicCommitArgs &args) override;
+  bool IsActive() const override;
+  void WaitLastFrame() override;
 
  private:
   // Collection of kms objects that were committed to the kernel. There must be
@@ -145,10 +100,13 @@ class DrmAtomicStateManager {
     AtomicRequest &operator=(AtomicRequest &&) = delete;
   };
 
+  void StopThread();
+
   void ThreadFn();
 
   DrmAtomicStateManager() = default;
-  bool CommitFrame(AtomicCommitArgs &args);
+  std::optional<AtomicCommitResult> CommitFrame(AtomicCommitArgs &args,
+                                                bool test_only);
 
   // Only accessed from main thread.
   DrmDisplayPipeline *pipe_{};

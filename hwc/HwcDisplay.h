@@ -44,6 +44,7 @@ class FlatteningController;
 class VSyncWorker;
 
 struct AtomicCommitArgs;
+struct AtomicCommitResult;
 struct CompositionAttributes;
 struct CompositionStats;
 struct DrmDisplayPipeline;
@@ -272,13 +273,15 @@ class HwcDisplay {
 
   // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
   // This should be called after a successful commit.
-  void ApplyCommitChanges(const AtomicCommitArgs &a_args);
+  void ApplyCommitChanges(const AtomicCommitArgs &a_args,
+                          const AtomicCommitResult &result);
 
   AtomicCommitArgs CreateModesetCommit(
       const HwcDisplayConfig *config,
       const std::optional<LayerData> &modeset_layer);
 
-  bool ExecuteAtomicCommit(AtomicCommitArgs &a_args) const;
+  std::optional<AtomicCommitResult> ExecuteAtomicCommit(
+      AtomicCommitArgs &a_args) const;
 
   // Sleep the current thread until |present_time| is closest to the next
   // expected vsync time.

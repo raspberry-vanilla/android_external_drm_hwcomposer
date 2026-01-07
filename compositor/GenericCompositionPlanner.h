@@ -28,8 +28,7 @@ class HwcLayer;
 class GenericCompositionPlanner : public CompositionPlanner {
  public:
   ~GenericCompositionPlanner() override = default;
-  ValidatedComposition ValidateDisplay(
-      const HwcDisplay* display) const override;
+  ValidatedComposition ValidateDisplay(const HwcDisplay* display) override;
 
  private:
   static std::tuple<size_t, size_t> GetClientLayers(

@@ -45,7 +45,7 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
 
 }  // namespace
 
-auto GenericCompositionPlanner::ValidateDisplay(const HwcDisplay* display) const
+auto GenericCompositionPlanner::ValidateDisplay(const HwcDisplay* display)
     -> ValidatedComposition {
   const auto layers = display->GetOrderLayersByZPos();
 

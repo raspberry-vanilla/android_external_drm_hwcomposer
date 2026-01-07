@@ -36,7 +36,7 @@ class CompositionPlanner {
   // Mapping of the CompositionType that the Backend assigned to each
   // HwcLayer.
   using CompositionTypeMap = std::map<const HwcLayer*, CompositionType>;
-  // Enum of possible reasons that the backend may choose to flatten the
+  // Enum of possible reasons that the planner may choose to flatten the
   // composition.
   enum class FlattenReason {
     kNone,
@@ -61,8 +61,11 @@ class CompositionPlanner {
   };
 
   virtual ~CompositionPlanner() = default;
-  virtual ValidatedComposition ValidateDisplay(
-      const HwcDisplay* display) const = 0;
+
+  // ValidateDisplay will be called at most once per frame update. It will not
+  // be called again until the AtomicCommitArgs created from these
+  // ValidatedComposition have been Executed through DrmAtomicCommitSink.
+  virtual ValidatedComposition ValidateDisplay(const HwcDisplay* display) = 0;
 
   // Returns a ValidatedComposition that assigns all HwcLayers to client
   // composition.

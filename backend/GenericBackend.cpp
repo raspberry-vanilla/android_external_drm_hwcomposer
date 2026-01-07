@@ -22,6 +22,7 @@
 #include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/GenericCompositionPlanner.h"
+#include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
 
@@ -38,7 +39,9 @@ std::unique_ptr<DrmDisplayPipeline> GenericBackend::CreatePipeline(
     DrmConnector& connector) {
   auto pipeline = DrmDisplayPipeline::CreatePipeline(connector);
   if (pipeline) {
-    pipeline->backend = CreateCompositionPlanner();
+    pipeline->planner = CreateCompositionPlanner();
+    pipeline->atomic_commit_sink = DrmAtomicStateManager::CreateInstance(
+        pipeline.get());
   }
   return pipeline;
 }

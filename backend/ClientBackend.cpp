@@ -22,7 +22,7 @@ namespace android::drm_hwcomposer {
 namespace {
 class ClientCompositionPlanner : public CompositionPlanner {
  public:
-  auto ValidateDisplay(const HwcDisplay* display) const
+  auto ValidateDisplay(const HwcDisplay* display)
       -> ValidatedComposition override {
     return GetFlattenedComposition(display->GetOrderLayersByZPos(),
                                    FlattenReason::kNone);

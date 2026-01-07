@@ -19,7 +19,6 @@
 #include "DrmDisplayPipeline.h"
 
 #include "compositor/CompositionPlanner.h"
-#include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
@@ -82,9 +81,6 @@ static auto TryCreatePipeline(DrmDevice &dev, DrmConnector &connector,
     ALOGE("Failed to bind primary plane");
     return {};
   }
-
-  pipe->atomic_state_manager = DrmAtomicStateManager::CreateInstance(
-      pipe.get());
 
   return pipe;
 }
@@ -185,9 +181,6 @@ DrmConnector *DrmDisplayPipeline::FindWritebackConnectorForPipeline() const {
   return nullptr;
 }
 
-DrmDisplayPipeline::~DrmDisplayPipeline() {
-  if (atomic_state_manager)
-    atomic_state_manager->StopThread();
-}
+DrmDisplayPipeline::~DrmDisplayPipeline() = default;
 
 }  // namespace android::drm_hwcomposer
