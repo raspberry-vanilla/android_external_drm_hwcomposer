@@ -648,8 +648,9 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
       return true;
     }
 
-    if (GetConfig(configs_.active_config_id)) {
-      if (SetConfig(configs_.active_config_id) != ConfigError::kNone) {
+    const HwcDisplayConfig *last_requested_config = GetLastRequestedConfig();
+    if (last_requested_config) {
+      if (SetConfig(last_requested_config->id) != ConfigError::kNone) {
         ALOGE("Failed to set config to re-enable display after teardown.");
         return false;
       }
