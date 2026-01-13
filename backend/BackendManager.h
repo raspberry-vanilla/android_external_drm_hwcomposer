@@ -44,6 +44,12 @@ class BackendManager {
     explicit Backend(const std::string &name);
     virtual ~Backend();
 
+    // Backends with non-trivial initialization can override Init. If this
+    // returns false, then the backend will be removed from the BackendManager.
+    virtual bool Init() {
+      return true;
+    };
+
     // Create a DrmDisplayPipeline for the given DrmConnector, including
     // creating the CompositionPlanner for this DrmDisplayPipeline.
     virtual std::unique_ptr<DrmDisplayPipeline> CreatePipeline(
@@ -59,6 +65,8 @@ class BackendManager {
   static BackendManager &GetInstance();
   void RegisterBackend(const std::string &name, Backend *backend);
   void UnregisterBackend(const std::string &name);
+
+  void InitializeBackends();
 
   std::unique_ptr<DrmDisplayPipeline> CreatePipelineForConnector(
       DrmConnector &connector);

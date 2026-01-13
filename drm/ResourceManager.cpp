@@ -79,6 +79,10 @@ void ResourceManager::Init() {
     }
   }
 
+  // Ensure that Backends have been initialized before the BackendManager is
+  // used.
+  BackendManager::GetInstance().InitializeBackends();
+
   auto display_str = Properties::InternalDisplayNames();
   auto display_names = base::Tokenize(display_str, ",");
   displays_.insert(display_names.begin(), display_names.end());
@@ -87,13 +91,15 @@ void ResourceManager::Init() {
   ctm_handling_ = Properties::GetCtmHandling();
   color_pipeline_enabled_ = Properties::UseColorPipeline();
 
-  auto buffer_info_getter = BackendManager::GetInstance()
-                                .CreateBufferInfoGetter();
-  if (!buffer_info_getter) {
-    ALOGE("Failed to create BufferInfoGetter");
-    return;
+  if (BufferInfoGetter::GetInstance() == nullptr) {
+    auto buffer_info_getter = BackendManager::GetInstance()
+                                  .CreateBufferInfoGetter();
+    if (!buffer_info_getter) {
+      ALOGE("Failed to create BufferInfoGetter");
+      return;
+    }
+    BufferInfoGetter::Init(std::move(buffer_info_getter));
   }
-  BufferInfoGetter::Init(std::move(buffer_info_getter));
 
   for (auto &drm : drms_) {
     drm->ResetConnectorsAndCrtcs();

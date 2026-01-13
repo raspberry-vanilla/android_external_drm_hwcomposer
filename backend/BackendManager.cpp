@@ -64,6 +64,19 @@ void BackendManager::UnregisterBackend(const std::string &name) {
   available_backends_.erase(name);
 }
 
+void BackendManager::InitializeBackends() {
+  for (auto it = available_backends_.begin();
+       it != available_backends_.end();) {
+    bool success = it->second->Init();
+    if (!success) {
+      ALOGE("Failed to initialize backend %s", it->first.c_str());
+      it = available_backends_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 std::unique_ptr<DrmDisplayPipeline> BackendManager::CreatePipelineForConnector(
     DrmConnector &connector) {
   auto driver_name(connector.GetDev().GetName());
