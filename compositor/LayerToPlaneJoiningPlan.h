@@ -36,6 +36,7 @@ struct LayerToPlaneJoiningPlan {
   };
 
   std::vector<LayerToPlaneJoining> plan;
+  std::optional<int> client_z_order;
 
   static auto CreateLayerToPlaneJoiningPlan(
       const DrmDisplayPipeline &pipe, std::vector<LayerData> composition,

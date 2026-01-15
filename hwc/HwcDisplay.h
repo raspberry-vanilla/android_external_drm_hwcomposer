@@ -267,6 +267,10 @@ class HwcDisplay {
   std::optional<AtomicCommitArgs> CreateFrameUpdateCommit(
       const CompositionPlanner::ValidatedComposition &composition) const;
 
+  // Creates a LayerToPlaneJoiningPlan for the given composition type map.
+  std::unique_ptr<LayerToPlaneJoiningPlan> CreateLayerToPlaneJoiningPlan(
+      const CompositionPlanner::CompositionTypeMap &composition_types) const;
+
   bool CommitStagedComposition(SharedFd &out_present_fence);
 
   // Update HwcDisplay state tracking to reflect what was committed in |a_args|.

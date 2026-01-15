@@ -1054,7 +1054,6 @@ bool HwcDisplay::TestComposition(
   return false;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     const CompositionPlanner::ValidatedComposition &composition) const {
   if (IsInHeadlessMode()) {
@@ -1097,15 +1096,57 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.hdcp_content_type = HdcpContentType::kType0;
   }
 
-  // order the layers by z-order
-  size_t client_layer_count = 0;
-  bool use_client_layer = false;
-  uint32_t client_z_order = UINT32_MAX;
+  // Use the cached plan, and update the client target buffer if needed.
+  if (composition.composition_plan != nullptr) {
+    const auto &client_z_order = composition.composition_plan->client_z_order;
+    // Client target buffer may be updated since the composition was validated,
+    // so get the latest LayerData.
+    if (client_z_order.has_value()) {
+      composition.composition_plan->plan[client_z_order.value()]
+          .layer = client_layer_.GetLayerData();
+    }
+    a_args.composition = composition.composition_plan;
+  } else {
+    // Construct a new composition plan.
+    a_args.composition = CreateLayerToPlaneJoiningPlan(
+        composition.composition_types);
+  }
+
+  if (!a_args.composition) {
+    return std::nullopt;
+  }
+
+  // CTM will be applied by the client, don't apply DRM CTM
+  const bool all_client_layers = a_args.composition->client_z_order
+                                     .has_value() &&
+                                 a_args.composition->plan.size() == 1;
+  if (all_client_layers &&
+      hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
+    a_args.color_matrix = identity_color_matrix_;
+    a_args.color_matrix_3x4 = identity_color_matrix_3x4_;
+  }
+
+  if (pipeline_->writeback_connector) {
+    if (!writeback_layer_->IsLayerUsableAsDevice()) {
+      ALOGE("Writeback layer not usable by DRM/KMS - no valid buffer set");
+      return std::nullopt;
+    }
+    a_args.writeback_fb = writeback_layer_->GetLayerData().fb;
+    a_args.writeback_release_fence = writeback_layer_->GetLayerData()
+                                         .acquire_fence;
+  }
+  return a_args;
+}
+
+std::unique_ptr<LayerToPlaneJoiningPlan>
+HwcDisplay::CreateLayerToPlaneJoiningPlan(
+    const CompositionPlanner::CompositionTypeMap &composition_types) const {
+  std::optional<uint32_t> client_z_order;
   std::map<uint32_t, const HwcLayer *> z_map;
   std::optional<LayerData> cursor_layer = std::nullopt;
   for (const auto &[_, layer] : layers_) {
-    auto it = composition.composition_types.find(&layer);
-    CompositionType type = it != composition.composition_types.end()
+    auto it = composition_types.find(&layer);
+    CompositionType type = it != composition_types.end()
                                ? it->second
                                : CompositionType::kInvalid;
     switch (type) {
@@ -1122,9 +1163,8 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
         break;
       case CompositionType::kClient:
         // Place it at the z_order of the lowest client layer
-        use_client_layer = true;
-        client_layer_count++;
-        client_z_order = std::min(client_z_order, layer.GetZOrder());
+        client_z_order = std::min(client_z_order.value_or(UINT32_MAX),
+                                  layer.GetZOrder());
         break;
       case CompositionType::kSolidColor:
       case CompositionType::kInvalid:
@@ -1133,15 +1173,8 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     }
   }
 
-  // CTM will be applied by the client, don't apply DRM CTM
-  if (client_layer_count == layers_.size() &&
-      hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
-    a_args.color_matrix = identity_color_matrix_;
-    a_args.color_matrix_3x4 = identity_color_matrix_3x4_;
-  }
-
-  if (use_client_layer) {
-    z_map.emplace(client_z_order, &client_layer_);
+  if (client_z_order.has_value()) {
+    z_map.emplace(client_z_order.value(), &client_layer_);
     if (!client_layer_.IsLayerUsableAsDevice()) {
       /* This may be normally triggered on validation of the first frame
        * containing CLIENT layer. At this moment client buffer is not yet
@@ -1150,7 +1183,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
        * imported. For example when non-contiguous buffer is imported into
        * contiguous-only DRM/KMS driver.
        */
-      return std::nullopt;
+      return nullptr;
     }
   }
 
@@ -1161,52 +1194,17 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   // now that they're ordered by z, add them to the composition
   for (const auto &[_, layer] : z_map) {
     if (!layer->IsLayerUsableAsDevice()) {
-      return std::nullopt;
+      return nullptr;
     }
     composition_layers.emplace_back(layer->GetLayerData());
   }
-
-  // Use the provided validated composition plan if it exists, otherwise create
-  // it now.
-  if (composition.composition_plan != nullptr) {
-    if (composition.composition_plan->plan.size() !=
-        composition_layers.size() + cursor_layer.has_value()) {
-      ALOGE(
-          "Cached LayerToPlaneJoiningPlan size=%zu does not match composition "
-          "size=%zu (+cursor=%u)",
-          composition.composition_plan->plan.size(), composition_layers.size(),
-          cursor_layer.has_value());
-      // New plan will be created instead.
-    } else {
-      // Update client layer because it may become stale between validate and
-      // present.
-      if (use_client_layer) {
-        composition.composition_plan->plan[client_z_order]
-            .layer = client_layer_.GetLayerData();
-      }
-      a_args.composition = composition.composition_plan;
-    }
+  auto composition = LayerToPlaneJoiningPlan::
+      CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers),
+                                    cursor_layer);
+  if (composition) {
+    composition->client_z_order = client_z_order;
   }
-
-  if (!a_args.composition) {
-    a_args.composition = LayerToPlaneJoiningPlan::
-        CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers),
-                                      cursor_layer);
-    if (!a_args.composition) {
-      return std::nullopt;
-    }
-  }
-
-  if (pipeline_->writeback_connector) {
-    if (!writeback_layer_->IsLayerUsableAsDevice()) {
-      ALOGE("Writeback layer not usable by DRM/KMS - no valid buffer set");
-      return std::nullopt;
-    }
-    a_args.writeback_fb = writeback_layer_->GetLayerData().fb;
-    a_args.writeback_release_fence = writeback_layer_->GetLayerData()
-                                         .acquire_fence;
-  }
-  return a_args;
+  return composition;
 }
 
 bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
