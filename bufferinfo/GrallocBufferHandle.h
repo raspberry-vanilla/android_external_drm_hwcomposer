@@ -39,8 +39,12 @@ class GrallocBufferHandle : public PrimeFdsSharedBase {
 
   ~GrallocBufferHandle() override;
 
+ protected:
+  explicit GrallocBufferHandle(buffer_handle_t buffer_handle)
+      : imported_handle_(buffer_handle) {
+  }
+
  private:
-  GrallocBufferHandle() = default;
   buffer_handle_t imported_handle_{};
 };
 

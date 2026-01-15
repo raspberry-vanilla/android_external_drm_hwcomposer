@@ -22,8 +22,7 @@ namespace android::drm_hwcomposer {
 std::shared_ptr<GrallocBufferHandle> GrallocBufferHandle::Create(
     buffer_handle_t handle) {
   auto gralloc_handle = std::shared_ptr<GrallocBufferHandle>(
-      new GrallocBufferHandle());
-  gralloc_handle->imported_handle_ = handle;
+      new GrallocBufferHandle(handle));
   return gralloc_handle;
 }
 

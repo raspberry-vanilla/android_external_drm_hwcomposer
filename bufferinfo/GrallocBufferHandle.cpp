@@ -22,18 +22,18 @@ namespace android::drm_hwcomposer {
 
 auto GrallocBufferHandle::Create(buffer_handle_t handle)
     -> std::shared_ptr<GrallocBufferHandle> {
-  // Since GrallocBufferHandle c'tor is private, we can't use std::make_shared.
-  auto hwc3 = std::shared_ptr<GrallocBufferHandle>(new GrallocBufferHandle());
-
+  buffer_handle_t imported_handle{};
   auto result = ::android::GraphicBufferMapper::get()
-                    .importBufferNoValidate(handle, &hwc3->imported_handle_);
+                    .importBufferNoValidate(handle, &imported_handle);
 
   if (result != ::android::NO_ERROR) {
     ALOGE("Failed to import buffer handle: %d", result);
     return nullptr;
   }
-
-  return hwc3;
+  // Since GrallocBufferHandle c'tor is not public, we can't use
+  // std::make_shared.
+  return std::shared_ptr<GrallocBufferHandle>(
+      new GrallocBufferHandle(imported_handle));
 }
 
 GrallocBufferHandle::~GrallocBufferHandle() {
