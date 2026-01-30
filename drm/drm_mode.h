@@ -16,6 +16,7 @@
 #pragma once
 // NOLINTBEGIN
 
+#include <drm_mode.h>
 #include <linux/types.h>
 
 #ifndef DRM_MODE_OBJECT_COLOROP

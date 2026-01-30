@@ -143,13 +143,13 @@ int DrmPlane::Init() {
     if (GetPlaneProperty("COLOR_ENCODING", color_encoding_property_,
                          Presence::kOptional)) {
       color_encoding_property_.AddEnumToMap("ITU-R BT.709 YCbCr",
-                                            BufferColorSpace::kItuRec709,
+                                            BufferColorEncoding::kItuRec709,
                                             color_encoding_enum_map_);
       color_encoding_property_.AddEnumToMap("ITU-R BT.601 YCbCr",
-                                            BufferColorSpace::kItuRec601,
+                                            BufferColorEncoding::kItuRec601,
                                             color_encoding_enum_map_);
       color_encoding_property_.AddEnumToMap("ITU-R BT.2020 YCbCr",
-                                            BufferColorSpace::kItuRec2020,
+                                            BufferColorEncoding::kItuRec2020,
                                             color_encoding_enum_map_);
     }
 
@@ -320,8 +320,7 @@ static int To1616FixPt(float in) {
 auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
                               uint32_t zpos, uint32_t crtc_id,
                               DstRectInfo &whole_display_rect,
-                              DrmModeUserPropertyBlobUnique &damage_out,
-                              DrmModeUserPropertyBlobUnique &ctm_3x4) const
+                              DrmModeUserPropertyBlobUnique &damage_out) const
     -> int {
   if (!layer.fb || !layer.bi) {
     ALOGE("%s: Invalid arguments", __func__);
@@ -418,15 +417,11 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
     return -EINVAL;
   }
 
-  if (drm_->GetResMan().UseColorPipeline()) {
-    if (color_pipeline_property_ &&
-        AtomicSetColorPipeline(pset, ctm_3x4) != 0) {
-      return -EINVAL;
-    }
-  } else {
-    if (color_encoding_enum_map_.count(layer.bi->color_space) != 0 &&
-        !color_encoding_property_.AtomicSet(pset, color_encoding_enum_map_.at(
-                                                      layer.bi->color_space))) {
+  if (!drm_->GetResMan().UseColorPipeline()) {
+    if (color_encoding_enum_map_.count(layer.bi->color_encoding) != 0 &&
+        !color_encoding_property_.AtomicSet(pset,
+                                            color_encoding_enum_map_.at(
+                                                layer.bi->color_encoding))) {
       return -EINVAL;
     }
 
@@ -477,8 +472,25 @@ auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
 }
 
 auto DrmPlane::AtomicSetColorPipeline(
-    drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_3x4) const
+    drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob) const
     -> int {
+  if (!drm_->GetResMan().UseColorPipeline()) {
+    return 0;
+  }
+
+  // Clear incompatible properties
+  if (color_encoding_property_ &&
+      !color_encoding_property_.AtomicSet(pset, 0)) {
+    return -EINVAL;
+  }
+  if (color_range_property_ && !color_range_property_.AtomicSet(pset, 0)) {
+    return -EINVAL;
+  }
+
+  if (!color_pipeline_property_) {
+    return 0;
+  }
+
   if (color_pipeline_.empty()) {
     ALOGW("color_pipeline_ is empty");
     return 0;
@@ -499,8 +511,8 @@ auto DrmPlane::AtomicSetColorPipeline(
                 color_op->DumpState().c_str());
           return -EINVAL;
         }
-        if (!ctm_3x4 ||
-            !color_op->GetDataProperty().AtomicSet(pset, *ctm_3x4)) {
+        if (!ctm_blob ||
+            !color_op->GetDataProperty().AtomicSet(pset, *ctm_blob)) {
           ALOGE("Failed to set DATA property on %s",
                 color_op->DumpState().c_str());
           return -EINVAL;

@@ -21,13 +21,15 @@
 
 namespace android::drm_hwcomposer {
 
+constexpr int kColorMatrixSize = 16;
+using HalColorTransforMatrix = std::array<float, kColorMatrixSize>;
+
 /*
  * 4x4 Identity matrix used for color transformations.
  */
-constexpr int kColorMatrixSize = 16;
 // clang-format off
 // NOLINTNEXTLINE(clang-diagnostic-unused-const-variable)
-constexpr std::array<float, kColorMatrixSize> kIdentityMatrix = {
+constexpr HalColorTransforMatrix kIdentityMatrix = {
     1.0F, 0.0F, 0.0F, 0.0F,
     0.0F, 1.0F, 0.0F, 0.0F,
     0.0F, 0.0F, 1.0F, 0.0F,

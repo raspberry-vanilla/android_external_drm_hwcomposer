@@ -141,7 +141,8 @@ bool HwcDisplayConfigs::Init(DrmConnector &connector) {
         .group_id = new_group_id,
         .mode = mode,
         .disabled = disabled,
-        .output_type = OutputType::kSystem,
+        // disable HDR color modes until tone-mapping is supported
+        .output_type = OutputType::kSdr,
     };
 
     if ((mode.GetRawMode().type & DRM_MODE_TYPE_PREFERRED) != 0 &&

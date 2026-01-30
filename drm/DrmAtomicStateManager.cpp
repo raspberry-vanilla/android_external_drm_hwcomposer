@@ -38,6 +38,7 @@
 #include "drm/DrmPlane.h"
 #include "drm/DrmUnique.h"
 #include "drm/ResourceManager.h"
+#include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -313,9 +314,10 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
 
   auto *drm = pipe_->device;
   if (drm->GetResMan().UseColorPipeline()) {
-    return true;
+    return crtc->GetCtmProperty().AtomicSet(*request.property_set, 0);
   }
-  auto ctm_blob = drm->RegisterUserPropertyBlob(args.color_matrix.get(),
+  auto drm_color_matrix = ColorUtil::ToColorTransform3x3(args.color_matrix);
+  auto ctm_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
                                                 sizeof(drm_color_ctm));
   if (!ctm_blob) {
     ALOGE("Failed to create CTM blob");
@@ -457,19 +459,27 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
       display_rect_info.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
     }
 
-    DrmModeUserPropertyBlobUnique ctm_3x4_blob;
-    if (args.color_matrix_3x4) {
-      ctm_3x4_blob = pipe_->device
-                         ->RegisterUserPropertyBlob(args.color_matrix_3x4.get(),
-                                                    sizeof(drm_color_ctm_3x4));
-    }
     if (plane->AtomicSetState(*request.property_set, layer, joining.z_pos,
-                              crtc->GetId(), display_rect_info, damage_blob,
-                              ctm_3x4_blob) != 0) {
+                              crtc->GetId(), display_rect_info,
+                              damage_blob) != 0) {
       return false;
     }
     request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
-    if (args.color_matrix_3x4) {
+
+    if (pipe_->device->GetResMan().UseColorPipeline()) {
+      std::shared_ptr<drm_color_ctm_3x4> drm_color_matrix = ColorUtil::
+          GamutAdjustIfNeeded(layer.colorspace,
+                              args.colorspace.value_or(Colorspace::kDefault),
+                              args.color_matrix, color_transform_map_);
+      DrmModeUserPropertyBlobUnique
+          ctm_3x4_blob = pipe_->device
+                             ->RegisterUserPropertyBlob(drm_color_matrix.get(),
+                                                        sizeof(
+                                                            drm_color_ctm_3x4));
+      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob) !=
+          0) {
+        return false;
+      }
       request.used_kms_objects.blobs.emplace_back(std::move(ctm_3x4_blob));
     }
   }

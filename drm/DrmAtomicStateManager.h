@@ -19,6 +19,7 @@
 #include <pthread.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -30,6 +31,7 @@
 #include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmMode.h"
 #include "drm/drm_mode.h"
+#include "math/mat3.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -154,6 +156,9 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
   SharedFd last_present_fence_ GUARDED_BY(mutex_);
   int frames_staged_ GUARDED_BY(mutex_){};
   int frames_tracked_ GUARDED_BY(mutex_){};
+
+  // Cached gamut mappings
+  std::map<std::tuple<Colorspace, Colorspace>, const mat3> color_transform_map_;
 };
 
 }  // namespace android::drm_hwcomposer

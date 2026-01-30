@@ -418,7 +418,7 @@ auto DrmDevice::CreateBufferForModeset(uint32_t width, uint32_t height)
       .prime_fds = {-1, -1, -1, -1},
       .modifiers = {DRM_FORMAT_MOD_NONE},
 
-      .color_space = BufferColorSpace::kUndefined,
+      .color_encoding = BufferColorEncoding::kUndefined,
       .sample_range = BufferSampleRange::kUndefined,
       .blend_mode = BufferBlendMode::kNone,
 

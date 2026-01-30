@@ -339,10 +339,8 @@ class HwcDisplay {
   std::unique_ptr<HwcLayer> writeback_layer_;
   uint16_t virtual_disp_width_{};
   uint16_t virtual_disp_height_{};
-  std::shared_ptr<drm_color_ctm> color_matrix_;
-  std::shared_ptr<drm_color_ctm> identity_color_matrix_;
-  std::shared_ptr<drm_color_ctm_3x4> color_matrix_3x4_;
-  std::shared_ptr<drm_color_ctm_3x4> identity_color_matrix_3x4_;
+  std::shared_ptr<HalColorTransforMatrix> color_matrix_;
+  std::shared_ptr<HalColorTransforMatrix> identity_color_matrix_;
   bool color_transform_is_identity_{};
   bool ctm_has_offset_ = false;
   ContentType content_type_ = ContentType::kNoData;

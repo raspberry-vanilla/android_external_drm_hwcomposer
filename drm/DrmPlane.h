@@ -37,7 +37,7 @@ struct DstRectInfo;
 struct LayerData;
 
 enum class BufferBlendMode;
-enum class BufferColorSpace;
+enum class BufferColorEncoding;
 enum class BufferSampleRange;
 
 // NOLINTNEXTLINE(readability-identifier-naming)
@@ -70,8 +70,10 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
 
   auto AtomicSetState(drmModeAtomicReq &pset, LayerData &layer, uint32_t zpos,
                       uint32_t crtc_id, DstRectInfo &whole_display_rect,
-                      DrmModeUserPropertyBlobUnique &damage_out,
-                      DrmModeUserPropertyBlobUnique &ctm_3x4) const -> int;
+                      DrmModeUserPropertyBlobUnique &damage_out) const -> int;
+  auto AtomicSetColorPipeline(drmModeAtomicReq &pset,
+                              DrmModeUserPropertyBlobUnique &ctm_blob) const
+      -> int;
   auto AtomicDisablePlane(drmModeAtomicReq &pset) -> int;
   auto &GetZPosProperty() const {
     return zpos_property_;
@@ -92,9 +94,6 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   auto Init() -> int;
   auto GetPlaneProperty(const char *prop_name, DrmProperty &property,
                         Presence presence = Presence::kMandatory) -> bool;
-  auto AtomicSetColorPipeline(drmModeAtomicReq &pset,
-                              DrmModeUserPropertyBlobUnique &ctm_3x4) const
-      -> int;
 
   uint32_t type_{};
 
@@ -122,7 +121,7 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   DrmProperty color_pipeline_property_;
 
   std::map<BufferBlendMode, uint64_t> blending_enum_map_;
-  std::map<BufferColorSpace, uint64_t> color_encoding_enum_map_;
+  std::map<BufferColorEncoding, uint64_t> color_encoding_enum_map_;
   std::map<BufferSampleRange, uint64_t> color_range_enum_map_;
   std::map<uint64_t, ColorOpType> color_op_type_enum_map_;
 

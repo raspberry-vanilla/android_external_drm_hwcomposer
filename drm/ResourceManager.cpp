@@ -51,6 +51,8 @@ void ResourceManager::Init() {
     return;
   }
 
+  color_pipeline_enabled_ = Properties::UseColorPipeline();
+
   // Could be a valid path or it can have at the end of it the wildcard %
   // which means that it will try open all devices until an error is met.
   std::string path_pattern = Properties::GetDevicePath();
@@ -89,7 +91,6 @@ void ResourceManager::Init() {
 
   scale_with_gpu_ = Properties::ScaleWithGpu();
   ctm_handling_ = Properties::GetCtmHandling();
-  color_pipeline_enabled_ = Properties::UseColorPipeline();
 
   if (BufferInfoGetter::GetInstance() == nullptr) {
     auto buffer_info_getter = BackendManager::GetInstance()

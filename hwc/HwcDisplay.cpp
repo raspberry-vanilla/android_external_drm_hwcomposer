@@ -44,6 +44,7 @@
 #include "stats/DisplayConfigurationResultReporter.h"
 #include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
 #include "stats/Stats.h"
+#include "utils/ColorUtil.h"
 #include "utils/EdidWrapper.h"
 #include "utils/log.h"
 #include "utils/properties.h"
@@ -64,15 +65,6 @@ bool float_equals(float a, float b) {
   return std::abs(a - b) < epsilon;
 }
 
-uint64_t To3132FixPt(float in) {
-  constexpr uint64_t kSignMask = (1ULL << 63);
-  constexpr uint64_t kValueMask = ~(1ULL << 63);
-  constexpr auto kValueScale = static_cast<float>(1ULL << 32);
-  if (in < 0)
-    return (static_cast<uint64_t>(-in * kValueScale) & kValueMask) | kSignMask;
-  return static_cast<uint64_t>(in * kValueScale) & kValueMask;
-}
-
 bool TransformHasOffsetValue(const float *matrix) {
   for (int i = 12; i < 14; i++) {
     if (!float_equals(matrix[i], 0.F)) {
@@ -80,66 +72,6 @@ bool TransformHasOffsetValue(const float *matrix) {
     }
   }
   return false;
-}
-
-template <typename T>
-std::shared_ptr<T> ToColorTransform(
-    const std::array<float, 16> &color_transform_matrix,
-    const bool output_is_3x4_matrix) {
-  /* HAL provides a transposed 4x4 float type matrix:
-   * | 0  1  2  3|
-   * | 4  5  6  7|
-   * | 8  9 10 11|
-   * |12 13 14 15|
-   *
-   * R_out = R*0 + G*4 + B*8 + 12
-   * G_out = R*1 + G*5 + B*9 + 13
-   * B_out = R*2 + G*6 + B*10 + 14
-   *
-   * drm_color_ctm_3x4 expects a 3x4 s31.32 fixed point matrix:
-   * out   matrix          in
-   * |R|   |0  1  2  3 |   | R |
-   * |G| = |4  5  6  7 | x | G |
-   * |B|   |8  9  10 11|   | B |
-   *                       |1.0|
-   *
-   * R_out = R*0 + G*1 + B*2 + 3
-   * G_out = R*4 + G*5 + B*6 + 7
-   * B_out = R*8 + G*9 + B*10 + 11
-   *
-   * drm_color_ctm expects a 3x3 s31.32 fixed point matrix:
-   * out   matrix    in
-   * |R|   |0 1 2|   |R|
-   * |G| = |3 4 5| x |G|
-   * |B|   |6 7 8|   |B|
-   *
-   * R_out = R*0 + G*1 + B*2
-   * G_out = R*3 + G*4 + B*5
-   * B_out = R*6 + G*7 + B*8
-   */
-  std::shared_ptr<T> color_matrix = std::make_shared<T>();
-  const int rows = output_is_3x4_matrix ? 4 : 3;
-  constexpr int cols = 3;
-  constexpr int halRows = 4;
-  for (int i = 0; i < cols; i++) {
-    for (int j = 0; j < rows; j++) {
-      color_matrix->matrix[(i * rows) + j] = To3132FixPt(
-          color_transform_matrix[(j * halRows) + i]);
-    }
-  }
-  return color_matrix;
-}
-
-std::shared_ptr<drm_color_ctm> ToColorTransform(
-    const std::array<float, 16> &color_transform_matrix) {
-  return ToColorTransform<drm_color_ctm>(color_transform_matrix,
-                                         /*output_is_3x4_matrix=*/false);
-}
-
-std::shared_ptr<drm_color_ctm_3x4> ToColorTransform3x4(
-    const std::array<float, 16> &color_transform_matrix) {
-  return ToColorTransform<drm_color_ctm_3x4>(color_transform_matrix,
-                                             /*output_is_3x4_matrix=*/true);
 }
 
 }  // namespace
@@ -173,8 +105,8 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
   // operations
   writeback_layer_ = std::make_unique<HwcLayer>(this);
 
-  identity_color_matrix_ = ToColorTransform(kIdentityMatrix);
-  identity_color_matrix_3x4_ = ToColorTransform3x4(kIdentityMatrix);
+  identity_color_matrix_ = std::make_shared<HalColorTransforMatrix>(
+      kIdentityMatrix);
 
   display_mode_reporter_ = DisplayHotplugConnectModeDetectedAtomReporter::
       Create();
@@ -198,16 +130,13 @@ void HwcDisplay::SetColorTransformMatrix(
   }
 
   ctm_has_offset_ = TransformHasOffsetValue(color_transform_matrix.data());
-  if (!ctm_has_offset_) {
-    color_matrix_ = ToColorTransform(color_transform_matrix);
-  }
-  color_matrix_3x4_ = ToColorTransform3x4(color_transform_matrix);
+  color_matrix_ = std::make_shared<HalColorTransforMatrix>(
+      color_transform_matrix);
 }
 
 void HwcDisplay::SetColorMatrixToIdentity() {
   ctm_has_offset_ = false;
   color_matrix_ = identity_color_matrix_;
-  color_matrix_3x4_ = identity_color_matrix_3x4_;
   color_transform_is_identity_ = true;
 }
 
@@ -248,7 +177,7 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   if (Properties::DisableHdr()) {
-    hdr_metadata_.reset();
+    hdr_metadata_ = std::make_shared<hdr_output_metadata>();
     min_bpc_ = 6;
     colorspace_ = Colorspace::kDefault;
     return;
@@ -276,7 +205,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     case OutputType::kSdr:
       [[fallthrough]];
     default:
-      hdr_metadata_.reset();
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       colorspace_ = Colorspace::kDefault;
   }
@@ -817,42 +746,34 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
 }
 
 auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
-  // disable non-native color modes until tone-mapping is supported
-  return {ColorMode::kNative};
+  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline()) {
+    return {ColorMode::kNative};
+  }
+
+  std::vector<ColorMode> modes;
+  GetEdid()->GetColorModes(modes);
+
+  // disable non-P3 color modes until HDR tone-mapping is supported
+  modes.erase(std::remove_if(modes.begin(), modes.end(),
+                             [](ColorMode m) {
+                               switch (m) {
+                                 case ColorMode::kDciP3:
+                                 case ColorMode::kDisplayP3:
+                                   return false;
+                                 default:
+                                   return true;
+                               }
+                             }),
+              modes.end());
+
+  if (modes.empty()) {
+    modes.emplace_back(ColorMode::kNative);
+  }
+  return modes;
 }
 
 void HwcDisplay::SetColorMode(ColorMode mode) {
-  /* Maps to the Colorspace DRM connector property:
-   * https://elixir.bootlin.com/linux/v6.11/source/include/drm/drm_connector.h#L538
-   */
-  switch (mode) {
-    case ColorMode::kNative:
-      colorspace_ = Colorspace::kDefault;
-      break;
-    case ColorMode::kBt601_625:
-    case ColorMode::kBt601_625Unadjusted:
-    case ColorMode::kBt601_525:
-    case ColorMode::kBt601_525Unadjusted:
-      // The DP spec does not say whether this is the 525 or the 625 line version.
-      colorspace_ = Colorspace::kBt601Ycc;
-      break;
-    case ColorMode::kBt709:
-    case ColorMode::kSrgb:
-      colorspace_ = Colorspace::kBt709Ycc;
-      break;
-    case ColorMode::kDciP3:
-    case ColorMode::kDisplayP3:
-      colorspace_ = Colorspace::kDciP3RgbD65;
-      break;
-    case ColorMode::kDisplayBt2020:
-    case ColorMode::kAdobeRgb:
-    case ColorMode::kBt2020:
-    case ColorMode::kBt2100Pq:
-    case ColorMode::kBt2100Hlg:
-      // HDR color modes should be requested during modeset
-      ALOGW("HDR color modes are not supported with this API.");
-      return;
-  }
+  colorspace_ = ColorUtil::ToColorspace(mode);
 }
 
 void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
@@ -935,11 +856,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const std::optional<LayerData> &modeset_layer) {
   AtomicCommitArgs args{};
 
-  if (hwc_->GetResMan().UseColorPipeline()) {
-    args.color_matrix_3x4 = color_matrix_3x4_;
-  } else {
-    args.color_matrix = color_matrix_;
-  }
+  args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.hdr_metadata = hdr_metadata_;
@@ -1062,11 +979,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   AtomicCommitArgs a_args;
-  if (hwc_->GetResMan().UseColorPipeline()) {
-    a_args.color_matrix_3x4 = color_matrix_3x4_;
-  } else {
-    a_args.color_matrix = color_matrix_;
-  }
+  a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.hdr_metadata = hdr_metadata_;
@@ -1123,7 +1036,11 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   if (all_client_layers &&
       hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
     a_args.color_matrix = identity_color_matrix_;
-    a_args.color_matrix_3x4 = identity_color_matrix_3x4_;
+  }
+
+  // CTM with offset cannot be processed by CTM prop
+  if (ctm_has_offset_ && !hwc_->GetResMan().UseColorPipeline()) {
+    a_args.color_matrix = identity_color_matrix_;
   }
 
   if (pipeline_->writeback_connector) {

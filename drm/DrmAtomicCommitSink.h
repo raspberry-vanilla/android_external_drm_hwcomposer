@@ -21,6 +21,7 @@
 #include <optional>
 #include <vector>
 
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmMode.h"
 #include "drm/drm_mode.h"
 #include "utils/fd.h"
@@ -44,8 +45,7 @@ struct AtomicCommitArgs {
   std::optional<DrmMode> display_mode;
   std::optional<bool> active;
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
-  std::shared_ptr<drm_color_ctm> color_matrix;
-  std::shared_ptr<drm_color_ctm_3x4> color_matrix_3x4;
+  std::shared_ptr<HalColorTransforMatrix> color_matrix;
   std::optional<Colorspace> colorspace;
   std::optional<ContentType> content_type;
   std::shared_ptr<hdr_output_metadata> hdr_metadata;

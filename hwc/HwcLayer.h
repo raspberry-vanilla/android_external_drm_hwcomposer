@@ -44,8 +44,8 @@ class HwcLayer {
   struct LayerProperties {
     std::optional<Buffer> buffer;
     std::optional<BufferBlendMode> blend_mode;
-    std::optional<BufferColorSpace> color_space;
     std::optional<BufferSampleRange> sample_range;
+    std::optional<Colorspace> colorspace;
     std::optional<CompositionType> composition_type;
     std::optional<DstRectInfo> display_frame;
     std::optional<float> alpha;
@@ -120,9 +120,10 @@ class HwcLayer {
    * layer, at this moment HWC@2 API can't specify blending mode for this layer,
    * but Mapper@4 can do that
    */
-  BufferColorSpace color_space_{};
+  BufferColorEncoding color_encoding_{};
   BufferSampleRange sample_range_{};
   BufferBlendMode blend_mode_{};
+  Colorspace colorspace_{};
 
   bool prior_buffer_scanout_flag_{};
 

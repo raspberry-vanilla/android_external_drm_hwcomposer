@@ -23,7 +23,7 @@ namespace android::drm_hwcomposer {
 
 constexpr int kBufferMaxPlanes = 4;
 
-enum class BufferColorSpace : int32_t {
+enum class BufferColorEncoding : int32_t {
   kUndefined,
   kItuRec601,
   kItuRec709,
@@ -59,7 +59,7 @@ struct BufferInfo {
   int prime_fds[kBufferMaxPlanes];
   uint64_t modifiers[kBufferMaxPlanes];
 
-  BufferColorSpace color_space;
+  BufferColorEncoding color_encoding;
   BufferSampleRange sample_range;
   BufferBlendMode blend_mode;
 

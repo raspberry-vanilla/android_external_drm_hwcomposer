@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "bufferinfo/BufferInfo.h"
+#include "compositor/DisplayInfo.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -105,6 +106,7 @@ struct LayerData {
   std::shared_ptr<DrmFbIdHandle> fb;
   PresentInfo pi;
   SharedFd acquire_fence;
+  Colorspace colorspace;
 };
 
 }  // namespace android::drm_hwcomposer
