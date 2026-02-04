@@ -177,12 +177,10 @@ void ResourceManager::UpdateFrontendDisplays() {
       if (!conn->IsLinkStatusGood())
         frontend_interface_->NotifyDisplayLinkStatus(attached_pipelines_[conn]);
 
-      // Handle the Content Protection Uevent to update its status
-      conn->UpdateContentProtection();
-
       // If content protection is not enabled anymore, inform frontend so it
       // can terminate HDCP handling for this display.
-      if (!conn->IsContentProtectionEnabled()) {
+      if (conn->UpdateContentProtection() &&
+          !conn->IsContentProtectionEnabled()) {
         frontend_interface_->NotifyHdcpTermination(attached_pipelines_[conn]);
       }
     }

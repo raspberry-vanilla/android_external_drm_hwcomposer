@@ -79,7 +79,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsLinkStatusGood();
 
-  void UpdateContentProtection();
+  bool UpdateContentProtection();
 
   bool IsContentProtectionEnabled() const;
 
