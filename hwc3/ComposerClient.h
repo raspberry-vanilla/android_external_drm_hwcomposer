@@ -180,6 +180,8 @@ class ComposerClient : public BnComposerClient {
                                      const ClientTarget& command);
   void ExecuteSetDisplayOutputBuffer(int64_t display_handle,
                                      const Buffer& buffer);
+  void ExecuteSetDisplayBrightness(int64_t display_handle,
+                                   const DisplayBrightness& brightness);
 
   ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
 

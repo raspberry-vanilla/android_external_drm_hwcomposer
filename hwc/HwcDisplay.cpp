@@ -46,6 +46,7 @@
 #include "stats/Stats.h"
 #include "utils/ColorUtil.h"
 #include "utils/EdidWrapper.h"
+#include "utils/SysfsBacklightController.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 
@@ -640,6 +641,7 @@ void HwcDisplay::Deinit() {
     validated_composition_.reset();
     flatcon_.reset();
     hdcpcon_.reset();
+    backlight_controller_.reset();
   }
 
   if (vsync_worker_) {
@@ -685,6 +687,19 @@ bool HwcDisplay::Init() {
       ALOGW("Failed to create a LibdisplayInfo parser.");
     }
 #endif
+
+    // Attempt to initialize backlight
+    auto backlights = SysfsBacklightController::EnumerateBacklights();
+    for (const auto &name : backlights) {
+      // TODO(seanpaul): logic to associate backlight with connector
+      backlight_controller_ = SysfsBacklightController::CreateInstanceFromName(
+          name);
+      if (backlight_controller_) {
+        ALOGI("Associated backlight %s with display %d", name.c_str(),
+              static_cast<int>(handle_));
+        break;
+      }
+    }
   }
 
   HwcLayer::LayerProperties lp;
@@ -1405,6 +1420,14 @@ std::pair<uint32_t, uint32_t> HwcDisplay::GetSize() const {
   }
   return std::make_pair(config->mode.GetRawMode().hdisplay,
                         config->mode.GetRawMode().vdisplay);
+}
+
+auto HwcDisplay::SetBrightness(float brightness) -> bool {
+  if (!HasBacklight()) {
+    return false;
+  }
+  return backlight_controller_->SetBrightness(
+      brightness >= 0.0F ? std::optional<float>(brightness) : std::nullopt);
 }
 
 void HwcDisplay::LogModesOnHotplug() {

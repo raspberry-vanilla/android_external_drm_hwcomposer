@@ -24,6 +24,7 @@
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "utils/BacklightController.h"
 #include "utils/EdidWrapper.h"
 
 namespace aidl::android::hardware::graphics::common {
@@ -147,6 +148,12 @@ class HwcDisplay {
 
   // Get the port id that this display is plugged into.
   auto GetPort() const -> uint8_t;
+
+  auto HasBacklight() -> bool {
+    return backlight_controller_ != nullptr;
+  }
+
+  auto SetBrightness(float brightness) -> bool;
 
   auto SetContentType(ContentType content_type) {
     content_type_ = content_type;
@@ -362,6 +369,8 @@ class HwcDisplay {
   std::unique_ptr<DisplayHotplugConnectModeDetectedAtomReporter>
       display_mode_reporter_;
   std::unique_ptr<DisplayConfigurationResultReporter> config_result_reporter_;
+
+  std::unique_ptr<BacklightController> backlight_controller_;
 };
 
 }  // namespace android::drm_hwcomposer

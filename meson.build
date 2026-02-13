@@ -29,9 +29,11 @@ src_common = files(
     'stats/DisplayConfigurationResultReporter.cpp',
     'stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp',
     'stats/DisplayRefreshRatesChangedAtomReporter.cpp',
+    'utils/BacklightController.cpp',
     'utils/ColorUtil.cpp',
     'utils/fd.cpp',
     'utils/LibdisplayEdidWrapper.cpp',
+    'utils/SysfsBacklightController.cpp',
     'utils/properties.cpp',
 )
 
