@@ -134,7 +134,7 @@ std::optional<AtomicCommitResult> DrmAtomicStateManager::CommitFrame(
                                    atomic_request->property_set.get(),
                                    flags | DRM_MODE_ATOMIC_TEST_ONLY, drm);
 
-    ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
+    ALOGV_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
              args.seamless, err, errno,
              strerror_r(errno, err_buf, error_buf_max_size));
     return err == 0 ? std::make_optional<AtomicCommitResult>() : std::nullopt;
