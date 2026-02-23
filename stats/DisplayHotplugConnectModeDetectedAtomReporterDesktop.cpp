@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
 // #define NLOG_DEBUG 0
 
 #include "DisplayHotplugConnectModeDetectedAtomReporter.h"

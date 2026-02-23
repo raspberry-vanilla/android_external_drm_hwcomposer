@@ -55,6 +55,7 @@ cc_defaults {
 
     cppflags: [
         "-DHAS_LIBDISPLAY_INFO",
+        "-DLOG_TAG=\"drmhwc\"",
     ],
 
     cpp_std: "gnu++17",

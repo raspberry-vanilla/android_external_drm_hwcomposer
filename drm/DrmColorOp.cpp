@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #include "DrmColorOp.h"
 
 #include <xf86drmMode.h>

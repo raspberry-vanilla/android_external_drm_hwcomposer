@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #include "BufferInfoMinigbm.h"
 
 #include <xf86drm.h>

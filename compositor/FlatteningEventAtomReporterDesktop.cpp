@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-// #define NLOG_DEBUG 0
-
 #include "FlatteningEventAtomReporter.h"
 
 #include <cinttypes>

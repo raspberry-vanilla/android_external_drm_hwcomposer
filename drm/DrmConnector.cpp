@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #include "DrmConnector.h"
 
 #include <drm/drm_mode.h>

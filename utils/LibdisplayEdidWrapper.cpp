@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #if HAS_LIBDISPLAY_INFO
 
 #include "EdidWrapper.h"

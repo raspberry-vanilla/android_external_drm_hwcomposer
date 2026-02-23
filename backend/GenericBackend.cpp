@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #include "GenericBackend.h"
 
 #include "backend/BackendManager.h"

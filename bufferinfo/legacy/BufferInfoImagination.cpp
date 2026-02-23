@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
-
 #include "BufferInfoImagination.h"
 
 #include <xf86drm.h>

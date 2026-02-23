@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "drmhwc"
 #define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
 #include "ComposerClient.h"
