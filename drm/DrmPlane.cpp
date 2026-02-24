@@ -469,6 +469,7 @@ auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
   return 0;
 }
 
+// NOLINTNEXTLINE (readability-function-cognitive-complexity)
 auto DrmPlane::AtomicSetColorPipeline(
     drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob) const
     -> int {
@@ -504,16 +505,23 @@ auto DrmPlane::AtomicSetColorPipeline(
     switch (color_op_type_enum_map_.at(
         (color_op->GetTypeProperty().GetValue().value_or(0)))) {
       case ColorOpType::kMatrix3x4:
-        if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
-          ALOGE("Failed to set BYPASS property on %s",
-                color_op->DumpState().c_str());
-          return -EINVAL;
-        }
-        if (!ctm_blob ||
-            !color_op->GetDataProperty().AtomicSet(pset, *ctm_blob)) {
-          ALOGE("Failed to set DATA property on %s",
-                color_op->DumpState().c_str());
-          return -EINVAL;
+        if (ctm_blob) {  // Set 3x4 CTM
+          if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
+            ALOGE("Failed to set BYPASS property on %s",
+                  color_op->DumpState().c_str());
+            return -EINVAL;
+          }
+          if (!color_op->GetDataProperty().AtomicSet(pset, *ctm_blob)) {
+            ALOGE("Failed to set DATA property on %s",
+                  color_op->DumpState().c_str());
+            return -EINVAL;
+          }
+        } else {  // Bypass
+          if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
+            ALOGE("Failed to set BYPASS property on %s",
+                  color_op->DumpState().c_str());
+            return -EINVAL;
+          }
         }
         break;
       case ColorOpType::k1DLut:

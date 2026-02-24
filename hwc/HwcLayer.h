@@ -44,6 +44,7 @@ class HwcLayer {
   struct LayerProperties {
     std::optional<Buffer> buffer;
     std::optional<BufferBlendMode> blend_mode;
+    std::optional<BufferColorEncoding> color_encoding;
     std::optional<BufferSampleRange> sample_range;
     std::optional<Colorspace> colorspace;
     std::optional<CompositionType> composition_type;

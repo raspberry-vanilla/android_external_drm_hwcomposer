@@ -60,6 +60,7 @@
 #include "utils/properties.h"
 
 using ::android::drm_hwcomposer::BufferBlendMode;
+using ::android::drm_hwcomposer::BufferColorEncoding;
 using ::android::drm_hwcomposer::BufferSampleRange;
 using ::android::drm_hwcomposer::Colorspace;
 using ::android::drm_hwcomposer::CompositionType;
@@ -118,7 +119,7 @@ std::optional<Colorspace> AidlToColorspace(const common::Dataspace& dataspace) {
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525):
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525_UNADJUSTED):
       return Colorspace::kBt601Ycc;
-    case static_cast<int32_t>(common::Dataspace::DCI_P3):
+    case static_cast<int32_t>(common::Dataspace::STANDARD_DCI_P3):
       return Colorspace::kDciP3RgbD65;
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT2020):
     case static_cast<int32_t>(
@@ -138,6 +139,39 @@ std::optional<Colorspace> AidlToColorspace(
     return std::nullopt;
   }
   return AidlToColorspace(dataspace->dataspace);
+}
+
+std::optional<BufferColorEncoding> AidlToColorEncoding(
+    const common::Dataspace& dataspace) {
+  int32_t standard = static_cast<int32_t>(dataspace) &
+                     static_cast<int32_t>(common::Dataspace::STANDARD_MASK);
+  switch (standard) {
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT709):
+      return BufferColorEncoding::kItuRec709;
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_625):
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_625_UNADJUSTED):
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525):
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525_UNADJUSTED):
+      return BufferColorEncoding::kItuRec601;
+    case static_cast<int32_t>(common::Dataspace::STANDARD_BT2020):
+    case static_cast<int32_t>(
+        common::Dataspace::STANDARD_BT2020_CONSTANT_LUMINANCE):
+      return BufferColorEncoding::kItuRec2020;
+    case static_cast<int32_t>(common::Dataspace::STANDARD_DCI_P3):
+    case static_cast<int32_t>(common::Dataspace::UNKNOWN):
+      return BufferColorEncoding::kUndefined;
+    default:
+      ALOGE("Unsupported standard: %d", standard);
+      return std::nullopt;
+  }
+}
+
+std::optional<BufferColorEncoding> AidlToColorEncoding(
+    const std::optional<ParcelableDataspace>& dataspace) {
+  if (!dataspace) {
+    return std::nullopt;
+  }
+  return AidlToColorEncoding(dataspace->dataspace);
 }
 
 std::optional<BufferSampleRange> AidlToSampleRange(
@@ -604,6 +638,7 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
 
   properties.blend_mode = AidlToBlendMode(command.blendMode);
   properties.colorspace = AidlToColorspace(command.dataspace);
+  properties.color_encoding = AidlToColorEncoding(command.dataspace);
   properties.sample_range = AidlToSampleRange(command.dataspace);
   properties.composition_type = AidlToCompositionType(command.composition);
   properties.display_frame = AidlToDstRect(command.displayFrame);
@@ -1574,6 +1609,7 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
   }
   HwcLayer::LayerProperties properties = {
       .buffer = buffer,
+      .color_encoding = AidlToColorEncoding(command.dataspace),
       .sample_range = AidlToSampleRange(command.dataspace),
       .colorspace = AidlToColorspace(command.dataspace),
   };

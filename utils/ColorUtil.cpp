@@ -39,9 +39,9 @@ template <typename T>
 std::shared_ptr<T> ToColorTransform(
     const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
     const bool output_is_3x4_matrix) {
-  const HalColorTransforMatrix &hal_ctm = color_transform_matrix
-                                              ? *color_transform_matrix
-                                              : kIdentityMatrix;
+  if (!color_transform_matrix)
+    return nullptr;
+
   std::shared_ptr<T> color_matrix = std::make_shared<T>();
   const int rows = output_is_3x4_matrix ? 4 : 3;
   constexpr int kCols = 3;
@@ -49,7 +49,7 @@ std::shared_ptr<T> ToColorTransform(
   for (int i = 0; i < kCols; i++) {
     for (int j = 0; j < rows; j++) {
       color_matrix->matrix[(i * rows) + j] = To3132FixPt(
-          hal_ctm[(j * kHalRows) + i]);
+          (*color_transform_matrix)[(j * kHalRows) + i]);
     }
   }
   return color_matrix;

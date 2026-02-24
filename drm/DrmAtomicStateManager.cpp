@@ -470,11 +470,13 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
           GamutAdjustIfNeeded(layer.colorspace,
                               args.colorspace.value_or(Colorspace::kDefault),
                               args.color_matrix, color_transform_map_);
-      DrmModeUserPropertyBlobUnique
-          ctm_3x4_blob = pipe_->device
-                             ->RegisterUserPropertyBlob(drm_color_matrix.get(),
-                                                        sizeof(
-                                                            drm_color_ctm_3x4));
+      DrmModeUserPropertyBlobUnique ctm_3x4_blob;
+      if (drm_color_matrix) {
+        ctm_3x4_blob = pipe_->device
+                           ->RegisterUserPropertyBlob(drm_color_matrix.get(),
+                                                      sizeof(
+                                                          drm_color_ctm_3x4));
+      }
       if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob) !=
           0) {
         return false;
