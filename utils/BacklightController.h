@@ -17,6 +17,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 namespace android::drm_hwcomposer {
 

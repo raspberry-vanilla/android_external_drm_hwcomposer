@@ -17,6 +17,7 @@
 #include "BacklightController.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace android::drm_hwcomposer {
 
