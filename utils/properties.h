@@ -37,6 +37,7 @@ class Properties {
   static auto GetBackendOverride() -> std::string;
   static auto GetDevicePath() -> std::string;
   static auto UseColorPipeline() -> bool;
+  static auto ForcedHolePunchingEnabled() -> bool;
   static auto GetForceMode() -> std::string;
   static auto DisableHdr() -> bool;
 };

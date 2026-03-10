@@ -28,7 +28,7 @@
 
 namespace android::drm_hwcomposer {
 
-class DrmFbIdHandle;
+class IDrmFbIdHandle;
 struct LayerToPlaneJoiningPlan;
 
 enum class Colorspace;
@@ -53,7 +53,7 @@ struct AtomicCommitArgs {
   std::optional<ContentProtection> content_protection;
   std::optional<int32_t> min_bpc;
 
-  std::shared_ptr<DrmFbIdHandle> writeback_fb;
+  std::shared_ptr<IDrmFbIdHandle> writeback_fb;
   SharedFd writeback_release_fence;
 
   /* helpers */

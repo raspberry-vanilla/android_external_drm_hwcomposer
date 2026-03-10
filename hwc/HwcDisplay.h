@@ -20,6 +20,7 @@
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
+#include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
@@ -62,7 +63,7 @@ class FrontendDisplayBase {
 inline constexpr uint32_t kPrimaryDisplay = 0;
 
 // NOLINTNEXTLINE
-class HwcDisplay {
+class HwcDisplay : public ICompositorDisplay {
  public:
   enum ConfigError {
     kNone,
@@ -76,7 +77,7 @@ class HwcDisplay {
 
   HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
-  ~HwcDisplay();
+  ~HwcDisplay() override;
 
   void SetColorTransformMatrix(
       const std::array<float, 16> &color_transform_matrix);
@@ -85,9 +86,9 @@ class HwcDisplay {
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
   bool TestComposition(
-      CompositionPlanner::ValidatedComposition &composition) const;
+      CompositionPlanner::ValidatedComposition &composition) const override;
 
-  std::vector<const HwcLayer *> GetOrderLayersByZPos() const;
+  std::vector<const HwcLayer *> GetOrderLayersByZPos() const override;
 
   std::string Dump();
 
@@ -218,9 +219,12 @@ class HwcDisplay {
     return *pipeline_;
   }
 
-  bool CtmByGpu() const;
+  size_t GetNumAvailablePlanes() const override;
+  std::shared_ptr<BindingOwner<DrmPlane>> GetCursorPlane() const override;
 
-  bool ForcedScalingWithGpu() const;
+  bool CtmByGpu() const override;
+
+  bool ForcedScalingWithGpu() const override;
 
   const std::map<CompositionAttributes, CompositionStats> &comp_stats() const {
     return comp_stats_;
@@ -238,7 +242,7 @@ class HwcDisplay {
 
   void Deinit();
 
-  const FlatteningController *GetFlatCon() const {
+  const FlatteningController *GetFlatCon() const override {
     return flatcon_.get();
   }
 
@@ -263,7 +267,7 @@ class HwcDisplay {
 
   bool NeedsClientLayerUpdate() const;
 
-  std::pair<uint32_t, uint32_t> GetSize() const;
+  std::pair<uint32_t, uint32_t> GetSize() const override;
 
  private:
   // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if

@@ -28,11 +28,18 @@
 
 namespace android::drm_hwcomposer {
 
-class DrmFbIdHandle;
+class IDrmFbIdHandle;
 
 using ILayerId = int64_t;
 
-enum class CompositionType { kInvalid, kClient, kDevice, kSolidColor, kCursor };
+enum class CompositionType {
+  kInvalid,
+  kClient,
+  kDevice,
+  kSolidColor,
+  kCursor,
+  kDeviceOccluded
+};
 
 /* Rotation is defined in the clockwise direction */
 /* The flip is done before rotation */
@@ -103,7 +110,7 @@ struct PresentInfo {
 
 struct LayerData {
   std::optional<BufferInfo> bi;
-  std::shared_ptr<DrmFbIdHandle> fb;
+  std::shared_ptr<IDrmFbIdHandle> fb;
   PresentInfo pi;
   SharedFd acquire_fence;
   Colorspace colorspace;

@@ -120,6 +120,10 @@ auto Properties::EnableVirtualDisplay() -> bool {
   return (property_get_bool("vendor.hwc.drm.enable_virtual_display", 0) != 0);
 }
 
+auto Properties::ForcedHolePunchingEnabled() -> bool {
+  return (property_get_bool("ro.surface_flinger.force_hole_punch", 0) != 0);
+}
+
 auto Properties::GetCtmHandling() -> CtmHandling {
   char proptext[PROPERTY_VALUE_MAX];
   constexpr char kDrmOrGpu[] = "DRM_OR_GPU";

@@ -16,15 +16,16 @@
 
 #include "HwcLayer.h"
 
+#include "compositor/ICompositorDisplay.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
-#include "hwc/HwcDisplay.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
-HwcLayer::HwcLayer(HwcDisplay* parent_display) : parent_(parent_display) {
+HwcLayer::HwcLayer(ICompositorDisplay* parent_display)
+    : parent_(parent_display) {
 }
 
 void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {

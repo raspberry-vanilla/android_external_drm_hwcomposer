@@ -39,7 +39,7 @@ namespace android::drm_hwcomposer {
 template <typename T>
 class BindingOwner;
 
-class DrmFbIdHandle;
+class IDrmFbIdHandle;
 class DrmPlane;
 
 struct DrmDisplayPipeline;
@@ -64,7 +64,7 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
   struct KmsObjects {
     /* We have to hold a reference to framebuffer while displaying it ,
      * otherwise picture will blink */
-    std::vector<std::shared_ptr<DrmFbIdHandle>> framebuffers;
+    std::vector<std::shared_ptr<IDrmFbIdHandle>> framebuffers;
     std::vector<DrmModeUserPropertyBlobUnique> blobs;
   };
 

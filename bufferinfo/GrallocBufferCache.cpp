@@ -20,6 +20,7 @@
 
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/GrallocBufferHandle.h"
+#include "drm/DrmFbImporter.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

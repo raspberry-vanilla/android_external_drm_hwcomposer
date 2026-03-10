@@ -35,18 +35,31 @@ namespace android::drm_hwcomposer {
 
 class DrmDevice;
 
-class DrmFbIdHandle {
+// Interface purely for testing/mocking.
+class IDrmFbIdHandle {
+ public:
+  IDrmFbIdHandle() = default;
+  virtual ~IDrmFbIdHandle() = default;
+  IDrmFbIdHandle(IDrmFbIdHandle &&) = delete;
+  IDrmFbIdHandle(const IDrmFbIdHandle &) = delete;
+  auto operator=(const IDrmFbIdHandle &) = delete;
+  auto operator=(IDrmFbIdHandle &&) = delete;
+
+  virtual auto GetFbId [[nodiscard]] () const -> uint32_t = 0;
+};
+
+class DrmFbIdHandle : public IDrmFbIdHandle {
  public:
   static auto CreateInstance(BufferInfo *bo, GemHandle first_gem_handle,
                              DrmDevice &drm) -> std::shared_ptr<DrmFbIdHandle>;
 
-  ~DrmFbIdHandle();
+  ~DrmFbIdHandle() override;
   DrmFbIdHandle(DrmFbIdHandle &&) = delete;
   DrmFbIdHandle(const DrmFbIdHandle &) = delete;
   auto operator=(const DrmFbIdHandle &) = delete;
   auto operator=(DrmFbIdHandle &&) = delete;
 
-  auto GetFbId [[nodiscard]] () const -> uint32_t {
+  auto GetFbId [[nodiscard]] () const -> uint32_t override {
     return fb_id_;
   }
 

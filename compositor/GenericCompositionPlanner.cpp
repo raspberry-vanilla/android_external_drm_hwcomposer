@@ -22,7 +22,6 @@
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
 #include "drm/DrmPlane.h"
-#include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
 #include "utils/log.h"
 
@@ -44,8 +43,8 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
 
 }  // namespace
 
-auto GenericCompositionPlanner::ValidateDisplay(const HwcDisplay* display)
-    -> ValidatedComposition {
+auto GenericCompositionPlanner::ValidateDisplay(
+    const ICompositorDisplay* display) -> ValidatedComposition {
   const auto layers = display->GetOrderLayersByZPos();
 
   const FlatteningController* flatcon = display->GetFlatCon();
@@ -59,7 +58,7 @@ auto GenericCompositionPlanner::ValidateDisplay(const HwcDisplay* display)
 
   bool use_cursor_plane = false;
   const auto* cursor_layer = GetCursorLayer(layers);
-  const auto cursor_plane = display->GetPipe().GetUsablePlanes().second;
+  const auto cursor_plane = display->GetCursorPlane();
   if (cursor_layer != nullptr && cursor_plane != nullptr &&
       !IsClientLayer(display, cursor_layer) &&
       cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData())) {
@@ -127,8 +126,8 @@ auto GenericCompositionPlanner::ValidateDisplay(const HwcDisplay* display)
 }
 
 std::tuple<size_t, size_t> GenericCompositionPlanner::GetClientLayers(
-    const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-    bool use_cursor_plane) {
+    const ICompositorDisplay* display,
+    const std::vector<const HwcLayer*>& layers, bool use_cursor_plane) {
   size_t client_start = 0;
   size_t client_size = 0;
 
@@ -145,7 +144,7 @@ std::tuple<size_t, size_t> GenericCompositionPlanner::GetClientLayers(
                              use_cursor_plane);
 }
 
-bool GenericCompositionPlanner::IsClientLayer(const HwcDisplay* display,
+bool GenericCompositionPlanner::IsClientLayer(const ICompositorDisplay* display,
                                               const HwcLayer* layer) {
   return !HardwareSupportsLayerType(layer->GetSfType()) ||
          !layer->IsLayerUsableAsDevice() || display->CtmByGpu() ||
@@ -189,9 +188,10 @@ auto GenericCompositionPlanner::GetCompositionTypes(
 }
 
 std::tuple<size_t, size_t> GenericCompositionPlanner::GetExtraClientRange(
-    const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-    size_t client_start, size_t client_size, bool use_cursor_plane) {
-  size_t avail_planes = display->GetPipe().GetUsablePlanes().first.size();
+    const ICompositorDisplay* display,
+    const std::vector<const HwcLayer*>& layers, size_t client_start,
+    size_t client_size, bool use_cursor_plane) {
+  size_t avail_planes = display->GetNumAvailablePlanes();
   size_t layers_size = layers.size();
 
   // Cursor plane is not counted among |avail_planes|, so the cursor layer

@@ -41,7 +41,7 @@ class FlatteningController {
  public:
   FlatteningController(DisplayHandle handle, FlatConCallbacks callbacks,
                        std::chrono::milliseconds timeout);
-  ~FlatteningController();
+  virtual ~FlatteningController();
 
   // Disable flattening and stop checking for an idle scene.
   void DisableFlattening();
@@ -52,7 +52,7 @@ class FlatteningController {
 
   // Returns true if the FlatteningController detects that the scene is idle
   // and should be flattened by the compositor.
-  bool ShouldFlatten() const;
+  virtual bool ShouldFlatten() const;
 
   enum class State {
     // Thread is not active, should not flatten.

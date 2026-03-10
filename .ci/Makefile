@@ -97,9 +97,17 @@ clean:
 # IStats includes are not available in aospless
 SKIP_FILES := \
     bufferinfo/GrallocBufferCacheTest.cpp \
+    compositor/mapper/CursorLayerMapperTest.cpp \
+    compositor/mapper/ForceClientCompositionLayerMapperTest.cpp \
+    compositor/mapper/LayerCachingMapperTest.cpp \
+    compositor/mapper/UnderlayMapperTest.cpp \
+    compositor/CompositorTestUtils.h \
+    compositor/CompositorTestUtils.cpp \
     compositor/FlatteningControllerTests.cpp \
     compositor/FlatteningEventAtomReporterDesktop.cpp \
+    compositor/GenericLayerMapperCompositionPlannerTest.cpp \
     drm/DrmDisplayPipelineTest.cpp \
+    drm/DrmTestUtils.h \
     hwc/HwcBufferCacheTest.cpp \
     stats/CompositionStatsAtomReporterDesktop.cpp \
     stats/CountActiveDisplaysReporterDesktop.cpp \

@@ -21,20 +21,22 @@
 namespace android::drm_hwcomposer {
 
 enum class CompositionType;
-class HwcDisplay;
+class ICompositorDisplay;
 class HwcLayer;
 
 // Implementation of CompositionPlanner built on top of upstream drm uAPI.
 class GenericCompositionPlanner : public CompositionPlanner {
  public:
   ~GenericCompositionPlanner() override = default;
-  ValidatedComposition ValidateDisplay(const HwcDisplay* display) override;
+  ValidatedComposition ValidateDisplay(
+      const ICompositorDisplay* display) override;
 
  private:
   static std::tuple<size_t, size_t> GetClientLayers(
-      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-      bool use_cursor_plane);
-  static bool IsClientLayer(const HwcDisplay* display, const HwcLayer* layer);
+      const ICompositorDisplay* display,
+      const std::vector<const HwcLayer*>& layers, bool use_cursor_plane);
+  static bool IsClientLayer(const ICompositorDisplay* display,
+                            const HwcLayer* layer);
 
   static CompositionTypeMap GetCompositionTypes(
       const std::vector<const HwcLayer*>& layers, size_t client_first_z,
@@ -43,8 +45,9 @@ class GenericCompositionPlanner : public CompositionPlanner {
   static uint32_t CalcPixOps(const std::vector<const HwcLayer*>& layers,
                              size_t first_z, size_t size);
   static std::tuple<size_t, size_t> GetExtraClientRange(
-      const HwcDisplay* display, const std::vector<const HwcLayer*>& layers,
-      size_t client_start, size_t client_size, bool use_cursor_plane);
+      const ICompositorDisplay* display,
+      const std::vector<const HwcLayer*>& layers, size_t client_start,
+      size_t client_size, bool use_cursor_plane);
 };
 
 }  // namespace android::drm_hwcomposer

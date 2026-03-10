@@ -665,6 +665,7 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   // TODO: Layer color.
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
   ATRACE_CALL();
 
@@ -716,6 +717,12 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     std::vector<HwcDisplay::ChangedLayer>
         changed_layers = display->ValidateStagedComposition();
     for (auto [layer_id, composition_type] : changed_layers) {
+      // Device occluded layers are exposed as device composited to
+      // SurfaceFlinger, but dropped by drmhwc before committing.
+      if (composition_type == CompositionType::kDeviceOccluded) {
+        composition_type = CompositionType::kDevice;
+      }
+
       changes.AddLayerCompositionChange(command.display, layer_id,
                                         static_cast<Composition>(
                                             composition_type));
@@ -774,6 +781,7 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     cmd_result_writer_->AddReleaseFence(display_handle, hal_release_fences);
   }
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 ndk::ScopedAStatus ComposerClient::executeCommands(
     const std::vector<DisplayCommand>& commands,

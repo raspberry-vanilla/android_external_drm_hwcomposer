@@ -37,6 +37,7 @@ class ResourceManager;
 
 class DrmDevice {
   friend class FakeDrmDevice;
+  friend class FakeCompositorDrmDevice;
 
  public:
   ~DrmDevice();

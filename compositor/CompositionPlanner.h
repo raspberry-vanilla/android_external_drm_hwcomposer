@@ -24,7 +24,7 @@
 namespace android::drm_hwcomposer {
 
 enum class CompositionType;
-class HwcDisplay;
+class ICompositorDisplay;
 class HwcLayer;
 struct LayerToPlaneJoiningPlan;
 
@@ -65,7 +65,8 @@ class CompositionPlanner {
   // ValidateDisplay will be called at most once per frame update. It will not
   // be called again until the AtomicCommitArgs created from these
   // ValidatedComposition have been Executed through DrmAtomicCommitSink.
-  virtual ValidatedComposition ValidateDisplay(const HwcDisplay* display) = 0;
+  virtual ValidatedComposition ValidateDisplay(
+      const ICompositorDisplay* display) = 0;
 
   // Returns a ValidatedComposition that assigns all HwcLayers to client
   // composition.
