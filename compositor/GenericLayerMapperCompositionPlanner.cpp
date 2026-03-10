@@ -15,6 +15,7 @@
  */
 #include "GenericLayerMapperCompositionPlanner.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "compositor/FlatteningController.h"
