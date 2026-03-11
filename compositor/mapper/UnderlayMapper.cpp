@@ -23,9 +23,15 @@
 namespace android::drm_hwcomposer {
 namespace {
 
-bool IsNV12(const HwcLayer* layer) {
+#ifndef DRM_FORMAT_P010
+#define DRM_FORMAT_P010 \
+  fourcc_code('P', '0', '1', '0')
+#endif
+
+bool IsVideoBufferFormat(const HwcLayer* layer) {
   const auto& buffer_info = layer->GetLayerData().bi;
-  return buffer_info.has_value() && buffer_info->format == DRM_FORMAT_NV12;
+  return buffer_info.has_value() && (buffer_info->format == DRM_FORMAT_NV12 ||
+                                     buffer_info->format == DRM_FORMAT_P010);
 }
 }  // namespace
 
@@ -48,7 +54,7 @@ std::vector<LayerMapping> UnderlayMapper::AssignLayers(
   }
 
   // TODO: account for platform-specific costs
-  if (IsNV12(lowest_zpos_layer)) {
+  if (IsVideoBufferFormat(lowest_zpos_layer)) {
     composition_type = CompositionType::kDevice;
   }
 
