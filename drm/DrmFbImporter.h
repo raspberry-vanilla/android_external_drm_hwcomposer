@@ -72,16 +72,27 @@ class DrmFbIdHandle : public IDrmFbIdHandle {
   std::array<GemHandle, kBufferMaxPlanes> gem_handles_{};
 };
 
+// Interface for importing a drm framebuffer from a BufferInfo object.
 class DrmFbImporter {
  public:
-  explicit DrmFbImporter(DrmDevice &drm) : drm_(&drm){};
-  ~DrmFbImporter() = default;
-  DrmFbImporter(const DrmFbImporter &) = delete;
-  DrmFbImporter(DrmFbImporter &&) = delete;
-  auto operator=(const DrmFbImporter &) = delete;
-  auto operator=(DrmFbImporter &&) = delete;
+  virtual auto GetOrCreateFbId(BufferInfo *bo)
+      -> std::shared_ptr<DrmFbIdHandle> = 0;
+  virtual ~DrmFbImporter() = default;
+};
 
-  auto GetOrCreateFbId(BufferInfo *bo) -> std::shared_ptr<DrmFbIdHandle>;
+// Implementation of DrmFbImporter which caches imported framebuffers and tracks
+// their lifetime using std::weak_ptr.
+class DrmFbCachedImporter : public DrmFbImporter {
+ public:
+  explicit DrmFbCachedImporter(DrmDevice &drm) : drm_(&drm) {};
+  ~DrmFbCachedImporter() override = default;
+  DrmFbCachedImporter(const DrmFbCachedImporter &) = delete;
+  DrmFbCachedImporter(DrmFbCachedImporter &&) = delete;
+  auto operator=(const DrmFbCachedImporter &) = delete;
+  auto operator=(DrmFbCachedImporter &&) = delete;
+
+  auto GetOrCreateFbId(BufferInfo *bo)
+      -> std::shared_ptr<DrmFbIdHandle> override;
 
  private:
   void CleanupEmptyCacheElements() {

@@ -254,6 +254,10 @@ class HwcDisplay : public ICompositorDisplay {
     return client_layer_;
   }
 
+  auto GetClientLayer() const -> const HwcLayer & {
+    return client_layer_;
+  }
+
   auto &GetWritebackLayer() {
     return writeback_layer_;
   }

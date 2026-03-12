@@ -145,14 +145,6 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
     return CreateFlattenedComposition(layers, FlattenReason::kCtmWithOffset);
   }
 
-  // If there's only one layer, no need to use the GPU to client composite.
-  if (layers.size() == 1 &&
-      !MustBeClientComposited(display, layers.front().layer)) {
-    layers.front().composition_type = CompositionType::kDevice;
-    return ValidatedComposition{
-        .composition_types = ToCompositionTypes(layers)};
-  }
-
   layers = MapAllClientCompositionRequiredLayers(display, layers);
 
   LayerMapper::MappingValidator validator =
@@ -167,10 +159,22 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
     layers = device_cursor_mapper_.AssignLayers(layers, validator);
   }
 
+  // Mapping dealing with layer caching does not need any testing as they do
+  // not consume actual hardware resources.
   layers = layer_caching_mapper_.AssignLayers(layers, validator);
 
   {
     auto new_layers = underlay_mapper_.AssignLayers(layers, validator);
+
+    ValidatedComposition test_composition = CreateValidatedComposition(
+        new_layers);
+    if (display->TestComposition(test_composition)) {
+      layers = new_layers;
+    }
+  }
+
+  {
+    auto new_layers = leftover_mapper_.AssignLayers(layers, validator);
 
     ValidatedComposition test_composition = CreateValidatedComposition(
         new_layers);

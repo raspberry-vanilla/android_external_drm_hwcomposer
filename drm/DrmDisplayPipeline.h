@@ -28,6 +28,7 @@ class DrmConnector;
 class DrmCrtc;
 class DrmDevice;
 class DrmEncoder;
+class DrmFbImporter;
 class DrmPlane;
 
 struct DrmDisplayPipeline;
@@ -99,6 +100,7 @@ struct DrmDisplayPipeline {
   ~DrmDisplayPipeline();
 
   DrmDevice *device;
+  DrmFbImporter *importer;
 
   std::shared_ptr<BindingOwner<DrmConnector>> connector;
   std::shared_ptr<BindingOwner<DrmConnector>> writeback_connector; 

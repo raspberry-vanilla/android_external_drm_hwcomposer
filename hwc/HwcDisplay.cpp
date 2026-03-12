@@ -440,6 +440,7 @@ auto HwcDisplay::PresentStagedComposition(
         ++stats.used_plane_count;
         break;
       case CompositionType::kSolidColor:
+        break;
       case CompositionType::kInvalid:
         ALOGE("Invalid layer type: %d",
               static_cast<int>(layer.GetValidatedType()));
@@ -1107,6 +1108,8 @@ HwcDisplay::CreateLayerToPlaneJoiningPlan(
         // correctness of the displayed frame.
         break;
       case CompositionType::kSolidColor:
+        // Skip solid color layers
+        continue;
       case CompositionType::kInvalid:
         ALOGE("Invalid layer type: %d", static_cast<int>(type));
         continue;
@@ -1398,8 +1401,7 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   modeset_layer->SetLayerProperties({
       .buffer = std::optional<HwcLayer::Buffer>({
           .bi = modeset_buffer.value(),
-          .fb = GetPipe().device->GetDrmFbImporter().GetOrCreateFbId(
-              &modeset_buffer.value()),
+          .fb = GetPipe().importer->GetOrCreateFbId(&modeset_buffer.value()),
           .fence = {},
       }),
       .blend_mode = BufferBlendMode::kNone,

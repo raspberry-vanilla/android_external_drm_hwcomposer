@@ -426,9 +426,7 @@ static auto ImportFb(HwcDisplay* display,
   if (display->IsInHeadlessMode()) {
     return nullptr;
   }
-  auto fb = display->GetPipe().device->GetDrmFbImporter().GetOrCreateFbId(&bi);
-  ALOGE_IF(fb == nullptr, "Failed to import framebuffer");
-  return fb;
+  return display->GetPipe().importer->GetOrCreateFbId(&bi);
 }
 
 static auto GetBufferCache(HwcDisplay* parent, HwcLayer& layer)

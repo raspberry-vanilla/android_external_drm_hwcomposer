@@ -60,7 +60,7 @@ auto DrmDevice::CreateInstance(std::string const &path,
 
 DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
     : index_in_dev_array_(index), res_man_(res_man) {
-  drm_fb_importer_ = std::make_unique<DrmFbImporter>(*this);
+  drm_fb_importer_ = std::make_unique<DrmFbCachedImporter>(*this);
 }
 
 // NOLINTBEGIN(readability-function-cognitive-complexity)
