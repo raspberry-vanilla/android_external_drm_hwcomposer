@@ -26,6 +26,7 @@
 #include <ui/GraphicTypes.h>
 #include <utils/Trace.h>
 
+#include "backend/BackendManager.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
@@ -571,22 +572,60 @@ void HwcDisplay::SetVsyncCallbacksEnabled(bool enabled) {
   vsync_worker_->SetTimestampCallback(std::move(callback));
 }
 
-bool HwcDisplay::SetDisplayEnabled(bool enabled) {
+bool HwcDisplay::IsDozeSupported() const {
   if (IsInHeadlessMode()) {
-    return true;
+    return false;
   }
+  return BackendManager::GetInstance().IsDozeSupported(
+      GetPipe().device->GetName());
+}
+
+bool HwcDisplay::IsDozeSuspendSupported() const {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+  return BackendManager::GetInstance().IsDozeSuspendSupported(
+      GetPipe().device->GetName());
+}
+
+bool HwcDisplay::IsSuspendSupported() const {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+  return BackendManager::GetInstance().IsSuspendSupported(
+      GetPipe().device->GetName());
+}
+
+HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
+  // Check support before headless because VTS expects headless mode to not
+  // support these.
+  if (mode == PowerMode::kDoze && !IsDozeSupported()) {
+    return HwcDisplay::Error::kUnsupported;
+  }
+  if (mode == PowerMode::kDozeSuspend && !IsDozeSuspendSupported()) {
+    return HwcDisplay::Error::kUnsupported;
+  }
+  if (mode == PowerMode::kSuspend && !IsSuspendSupported()) {
+    return HwcDisplay::Error::kUnsupported;
+  }
+
+  if (IsInHeadlessMode()) {
+    return HwcDisplay::Error::kNone;
+  }
+  bool enabled = mode != PowerMode::kOff;
+
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
     if (GetPipe().atomic_commit_sink->IsActive()) {
-      return true;
+      return HwcDisplay::Error::kNone;
     }
 
     const HwcDisplayConfig *last_requested_config = GetLastRequestedConfig();
     if (last_requested_config) {
       if (SetConfig(last_requested_config->id) != ConfigError::kNone) {
         ALOGE("Failed to set config to re-enable display after teardown.");
-        return false;
+        return HwcDisplay::Error::kBadParameter;
       }
     }
   }
@@ -594,7 +633,7 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
   // Set the display active state.
   AtomicCommitArgs a_args{};
   a_args.blocking = true;
-  a_args.active = enabled;
+  a_args.power_mode = mode;
   if (!enabled) {
     a_args.teardown = true;
   }
@@ -604,7 +643,10 @@ bool HwcDisplay::SetDisplayEnabled(bool enabled) {
            enabled ? "enabled" : "disabled");
   // If setting to |enabled|, log the error and return true. The next frame
   // update will try to set it to active again.
-  return enabled || commit_success;
+  if (!commit_success && !enabled) {
+    return HwcDisplay::Error::kBadParameter;
+  }
+  return HwcDisplay::Error::kNone;
 }
 
 bool HwcDisplay::GetDisplayEnabled() const {
@@ -638,7 +680,7 @@ void HwcDisplay::Deinit() {
     a_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
     ExecuteAtomicCommit(a_args);
     a_args.composition = {};
-    a_args.active = false;
+    a_args.power_mode = PowerMode::kOff;
     a_args.teardown = true;
     ExecuteAtomicCommit(a_args);
 
@@ -891,7 +933,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   }
 
   args.display_mode = config->mode;
-  args.active = true;
+  args.power_mode = PowerMode::kOn;
   args.composition = LayerToPlaneJoiningPlan::
       CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers));
   ALOGW_IF(!args.composition, "No composition for blocking modeset");
@@ -904,9 +946,10 @@ std::optional<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
   auto commit_result = GetPipe().atomic_commit_sink->ExecuteAtomicCommit(
       a_args);
 
-  // Log successful modesets (seamless and full), including teardowns.
-  if (a_args.display_mode || a_args.teardown) {
-    const bool blocking = a_args.blocking || a_args.active || a_args.teardown;
+  // Log successful modesets (seamless and full), including doze, and teardowns.
+  if (a_args.display_mode || a_args.power_mode || a_args.teardown) {
+    const bool blocking = a_args.blocking || a_args.power_mode.has_value() ||
+                          a_args.teardown;
     LogConfigResult(blocking, commit_result.has_value());
   }
 

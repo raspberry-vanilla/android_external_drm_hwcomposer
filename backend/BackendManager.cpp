@@ -96,6 +96,45 @@ std::unique_ptr<DrmDisplayPipeline> BackendManager::CreatePipelineForConnector(
   return backend->CreatePipeline(connector);
 }
 
+bool BackendManager::IsDozeSupported(const std::string &driver_name) {
+  std::string backend_name = Properties::GetBackendOverride();
+  if (backend_name.empty()) {
+    backend_name = driver_name;
+  }
+
+  auto *backend = GetBackendByName(backend_name);
+  if (backend != nullptr) {
+    return backend->SupportsDoze();
+  }
+  return false;
+}
+
+bool BackendManager::IsDozeSuspendSupported(const std::string &driver_name) {
+  std::string backend_name = Properties::GetBackendOverride();
+  if (backend_name.empty()) {
+    backend_name = driver_name;
+  }
+
+  auto *backend = GetBackendByName(backend_name);
+  if (backend != nullptr) {
+    return backend->SupportsDozeSuspend();
+  }
+  return false;
+}
+
+bool BackendManager::IsSuspendSupported(const std::string &driver_name) {
+  std::string backend_name = Properties::GetBackendOverride();
+  if (backend_name.empty()) {
+    backend_name = driver_name;
+  }
+
+  auto *backend = GetBackendByName(backend_name);
+  if (backend != nullptr) {
+    return backend->SupportsSuspend();
+  }
+  return false;
+}
+
 std::unique_ptr<BufferInfoGetter> BackendManager::CreateBufferInfoGetter() {
   // If backend override is not specified, the generic backend will be used.
   std::string backend_name = Properties::GetBackendOverride();

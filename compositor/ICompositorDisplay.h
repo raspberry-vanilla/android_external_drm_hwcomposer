@@ -25,6 +25,7 @@
 
 namespace android::drm_hwcomposer {
 
+class DrmPlane;
 class FlatteningController;
 
 // ICompositorDisplay exists purely to isolate methods in HwcDisplay used inside

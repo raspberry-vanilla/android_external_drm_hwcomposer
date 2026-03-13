@@ -58,6 +58,18 @@ class BackendManager {
     // Get the BufferInfoGetter for the Backend.
     virtual std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter() = 0;
 
+    virtual bool SupportsDoze() const {
+      return false;
+    }
+
+    virtual bool SupportsDozeSuspend() const {
+      return false;
+    }
+
+    virtual bool SupportsSuspend() const {
+      return false;
+    }
+
    private:
     std::string name_;
   };
@@ -73,6 +85,10 @@ class BackendManager {
 
   // Get the BufferInfoGetter for the Backend.
   std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter();
+
+  bool IsDozeSupported(const std::string &driver_name);
+  bool IsDozeSuspendSupported(const std::string &driver_name);
+  bool IsSuspendSupported(const std::string &driver_name);
 
  private:
   Backend *GetBackendByName(std::string &name);

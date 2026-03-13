@@ -102,7 +102,7 @@ std::optional<AtomicCommitResult> DrmAtomicStateManager::CommitFrame(
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_CALL();
 
-  // Clear args.active if it's a no-op.
+  // Clear args.power_mode if it's a no-op.
   CheckDoubleSettingState(args);
 
   if (!args.HasInputs()) {
@@ -111,9 +111,9 @@ std::optional<AtomicCommitResult> DrmAtomicStateManager::CommitFrame(
   }
 
   if (!committed_frame_state_.crtc_active_state) {
-    // Force args.active if the display is not active and there are other
+    // Force args.power_mode if the display is not active and there are other
     // things to commit.
-    args.active = true;
+    args.power_mode = HwcDisplay::PowerMode::kOn;
   }
 
   auto atomic_request = GetAtomicModeReqForArgs(args);
@@ -141,7 +141,7 @@ std::optional<AtomicCommitResult> DrmAtomicStateManager::CommitFrame(
 
   WaitLastFrame();
 
-  bool nonblock = !args.blocking && !args.active;
+  bool nonblock = !args.blocking && !args.power_mode;
 
   flags |= nonblock ? DRM_MODE_ATOMIC_NONBLOCK : 0U;
   int err = 0;
@@ -205,9 +205,12 @@ std::optional<AtomicCommitResult> DrmAtomicStateManager::CommitFrame(
 
 void DrmAtomicStateManager::CheckDoubleSettingState(
     AtomicCommitArgs &args) const {
-  if (args.active && *args.active == committed_frame_state_.crtc_active_state) {
-    /* Don't set the same state twice */
-    args.active.reset();
+  if (args.power_mode) {
+    bool is_active = *args.power_mode != HwcDisplay::PowerMode::kOff;
+    if (is_active == committed_frame_state_.crtc_active_state) {
+      /* Don't set the same state twice */
+      args.power_mode.reset();
+    }
   }
 }
 
@@ -260,19 +263,20 @@ bool DrmAtomicStateManager::SetOutputFence(AtomicRequest &request) {
 
 bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
                                               AtomicRequest &request) {
-  if (!args.active) {
+  if (!args.power_mode) {
     return true;
   }
   auto *crtc = pipe_->crtc->Get();
   auto *connector = pipe_->connector->Get();
-  request.new_frame_state.crtc_active_state = *args.active;
+  bool active = *args.power_mode != HwcDisplay::PowerMode::kOff;
+  request.new_frame_state.crtc_active_state = active;
   if (!crtc->GetActiveProperty().AtomicSet(*request.property_set,
-                                           *args.active ? 1 : 0) ||
+                                           active ? 1 : 0) ||
       !connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
                                                 crtc->GetId())) {
     return false;
   }
-  if (!*args.active && args.teardown) {
+  if (!active && args.teardown) {
     if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0) ||
         !crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
       return false;

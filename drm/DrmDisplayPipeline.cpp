@@ -17,6 +17,7 @@
 #include "DrmDisplayPipeline.h"
 
 #include "compositor/CompositionPlanner.h"
+#include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"

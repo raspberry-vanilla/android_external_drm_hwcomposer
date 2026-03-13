@@ -65,6 +65,12 @@ inline constexpr uint32_t kPrimaryDisplay = 0;
 // NOLINTNEXTLINE
 class HwcDisplay : public ICompositorDisplay {
  public:
+  enum class Error {
+    kNone,
+    kBadParameter,
+    kUnsupported,
+  };
+
   enum ConfigError {
     kNone,
     kBadConfig,
@@ -74,6 +80,14 @@ class HwcDisplay : public ICompositorDisplay {
   };
 
   enum DisplayType { kInternal, kExternal, kVirtual };
+
+  enum class PowerMode {
+    kOff,
+    kDoze,
+    kDozeSuspend,
+    kSuspend,
+    kOn,
+  };
 
   HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
@@ -165,9 +179,6 @@ class HwcDisplay : public ICompositorDisplay {
 
   // Enable or disable vsync callbacks.
   void SetVsyncCallbacksEnabled(bool enabled);
-
-  // Enable or disable the display.
-  bool SetDisplayEnabled(bool enabled);
 
   bool GetDisplayEnabled() const;
 
@@ -273,7 +284,14 @@ class HwcDisplay : public ICompositorDisplay {
 
   std::pair<uint32_t, uint32_t> GetSize() const override;
 
+  // Enable or disable the display.
+  HwcDisplay::Error SetPowerMode(PowerMode mode);
+
  private:
+  bool IsDozeSupported() const;
+  bool IsDozeSuspendSupported() const;
+  bool IsSuspendSupported() const;
+
   // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if
   // such AtomicCommitArgs cannot be created due to lack of drm resources or
   // invalid HwcDisplay or HwcLayer state.

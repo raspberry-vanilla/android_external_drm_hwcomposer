@@ -1362,6 +1362,17 @@ ndk::ScopedAStatus ComposerClient::setDisplayedContentSamplingEnabled(
   return ToBinderStatus(hwc3::Error::kUnsupported);
 }
 
+static constexpr hwc3::Error DisplayToAidlError(HwcDisplay::Error err) {
+  switch (err) {
+    case HwcDisplay::Error::kNone:
+      return hwc3::Error::kNone;
+    case HwcDisplay::Error::kBadParameter:
+      return hwc3::Error::kBadParameter;
+    case HwcDisplay::Error::kUnsupported:
+      return hwc3::Error::kUnsupported;
+  }
+}
+
 ndk::ScopedAStatus ComposerClient::setPowerMode(int64_t display_handle,
                                                 PowerMode mode) {
   DEBUG_FUNC();
@@ -1373,22 +1384,29 @@ ndk::ScopedAStatus ComposerClient::setPowerMode(int64_t display_handle,
 
   // Only OFF and ON are supported. VTS requires checking for invalid enum
   // values.
-  switch (static_cast<int32_t>(mode)) {
-    case static_cast<int32_t>(PowerMode::OFF):
-    case static_cast<int32_t>(PowerMode::ON):
+  HwcDisplay::PowerMode hwc_mode = HwcDisplay::PowerMode::kOn;
+  switch (mode) {
+    case PowerMode::OFF:
+      hwc_mode = HwcDisplay::PowerMode::kOff;
       break;
-    case static_cast<int32_t>(PowerMode::DOZE):
-    case static_cast<int32_t>(PowerMode::DOZE_SUSPEND):
-    case static_cast<int32_t>(PowerMode::ON_SUSPEND):
-      return ToBinderStatus(hwc3::Error::kUnsupported);
+    case PowerMode::ON:
+      hwc_mode = HwcDisplay::PowerMode::kOn;
+      break;
+    case PowerMode::DOZE:
+      hwc_mode = HwcDisplay::PowerMode::kDoze;
+      break;
+    case PowerMode::DOZE_SUSPEND:
+      hwc_mode = HwcDisplay::PowerMode::kDozeSuspend;
+      break;
+    case PowerMode::ON_SUSPEND:
+      hwc_mode = HwcDisplay::PowerMode::kSuspend;
+      break;
     default:
       return ToBinderStatus(hwc3::Error::kBadParameter);
   }
 
-  if (!display->SetDisplayEnabled(mode == PowerMode::ON)) {
-    return ToBinderStatus(hwc3::Error::kBadParameter);
-  }
-  return ndk::ScopedAStatus::ok();
+  auto err = display->SetPowerMode(hwc_mode);
+  return ToBinderStatus(DisplayToAidlError(err));
 }
 
 ndk::ScopedAStatus ComposerClient::setReadbackBuffer(

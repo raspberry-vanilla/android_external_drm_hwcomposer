@@ -24,6 +24,7 @@
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmMode.h"
 #include "drm/drm_mode.h"
+#include "hwc/HwcDisplay.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -43,7 +44,7 @@ struct AtomicCommitArgs {
   bool teardown = false;
   bool seamless = false;
   std::optional<DrmMode> display_mode;
-  std::optional<bool> active;
+  std::optional<HwcDisplay::PowerMode> power_mode;
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
   std::shared_ptr<HalColorTransforMatrix> color_matrix;
   std::optional<Colorspace> colorspace;
@@ -58,7 +59,7 @@ struct AtomicCommitArgs {
 
   /* helpers */
   auto HasInputs() const -> bool {
-    return display_mode || active || composition;
+    return display_mode || power_mode || composition;
   }
 };
 

@@ -102,7 +102,7 @@ class ColorUtil {
       case ColorMode::kAdobeRgb:
       case ColorMode::kBt2100Pq:
       case ColorMode::kBt2100Hlg:
-        ALOGW("Unsupported color mode: %s", mode);
+        ALOGW("Unsupported color mode: %d", static_cast<int32_t>(mode));
         return Colorspace::kDefault;
     }
   }
