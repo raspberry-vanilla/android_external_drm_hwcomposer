@@ -39,7 +39,6 @@ class Properties {
   static auto UseColorPipeline() -> bool;
   static auto ForcedHolePunchingEnabled() -> bool;
   static auto GetForceMode() -> std::string;
-  static auto DisableHdr() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer
