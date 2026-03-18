@@ -188,6 +188,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
       colorspace_ = Colorspace::kBt2020Rgb;
+      transfer_func_ = TransferFunction::kPq;
       break;
     }
     case OutputType::kSystem: {
@@ -197,6 +198,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         SetHdrOutputMetadata(hdr_types.front());
         min_bpc_ = 8;
         colorspace_ = Colorspace::kBt2020Rgb;
+        transfer_func_ = TransferFunction::kPq;
         break;
       }
       [[fallthrough]];
@@ -209,6 +211,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       colorspace_ = Colorspace::kDefault;
+      transfer_func_ = TransferFunction::kUnknown;
   }
 }
 
@@ -227,8 +230,10 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Create modeset commit.");
   // Allow HDR only on external displays
-  if (GetPipe().connector->Get()->IsExternal())
+  if (hwc_->GetResMan().UseColorPipeline() &&
+      GetPipe().connector->Get()->IsExternal()) {
     SetOutputType(new_config->output_type);
+  }
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
   // separate test commit, since the commit does a test anyways.
@@ -278,6 +283,7 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
 
   // Allow HDR only on external displays
   if (current_config && !IsInHeadlessMode() &&
+      hwc_->GetResMan().UseColorPipeline() &&
       GetPipe().connector->Get()->IsExternal()) {
     SetOutputType(current_config->output_type);
   }
@@ -807,25 +813,14 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
 }
 
 auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
-  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline()) {
+  // Allow HDR only on external displays
+  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline() ||
+      !GetPipe().connector->Get()->IsExternal()) {
     return {ColorMode::kNative};
   }
 
   std::vector<ColorMode> modes;
   GetEdid()->GetColorModes(modes);
-
-  // disable non-P3 color modes until HDR tone-mapping is supported
-  modes.erase(std::remove_if(modes.begin(), modes.end(),
-                             [](ColorMode m) {
-                               switch (m) {
-                                 case ColorMode::kDciP3:
-                                 case ColorMode::kDisplayP3:
-                                   return false;
-                                 default:
-                                   return true;
-                               }
-                             }),
-              modes.end());
 
   if (modes.empty()) {
     modes.emplace_back(ColorMode::kNative);
@@ -920,6 +915,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
+  args.transfer_func = transfer_func_;
   args.hdr_metadata = hdr_metadata_;
   args.min_bpc = min_bpc_;
 
@@ -1044,6 +1040,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
+  a_args.transfer_func = transfer_func_;
   a_args.hdr_metadata = hdr_metadata_;
   a_args.min_bpc = min_bpc_;
 
@@ -1270,8 +1267,10 @@ bool HwcDisplay::CtmByGpu() const {
   if (color_transform_is_identity_)
     return false;
 
-  if (!hwc_->GetResMan().UseColorPipeline() &&
-      GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
+  if (hwc_->GetResMan().UseColorPipeline())
+    return false;
+
+  if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
     return false;
 
   if (hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)

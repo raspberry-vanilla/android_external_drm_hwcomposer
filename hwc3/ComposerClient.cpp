@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "compositor/LayerData.h"
 #define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
 #include "ComposerClient.h"
@@ -76,6 +77,7 @@ using ::android::drm_hwcomposer::LayerTransform;
 using ::android::drm_hwcomposer::PanelOrientation;
 using ::android::drm_hwcomposer::SrcRectInfo;
 using ::android::drm_hwcomposer::StatsPoller;
+using ::android::drm_hwcomposer::TransferFunction;
 
 using HwcOutputType = ::android::drm_hwcomposer::OutputType;
 #if __ANDROID_API__ >= 36
@@ -197,6 +199,32 @@ std::optional<BufferSampleRange> AidlToSampleRange(
     return std::nullopt;
   }
   return AidlToSampleRange(dataspace->dataspace);
+}
+
+std::optional<TransferFunction> AidlToTransferFunc(
+    const common::Dataspace& dataspace) {
+  int32_t transfer_func = static_cast<int32_t>(dataspace) &
+                          static_cast<int32_t>(
+                              common::Dataspace::TRANSFER_MASK);
+  switch (transfer_func) {
+    case static_cast<int32_t>(common::Dataspace::TRANSFER_ST2084):
+      return TransferFunction::kPq;
+    case static_cast<int32_t>(common::Dataspace::TRANSFER_SRGB):
+      return TransferFunction::kSrgb;
+    case static_cast<int32_t>(common::Dataspace::UNKNOWN):
+      return TransferFunction::kUnknown;
+    default:
+      ALOGE("Unsupported transfer function: %d", transfer_func);
+      return std::nullopt;
+  }
+}
+
+std::optional<TransferFunction> AidlToTransferFunc(
+    const std::optional<ParcelableDataspace>& dataspace) {
+  if (!dataspace) {
+    return std::nullopt;
+  }
+  return AidlToTransferFunc(dataspace->dataspace);
 }
 
 std::optional<int64_t> AidlToPresentTimeNs(
@@ -638,6 +666,7 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   properties.colorspace = AidlToColorspace(command.dataspace);
   properties.color_encoding = AidlToColorEncoding(command.dataspace);
   properties.sample_range = AidlToSampleRange(command.dataspace);
+  properties.transfer_func = AidlToTransferFunc(command.dataspace);
   properties.composition_type = AidlToCompositionType(command.composition);
   properties.display_frame = AidlToDstRect(command.displayFrame);
   properties.alpha = AidlToAlpha(command.planeAlpha);
@@ -1636,6 +1665,7 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
       .color_encoding = AidlToColorEncoding(command.dataspace),
       .sample_range = AidlToSampleRange(command.dataspace),
       .colorspace = AidlToColorspace(command.dataspace),
+      .transfer_func = AidlToTransferFunc(command.dataspace),
   };
   client_layer.SetLayerProperties(properties);
 }

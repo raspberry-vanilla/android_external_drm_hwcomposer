@@ -469,23 +469,45 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
     }
     request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
 
-    if (pipe_->device->GetResMan().UseColorPipeline()) {
+    auto *drm = pipe_->device;
+    if (drm->GetResMan().UseColorPipeline() && plane->HasColorPipeline()) {
       std::shared_ptr<drm_color_ctm_3x4> drm_color_matrix = ColorUtil::
           GamutAdjustIfNeeded(layer.colorspace,
                               args.colorspace.value_or(Colorspace::kDefault),
                               args.color_matrix, color_transform_map_);
       DrmModeUserPropertyBlobUnique ctm_3x4_blob;
       if (drm_color_matrix) {
-        ctm_3x4_blob = pipe_->device
-                           ->RegisterUserPropertyBlob(drm_color_matrix.get(),
-                                                      sizeof(
-                                                          drm_color_ctm_3x4));
+        ctm_3x4_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
+                                                     sizeof(drm_color_ctm_3x4));
       }
-      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob) !=
-          0) {
+
+      const auto &[degamma_lut, gamma_lut] = ColorUtil::
+          Get1DLutsIfNeeded(layer.transfer_func,
+                            args.transfer_func.value_or(
+                                TransferFunction::kUnknown),
+                            plane->GetDegamma1DLutSize(),
+                            plane->GetGamma1DLutSize(), degamma_lut_1d_map_,
+                            gamma_lut_1d_map_);
+      DrmModeUserPropertyBlobUnique degamma_lut_blob;
+      DrmModeUserPropertyBlobUnique gamma_lut_blob;
+      if (!degamma_lut.empty()) {
+        degamma_lut_blob = drm->RegisterUserPropertyBlob(
+            degamma_lut.data(),
+            sizeof(drm_color_lut32) * plane->GetDegamma1DLutSize());
+      }
+      if (!gamma_lut.empty()) {
+        gamma_lut_blob = drm->RegisterUserPropertyBlob(
+            gamma_lut.data(),
+            sizeof(drm_color_lut32) * plane->GetGamma1DLutSize());
+      }
+      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob,
+                                        degamma_lut_blob,
+                                        gamma_lut_blob) != 0) {
         return false;
       }
       request.used_kms_objects.blobs.emplace_back(std::move(ctm_3x4_blob));
+      request.used_kms_objects.blobs.emplace_back(std::move(gamma_lut_blob));
+      request.used_kms_objects.blobs.emplace_back(std::move(degamma_lut_blob));
     }
   }
 

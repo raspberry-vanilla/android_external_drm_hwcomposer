@@ -46,6 +46,12 @@ struct drm_plane_size_hint_local {
   __u16 height;
 };
 
+struct DrmColorPipeline {
+  std::vector<std::unique_ptr<DrmColorOp>> color_ops{};
+  uint64_t gamma_lut_size{};
+  uint64_t degamma_lut_size{};
+};
+
 class DrmPlane : public PipelineBindable<DrmPlane> {
   friend class FakeDrmPlane;
 
@@ -71,9 +77,10 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   auto AtomicSetState(drmModeAtomicReq &pset, LayerData &layer, uint32_t zpos,
                       uint32_t crtc_id, DstRectInfo &whole_display_rect,
                       DrmModeUserPropertyBlobUnique &damage_out) const -> int;
-  auto AtomicSetColorPipeline(drmModeAtomicReq &pset,
-                              DrmModeUserPropertyBlobUnique &ctm_blob) const
-      -> int;
+  auto AtomicSetColorPipeline(
+      drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
+      DrmModeUserPropertyBlobUnique &degamma_lut_blob,
+      DrmModeUserPropertyBlobUnique &gamma_lut_blob) const -> int;
   auto AtomicDisablePlane(drmModeAtomicReq &pset) -> int;
   auto &GetZPosProperty() const {
     return zpos_property_;
@@ -81,6 +88,16 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
 
   auto GetId() const {
     return plane_->plane_id;
+  }
+
+  auto HasColorPipeline() const -> bool {
+    return !color_pipeline_.color_ops.empty();
+  }
+  auto GetDegamma1DLutSize() const {
+    return color_pipeline_.degamma_lut_size;
+  }
+  auto GetGamma1DLutSize() const {
+    return color_pipeline_.gamma_lut_size;
   }
 
  private:
@@ -125,7 +142,6 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   std::map<BufferSampleRange, uint64_t> color_range_enum_map_;
   std::map<uint64_t, ColorOpType> color_op_type_enum_map_;
 
-  using DrmColorPipeline = std::vector<std::unique_ptr<DrmColorOp>>;
   DrmColorPipeline color_pipeline_;
 
   uint64_t transform_enum_mask_ = DRM_MODE_ROTATE_0;

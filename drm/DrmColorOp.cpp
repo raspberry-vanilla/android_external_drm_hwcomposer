@@ -40,6 +40,10 @@ std::string DrmColorOp::DumpState() {
   ss << "├─ \"" << type_.GetName() << "\" = "
      << type_.GetEnumNameFromValue(type_.GetValue().value_or(0)).value_or("")
      << "\n";
+  if (size_ && size_.IsRange() && size_.GetValue().has_value()) {
+    ss << "├─ \"" << size_.GetName() << "\" = " << size_.GetValue().value_or(0)
+       << "\n";
+  }
   ss << "└─ \"" << next_.GetName() << "\" = " << next_.GetValue().value_or(-1);
   return ss.str();
 }
@@ -76,6 +80,9 @@ auto DrmColorOp::CreateInstance(DrmDevice &dev, uint64_t color_op_id,
     ALOGE("Failed to get DATA property");
     return {};
   }
+
+  // Optional color op property
+  GetColorOpProperty(dev, *c, "SIZE", &c->size_);
 
   return c;
 }

@@ -77,7 +77,7 @@ class DrmDevice {
 
   std::string GetName() const;
 
-  auto RegisterUserPropertyBlob(void *data, size_t length) const
+  auto RegisterUserPropertyBlob(const void *data, size_t length) const
       -> DrmModeUserPropertyBlobUnique;
 
   auto HasAddFb2ModifiersSupport() const {

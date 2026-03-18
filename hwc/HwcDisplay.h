@@ -378,6 +378,7 @@ class HwcDisplay : public ICompositorDisplay {
   bool ctm_has_offset_ = false;
   ContentType content_type_ = ContentType::kNoData;
   Colorspace colorspace_{};
+  TransferFunction transfer_func_{};
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
   // Most recent result of ValidateStagedComposition. Must be kept alive until

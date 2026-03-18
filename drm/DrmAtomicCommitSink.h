@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "compositor/LayerData.h"
 #include "drm/DrmMode.h"
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplay.h"
@@ -33,6 +34,7 @@ class IDrmFbIdHandle;
 struct LayerToPlaneJoiningPlan;
 
 enum class Colorspace;
+enum class TransferFunction;
 enum class ContentProtection;
 enum class ContentType;
 enum class HdcpContentType;
@@ -48,6 +50,7 @@ struct AtomicCommitArgs {
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
   std::shared_ptr<HalColorTransforMatrix> color_matrix;
   std::optional<Colorspace> colorspace;
+  std::optional<TransferFunction> transfer_func;
   std::optional<ContentType> content_type;
   std::shared_ptr<hdr_output_metadata> hdr_metadata;
   std::optional<HdcpContentType> hdcp_content_type;

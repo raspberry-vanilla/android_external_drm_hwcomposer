@@ -30,8 +30,8 @@
 #include "compositor/LayerData.h"
 #include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmMode.h"
-#include "drm/drm_mode.h"
 #include "math/mat3.h"
+#include "utils/ColorUtil.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -159,6 +159,9 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
 
   // Cached gamut mappings
   std::map<std::tuple<Colorspace, Colorspace>, const mat3> color_transform_map_;
+  // Cached 1D LUTs
+  std::map<std::tuple<TransferFunction, size_t>, Lut1D> degamma_lut_1d_map_;
+  std::map<std::tuple<TransferFunction, size_t>, Lut1D> gamma_lut_1d_map_;
 };
 
 }  // namespace android::drm_hwcomposer

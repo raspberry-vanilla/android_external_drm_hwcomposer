@@ -47,6 +47,9 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.sample_range) {
     sample_range_ = layer_properties.sample_range.value();
   }
+  if (layer_properties.transfer_func) {
+    transfer_func_ = layer_properties.transfer_func.value();
+  }
   if (layer_properties.composition_type) {
     sf_type_ = layer_properties.composition_type.value();
   }
@@ -91,6 +94,9 @@ void HwcLayer::PopulateLayerData() {
   }
   if (sample_range_ != BufferSampleRange::kUndefined) {
     layer_data_.bi->sample_range = sample_range_;
+  }
+  if (transfer_func_ != TransferFunction::kUnknown) {
+    layer_data_.transfer_func = transfer_func_;
   }
 }
 

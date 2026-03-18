@@ -21,11 +21,16 @@
 #include <utils/log.h>
 
 #include "compositor/DisplayInfo.h"
+#include "compositor/LayerData.h"
 #include "drm/drm_mode.h"
 #include "math/mat3.h"
 #include "math/mat4.h"
 
 namespace android::drm_hwcomposer {
+
+using Lut1D = std::vector<drm_color_lut32>;
+
+inline const Lut1D kEmptyLut = {};
 
 class ColorUtil {
  public:
@@ -113,6 +118,18 @@ class ColorUtil {
       const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
       std::map<std::tuple<Colorspace, Colorspace>, const mat3>
           &color_transform_cache);
+
+  /* Creates 1D Gamma/Degamma LUTs using an appropriate EOTF for the given
+   * colorspace and adds it to the lut_1d_map and returns the map element
+   * reference. If a LUT has already been generated for this colorspace, it
+   * returns that LUT from the mapping. If not LUT is needed, returns an empty
+   * array reference.
+   */
+  static std::tuple<const Lut1D &, const Lut1D &> Get1DLutsIfNeeded(
+      TransferFunction src_tf, TransferFunction dest_tf,
+      size_t degamma_lut_size, size_t gamma_lut_size,
+      std::map<std::tuple<TransferFunction, size_t>, Lut1D> &degamma_lut_map,
+      std::map<std::tuple<TransferFunction, size_t>, Lut1D> &gamma_lut_map);
 
  private:
   /* Converts a column-major 4x4 float type flat array matrix into

@@ -179,7 +179,7 @@ auto DrmDevice::Init(const char *path) -> int {
 }
 // NOLINTEND(readability-function-cognitive-complexity)
 
-auto DrmDevice::RegisterUserPropertyBlob(void *data, size_t length) const
+auto DrmDevice::RegisterUserPropertyBlob(const void *data, size_t length) const
     -> DrmModeUserPropertyBlobUnique {
   struct drm_mode_create_blob create_blob {};
   create_blob.length = length;

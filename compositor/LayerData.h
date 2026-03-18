@@ -41,6 +41,12 @@ enum class CompositionType {
   kDeviceOccluded
 };
 
+enum class TransferFunction : int32_t {
+  kUnknown,
+  kSrgb,
+  kPq,
+};
+
 /* Rotation is defined in the clockwise direction */
 /* The flip is done before rotation */
 struct LayerTransform {
@@ -114,6 +120,7 @@ struct LayerData {
   PresentInfo pi;
   SharedFd acquire_fence;
   Colorspace colorspace;
+  TransferFunction transfer_func;
 };
 
 }  // namespace android::drm_hwcomposer
