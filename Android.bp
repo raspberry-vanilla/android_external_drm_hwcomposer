@@ -310,6 +310,7 @@ cc_test_host {
         "drm/DrmDisplayPipeline.cpp",
         "drm/DrmDisplayPipelineTest.cpp",
         "drm/DrmEncoder.cpp",
+        "drm/DrmFbImporter.cpp",
         "drm/DrmMode.cpp",
         "drm/DrmPlane.cpp",
         "drm/DrmProperty.cpp",
@@ -338,6 +339,14 @@ cc_test_host {
     shared_libs: [
         "libhardware",
     ],
+    target: {
+        host: {
+            include_dirs: [
+                "bionic/libc/kernel/uapi",
+                "bionic/libc/kernel/uapi/drm",
+            ],
+        },
+    },
 }
 
 soong_config_module_type {
