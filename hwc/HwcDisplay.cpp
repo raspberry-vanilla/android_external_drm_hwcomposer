@@ -867,11 +867,11 @@ auto HwcDisplay::StartHdcp() -> bool {
    */
   if (hdcpcon_ == nullptr) {
     ALOGE(
-        "HDCP requested, but HDCP properties not available on that "
+        "Client requested HDCP, but HDCP properties not available on that "
         "display");
     return false;
   }
-  ALOGI("HDCP requested to start");
+  ALOGI("Client requested to start HDCP");
   hdcpcon_->Start();
   return true;
 }
