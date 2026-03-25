@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <vector>
 
 namespace android::drm_hwcomposer {
 
