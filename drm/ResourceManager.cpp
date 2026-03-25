@@ -50,6 +50,7 @@ void ResourceManager::Init() {
   }
 
   color_pipeline_enabled_ = Properties::UseColorPipeline();
+  force_p3_support_ = Properties::ForceP3Support();
 
   // Could be a valid path or it can have at the end of it the wildcard %
   // which means that it will try open all devices until an error is met.

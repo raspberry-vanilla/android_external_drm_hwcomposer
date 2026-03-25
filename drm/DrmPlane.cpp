@@ -204,9 +204,14 @@ int DrmPlane::Init() {
     }
   }
 
-  if (drm_->GetResMan().UseColorPipeline() &&
-      GetPlaneProperty("COLOR_PIPELINE", color_pipeline_property_,
-                       Presence::kOptional)) {
+  if (drm_->GetResMan().UseColorPipeline() && type_ != DRM_PLANE_TYPE_CURSOR) {
+    // Reject planes without color pipeline API
+    if (!GetPlaneProperty("COLOR_PIPELINE", color_pipeline_property_,
+                          Presence::kOptional)) {
+      ALOGW("Plane[%d] does not support COLOR_PIPELINE. Rejecting.", plane_->plane_id);
+      return -ENOTSUP;
+    }
+
     // Get color pipeline start nodes
     const auto color_pipelines = color_pipeline_property_.GetEnumValues();
     for (const uint64_t &color_pipeline_start_id : color_pipelines) {

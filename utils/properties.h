@@ -38,6 +38,7 @@ class Properties {
   static auto GetDevicePath() -> std::string;
   static auto UseColorPipeline() -> bool;
   static auto ForcedHolePunchingEnabled() -> bool;
+  static auto ForceP3Support() -> bool;
   static auto GetForceMode() -> std::string;
 };
 

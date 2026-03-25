@@ -85,6 +85,14 @@ auto inline property_get_bool(const char *key, int8_t default_value) -> int8_t {
 namespace android::drm_hwcomposer {
 
 /**
+ * Adds DCI-P3 and Display-P3 support to internal
+ * panels regardless of the information provided by the EDID.
+ */
+auto Properties::ForceP3Support() -> bool {
+  return (property_get_bool("vendor.hwc.drm.force_p3_support", 0) != 0);
+}
+
+/**
  * Determine if color pipeline feature is enabled. This uses the color pipeline
  * plane property to configure color settings instead of color_encoding etc.
  */
