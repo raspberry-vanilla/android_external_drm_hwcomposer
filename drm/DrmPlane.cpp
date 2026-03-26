@@ -208,7 +208,8 @@ int DrmPlane::Init() {
     // Reject planes without color pipeline API
     if (!GetPlaneProperty("COLOR_PIPELINE", color_pipeline_property_,
                           Presence::kOptional)) {
-      ALOGW("Plane[%d] does not support COLOR_PIPELINE. Rejecting.", plane_->plane_id);
+      ALOGW("Plane[%d] does not support COLOR_PIPELINE. Rejecting.",
+            plane_->plane_id);
       return -ENOTSUP;
     }
 

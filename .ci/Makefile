@@ -8,10 +8,11 @@ CLANG_TIDY := clang-tidy-19
 OUT_DIR := /tmp/drm_hwcomposer/build
 SRC_DIR := .
 ANDROID_SDK_VERSION ?= 36
+STD ?= gnu++17
 
 CXXFLAGS := -Wall -Wextra -Werror -Wno-missing-designated-field-initializers
 CXXFLAGS += -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS -Wthread-safety
-CXXFLAGS += -fvisibility-inlines-hidden -std=gnu++17 -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -fno-rtti
+CXXFLAGS += -fvisibility-inlines-hidden -std=$(STD) -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -fno-rtti
 CXXFLAGS += --target=aarch64-linux-android$(ANDROID_SDK_VERSION)
 
 CXXARGS := $(shell cat $(BASE_DIR)/toolchain_wrapper/sharedlib.cppflags)
