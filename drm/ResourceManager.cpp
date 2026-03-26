@@ -108,7 +108,8 @@ void ResourceManager::Init() {
   uevent_listener_->RegisterHotplugHandler([this] {
     const std::unique_lock lock(GetMainLock());
     for (auto &drm : drms_) {
-      drm->RefreshConnectors();
+      auto stale_connectors = drm->RefreshConnectors();
+      DetachStalePipelines(stale_connectors);
     }
     UpdateFrontendDisplays();
   });
@@ -185,6 +186,19 @@ void ResourceManager::UpdateFrontendDisplays() {
     }
   }
   frontend_interface_->FinalizeDisplayBinding();
+}
+
+void ResourceManager::DetachStalePipelines(
+    const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors) {
+  for (const auto &conn : stale_connectors) {
+    auto it = attached_pipelines_.find(conn.get());
+    if (it != attached_pipelines_.end()) {
+      ALOGI("Detaching pipeline for stale connector %s (id=%d)",
+            conn->GetName().c_str(), conn->GetId());
+      frontend_interface_->UnbindDisplay(it->second);
+      attached_pipelines_.erase(it);
+    }
+  }
 }
 
 void ResourceManager::DetachAllFrontendDisplays() {

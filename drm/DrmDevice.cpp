@@ -287,14 +287,18 @@ auto DrmDevice::GetConnectors()
   return connectors_;
 }
 
-auto DrmDevice::RefreshConnectors() -> void {
+auto DrmDevice::RefreshConnectors()
+    -> std::vector<std::unique_ptr<DrmConnector>> {
+  std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
+
   auto res = MakeDrmModeResUnique(*GetFd());
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
-    return;
+    return stale_connectors;
   }
 
-  // Remove the stale connectors present in connectors_ but not in DRM resources
+  // Remove stale connectors (present in connectors_ but not in DRM resources)
+  // and transfer their ownership to the returned vector.
   std::set<uint32_t> conn_ids_present;
   for (auto it = begin(connectors_); it != end(connectors_);) {
     auto stale = true;
@@ -307,11 +311,10 @@ auto DrmDevice::RefreshConnectors() -> void {
         break;
       }
     }
-    if (stale && it->get()->GetPipeline() == nullptr) {
+    if (stale) {
+      stale_connectors.emplace_back(std::move(*it));
       it = connectors_.erase(it);
     } else {
-      ALOGE_IF(stale, "Stale connector %d %s has pipeline attached",
-               it->get()->GetId(), it->get()->GetName().c_str());
       ++it;
     }
   }
@@ -331,6 +334,8 @@ auto DrmDevice::RefreshConnectors() -> void {
       connectors_.emplace_back(std::move(conn));
     }
   }
+
+  return stale_connectors;
 }
 
 auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
