@@ -1,0 +1,177 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#define ATRACE_TAG ATRACE_TAG_GRAPHICS
+
+#include <utils/Trace.h>
+
+#include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/DrmAtomicCommitSink.h"
+#include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "utils/log.h"
+
+namespace android::drm_hwcomposer {
+namespace {
+
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+bool CommitFrame(
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args,
+    bool test_only,
+    std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> &results) {
+  if (args.empty()) {
+    return false;
+  }
+
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto *drm = (static_cast<DrmAtomicStateManager *>(args.front().first))
+                  ->GetDevice();
+  DrmModeAtomicReqUnique pset = MakeDrmModeAtomicReqUnique();
+  int err = 0;
+  bool seamless = args.front().second.seamless;
+  bool nonblock = true;
+  std::map<AtomicStateManager *, std::unique_ptr<AtomicRequest>> requests;
+  for (auto [atomic_state_manager, arg] : args) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    if (static_cast<DrmAtomicStateManager *>(atomic_state_manager)
+            ->GetDevice() != drm) {
+      ALOGE("Commit for different device");
+      return false;
+    }
+    if (seamless != arg.seamless) {
+      ALOGE("Commit for different seamless level");
+      return false;
+    }
+    auto request = atomic_state_manager->GetAtomicModeReqForArgs(arg);
+    if (!arg.HasInputs()) {
+      continue;
+    }
+    if (!request) {
+      ALOGE("Failed to create request.");
+      return false;
+    }
+
+    err = drmModeAtomicMerge(
+        pset.get(),
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        (static_cast<DrmAtomicStateManager::DrmAtomicRequest *>(request.get()))
+            ->property_set.get());
+    nonblock &= !arg.blocking && !arg.power_mode;
+    if (err != 0) {
+      ALOGE("Failed to append request");
+      return false;
+    }
+    requests[atomic_state_manager] = std::move(request);
+  }
+
+  if (requests.empty()) {
+    ALOGD("Commiting no input, success.");
+    return true;
+  }
+
+  if (!test_only) {
+    for (const auto &[atomic_state_manager, _] : args) {
+      atomic_state_manager->WaitLastFrame();
+    }
+  }
+
+  const int error_buf_max_size = 64;
+  char err_buf[error_buf_max_size];
+  uint32_t flags = seamless ? 0U : DRM_MODE_ATOMIC_ALLOW_MODESET;
+  flags |= nonblock && !test_only ? DRM_MODE_ATOMIC_NONBLOCK : 0U;
+  flags |= test_only ? DRM_MODE_ATOMIC_TEST_ONLY : 0U;
+  {
+    ATRACE_NAME((nonblock ? "Commit_nonblock" : "Commit_block"));
+    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
+  }
+
+  if (test_only) {
+    ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
+             seamless, err, errno,
+             strerror_r(errno, err_buf, error_buf_max_size));
+    return err == 0;
+  }
+
+  if (err != 0 && seamless) {
+    ALOGE(
+        "Seamless commit failed, retrying a full modeset (visual artifacts may "
+        "be observed). Error: %s",
+        strerror_r(errno, err_buf, error_buf_max_size));
+    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
+                              flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
+  }
+  if (err != 0) {
+    ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
+          strerror_r(errno, err_buf, error_buf_max_size));
+
+    return false;
+  }
+  for (const auto &[atomic_state_manager, arg] : args) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    auto res = static_cast<DrmAtomicStateManager *>(atomic_state_manager)
+                   ->FinishPendingRequest(arg,
+                                          std::move(
+                                              requests[atomic_state_manager]));
+    results.emplace_back(atomic_state_manager, res);
+  }
+  return true;
+}
+// NOLINTEND(readability-function-cognitive-complexity)
+
+void CleanUpFailedRequest(
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>
+        &args) {
+  // Disable the hw used by the last active composition. This allows us to
+  // signal the release fences from that composition to avoid hanging.
+  std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> cl_args;
+  for (const auto &[atomic_state_manager, _] : args) {
+    AtomicCommitArgs cl_arg{};
+    cl_arg.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+    cl_args.emplace_back(atomic_state_manager, cl_arg);
+  }
+  std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
+      unused_result;
+  if (!CommitFrame(cl_args, false, unused_result)) {
+    ALOGE("Failed to clean-up active composition");
+  }
+}
+
+}  // namespace
+
+bool DrmAtomicCommitSink::TestAtomicCommit(
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args)
+    const {
+  std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
+      unused_result;
+  return CommitFrame(args, /*test_only =*/true, unused_result);
+}
+
+std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
+DrmAtomicCommitSink::ExecuteAtomicCommit(
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>
+        &args) {
+  std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> results;
+  if (!CommitFrame(args, /*test_only =*/false, results)) {
+    CleanUpFailedRequest(args);
+  } else if (results.empty()) {
+    for (const auto &[atomic_state_manager, _] : args) {
+      results.emplace_back(atomic_state_manager, AtomicCommitResult{});
+    }
+  }
+  return results;
+}
+}  // namespace android::drm_hwcomposer

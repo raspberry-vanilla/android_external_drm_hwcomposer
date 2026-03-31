@@ -21,6 +21,7 @@
 
 namespace android::drm_hwcomposer {
 
+class AtomicCommitSink;
 class DrmConnector;
 struct DrmDisplayPipeline;
 
@@ -36,6 +37,8 @@ class GenericBackend : public BackendManager::Backend {
   // BufferInfoMapperMetadata, and fall back to LegacyBufferInfoGetter if that
   // fails.
   std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter() override;
+
+  std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink() override;
 
  protected:
   explicit GenericBackend(const std::string& name);

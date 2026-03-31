@@ -89,6 +89,7 @@ filegroup {
         "compositor/mapper/LeftoverLayerMapper.cpp",
         "compositor/mapper/UnderlayMapper.cpp",
 
+        "drm/DrmAtomicCommitSink.cpp",
         "drm/DrmAtomicStateManager.cpp",
         "drm/DrmColorOp.cpp",
         "drm/DrmConnector.cpp",

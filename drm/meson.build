@@ -1,4 +1,5 @@
 src_common += files(
+    'DrmAtomicCommitSink.cpp',
     'DrmAtomicStateManager.cpp',
     'DrmConnector.cpp',
     'DrmColorOp.cpp',

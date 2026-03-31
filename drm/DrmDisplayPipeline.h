@@ -22,7 +22,7 @@
 namespace android::drm_hwcomposer {
 
 class CompositionPlanner;
-class DrmAtomicCommitSink;
+class AtomicStateManager;
 class DrmConnector;
 class DrmCrtc;
 class DrmDevice;
@@ -107,7 +107,7 @@ struct DrmDisplayPipeline {
   std::shared_ptr<BindingOwner<DrmCrtc>> crtc;
   std::shared_ptr<BindingOwner<DrmPlane>> primary_plane;
 
-  std::unique_ptr<DrmAtomicCommitSink> atomic_commit_sink;
+  std::unique_ptr<AtomicStateManager> atomic_state_manager;
   std::unique_ptr<CompositionPlanner> planner;
 };
 

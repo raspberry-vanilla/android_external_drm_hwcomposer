@@ -28,7 +28,8 @@
 #include <android-base/thread_annotations.h>
 
 #include "compositor/LayerData.h"
-#include "drm/DrmAtomicCommitSink.h"
+#include "drm/AtomicStateManager.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmMode.h"
 #include "math/mat3.h"
 #include "utils/ColorUtil.h"
@@ -42,22 +43,13 @@ class BindingOwner;
 class IDrmFbIdHandle;
 class DrmPlane;
 
-struct DrmDisplayPipeline;
-
-class DrmAtomicStateManager : public DrmAtomicCommitSink {
+class DrmAtomicStateManager : public AtomicStateManager {
  public:
   static auto CreateInstance(DrmDisplayPipeline *pipe)
       -> std::unique_ptr<DrmAtomicStateManager>;
 
   ~DrmAtomicStateManager() override;
 
-  bool TestAtomicCommit(AtomicCommitArgs &args) override;
-  std::optional<AtomicCommitResult> ExecuteAtomicCommit(
-      AtomicCommitArgs &args) override;
-  bool IsActive() const override;
-  void WaitLastFrame() override;
-
- private:
   // Collection of kms objects that were committed to the kernel. There must be
   // a userspace handle to keep these from being removed/unregistered until the
   // commit that used them is no longer being presented.
@@ -71,6 +63,7 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
   // State of the driver after a commit.
   struct KmsState {
     /* Required to cleanup unused planes */
+
     std::vector<std::shared_ptr<BindingOwner<DrmPlane>>> used_planes;
 
     /* To avoid setting the inactive state twice, which will fail the commit */
@@ -81,8 +74,10 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
   // resulting state of the driver. Since the AtomicRequest might include
   // properties that reference memory addresses, this struct must not be moved
   // or copied.
-  struct AtomicRequest {
-    AtomicRequest() = default;
+  class DrmAtomicRequest : public AtomicRequest {
+   public:
+    DrmAtomicRequest() = default;
+    ~DrmAtomicRequest() override = default;
 
     DrmModeAtomicReqUnique property_set;
 
@@ -96,19 +91,29 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
 
     // Make this struct non-copyable and non-movable to avoid dangling
     // references to struct member addresses.
-    AtomicRequest(const AtomicRequest &) = delete;
-    AtomicRequest &operator=(const AtomicRequest &) = delete;
-    AtomicRequest(AtomicRequest &&) = delete;
-    AtomicRequest &operator=(AtomicRequest &&) = delete;
+    DrmAtomicRequest(const DrmAtomicRequest &) = delete;
+    DrmAtomicRequest &operator=(const DrmAtomicRequest &) = delete;
+    DrmAtomicRequest(DrmAtomicRequest &&) = delete;
+    DrmAtomicRequest &operator=(DrmAtomicRequest &&) = delete;
   };
 
+  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
+      AtomicCommitArgs &args) override;
+  AtomicCommitResult FinishPendingRequest(
+      const AtomicCommitArgs &args, std::unique_ptr<AtomicRequest> request);
+  bool IsActive() const override;
+  void WaitLastFrame() override;
+
+  auto GetDevice() const {
+    return pipe_->device;
+  }
+
+ private:
   void StopThread();
 
   void ThreadFn();
 
   DrmAtomicStateManager() = default;
-  std::optional<AtomicCommitResult> CommitFrame(AtomicCommitArgs &args,
-                                                bool test_only);
 
   // Only accessed from main thread.
   DrmDisplayPipeline *pipe_{};
@@ -118,28 +123,27 @@ class DrmAtomicStateManager : public DrmAtomicCommitSink {
   KmsState committed_frame_state_;
   DstRectInfo whole_display_rect_{};
 
-  void CleanFailedCommit();
   bool SetWriteBackFenceIfNeeded(const AtomicCommitArgs &args,
-                                 AtomicRequest &request);
-  bool SetOutputFence(AtomicRequest &request);
-  bool SetActiveIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+                                 DrmAtomicRequest &request);
+  bool SetOutputFence(DrmAtomicRequest &request);
+  bool SetActiveIfNeeded(const AtomicCommitArgs &args,
+                         DrmAtomicRequest &request);
   bool SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
-                              AtomicRequest &request);
-  bool SetCtmIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+                              DrmAtomicRequest &request);
+  bool SetCtmIfNeeded(const AtomicCommitArgs &args, DrmAtomicRequest &request);
   bool SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
-                             AtomicRequest &request);
+                             DrmAtomicRequest &request);
   bool SetContentTypeIfNeeded(const AtomicCommitArgs &args,
-                              AtomicRequest &request);
+                              DrmAtomicRequest &request);
   bool SetContentProtectionIfNeeded(const AtomicCommitArgs &args,
-                                    AtomicRequest &request);
+                                    DrmAtomicRequest &request);
   bool SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
-                              AtomicRequest &request);
-  bool SetMinBpcIfNeeded(const AtomicCommitArgs &args, AtomicRequest &request);
+                              DrmAtomicRequest &request);
+  bool SetMinBpcIfNeeded(const AtomicCommitArgs &args,
+                         DrmAtomicRequest &request);
   bool SetCompositionIfNeeded(const AtomicCommitArgs &args,
-                              AtomicRequest &request);
+                              DrmAtomicRequest &request);
 
-  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
-      AtomicCommitArgs &args);
   void CheckDoubleSettingState(AtomicCommitArgs &args) const;
 
   std::thread thread_;

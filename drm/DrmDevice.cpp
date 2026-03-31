@@ -25,7 +25,9 @@
 #include <cstdint>
 #include <string>
 
+#include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
+#include "drm/AtomicCommitSink.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmEncoder.h"
@@ -35,12 +37,17 @@
 #include "drm/DrmUnique.h"
 #include "drm/ResourceManager.h"
 #include "drm/drm.h"
+#include "hwc/HwcDisplay.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
-DrmDevice::~DrmDevice() = default;
+DrmDevice::~DrmDevice() {
+  if (drmIsMaster(*GetFd()) != 0) {
+    drmDropMaster(*GetFd());
+  }
+};
 
 auto DrmDevice::CreateInstance(std::string const &path,
                                ResourceManager *res_man, uint32_t index)
@@ -72,6 +79,8 @@ auto DrmDevice::Init(const char *path) -> int {
     ALOGE("Failed to open dri %s: %s", path, strerror(errno));
     return -ENODEV;
   }
+  atomic_commit_sink_ = BackendManager::GetInstance().CreateAtomicCommitSink(
+      GetName());
 
   int ret = drmSetClientCap(*GetFd(), DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
   if (ret != 0) {
@@ -112,7 +121,9 @@ auto DrmDevice::Init(const char *path) -> int {
                                                      cursor_height);
   }
 
-  drmSetMaster(*GetFd());
+  if (drmSetMaster(*GetFd()) != 0) {
+    ALOGE("Failed to set drm master %d", errno);
+  }
   if (drmIsMaster(*GetFd()) == 0) {
     ALOGE("DRM/KMS master access required");
     return -EACCES;

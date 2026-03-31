@@ -23,6 +23,7 @@
 
 namespace android::drm_hwcomposer {
 
+class AtomicCommitSink;
 class BufferInfoGetter;
 class DrmConnector;
 struct DrmDisplayPipeline;
@@ -69,6 +70,8 @@ class BackendManager {
     virtual bool SupportsSuspend() const {
       return false;
     }
+    // Get the atomiCommitSink for the Backend.
+    virtual std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink() = 0;
 
    private:
     std::string name_;
@@ -89,6 +92,8 @@ class BackendManager {
   bool IsDozeSupported(const std::string &driver_name);
   bool IsDozeSuspendSupported(const std::string &driver_name);
   bool IsSuspendSupported(const std::string &driver_name);
+  std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink(
+      const std::string &driver_name);
 
  private:
   Backend *GetBackendByName(std::string &name);

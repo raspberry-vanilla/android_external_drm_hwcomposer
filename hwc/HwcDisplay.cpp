@@ -381,7 +381,7 @@ auto HwcDisplay::PresentStagedComposition(
   // slower display. WaitLastFrame() should be called before
   // WaitForPresenttime(), otherwise  can lead to a situation where hwc sleeps
   // for up to 1.25 vsync period and blocks viable presents in SurfaceFlinger.
-  GetPipe().atomic_commit_sink->WaitLastFrame();
+  GetPipe().atomic_state_manager->WaitLastFrame();
 
   uint32_t vperiod_ns = GetCurrentVsyncPeriodNs();
   if (desired_present_time && vperiod_ns != 0) {
@@ -612,7 +612,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
-    if (GetPipe().atomic_commit_sink->IsActive()) {
+    if (GetPipe().atomic_state_manager->IsActive()) {
       return HwcDisplay::Error::kNone;
     }
 
@@ -649,7 +649,7 @@ bool HwcDisplay::GetDisplayEnabled() const {
     return true;
   }
 
-  return GetPipe().atomic_commit_sink->IsActive();
+  return GetPipe().atomic_state_manager->IsActive();
 }
 
 void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -941,17 +941,24 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
 
 std::optional<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
     AtomicCommitArgs &a_args) const {
-  auto commit_result = GetPipe().atomic_commit_sink->ExecuteAtomicCommit(
-      a_args);
-
-  // Log successful modesets (seamless and full), including doze, and teardowns.
+  auto res = GetPipe().device->GetAtomicCommitSink().ExecuteAtomicCommit(
+      {{GetPipe().atomic_state_manager.get(), a_args}});
+  // Log successful modesets (seamless and full), including teardowns.
+  ALOGE_IF(res.size() > 1,
+           "More than one result returned for a singular display");
   if (a_args.display_mode || a_args.power_mode || a_args.teardown) {
-    const bool blocking = a_args.blocking || a_args.power_mode.has_value() ||
+    const bool blocking = a_args.blocking || a_args.power_mode ||
                           a_args.teardown;
-    LogConfigResult(blocking, commit_result.has_value());
+    LogConfigResult(blocking, res.size() == 1);
   }
-
-  return commit_result;
+  if (res.empty()) {
+    return std::nullopt;
+  }
+  if (res.front().first != GetPipe().atomic_state_manager.get()) {
+    ALOGE("Results are for a different state manager.");
+    return std::nullopt;
+  }
+  return res.front().second;
 }
 
 void HwcDisplay::WaitForPresentTime(int64_t present_time,
@@ -1022,7 +1029,8 @@ bool HwcDisplay::TestComposition(
   if (!a_args) {
     return false;
   }
-  if (GetPipe().atomic_commit_sink->TestAtomicCommit(*a_args)) {
+  if (GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
+          {{GetPipe().atomic_state_manager.get(), *a_args}})) {
     // Put the composition plan into the newly-validated composition. Its owner
     // is responsible for keeping it alive until commit.
     composition.composition_plan = a_args->composition;
@@ -1221,6 +1229,7 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     ALOGE("Failed to commit the frame composition.");
     return false;
   }
+
   out_present_fence = result->present_fence;
   ApplyCommitChanges(*a_args, *result);
   return true;
@@ -1427,7 +1436,7 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
       // Reuse the client layer only when the CRTC is already active. After a
       // teardown (power-off), the cached buffer may contain stale content that
       // we do not want to rescan on modeset.
-      GetPipe().atomic_commit_sink->IsActive() &&
+      GetPipe().atomic_state_manager->IsActive() &&
       active_config->mode.GetRawMode().hdisplay == new_width &&
       active_config->mode.GetRawMode().vdisplay == new_height) {
     ALOGV("Use existing client_layer for config.");
@@ -1467,7 +1476,8 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
     AtomicCommitArgs commit_args = CreateModesetCommit(&config,
                                                        modeset_layer_data);
     commit_args.seamless = true;
-    if (pipeline_->atomic_commit_sink->TestAtomicCommit(commit_args)) {
+    if (GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
+            {{GetPipe().atomic_state_manager.get(), commit_args}})) {
       config.group_id = active_config->group_id;
     }
   }

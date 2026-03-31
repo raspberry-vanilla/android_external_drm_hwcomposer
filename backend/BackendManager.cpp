@@ -146,6 +146,22 @@ std::unique_ptr<BufferInfoGetter> BackendManager::CreateBufferInfoGetter() {
   return backend->CreateBufferInfoGetter();
 }
 
+std::unique_ptr<AtomicCommitSink> BackendManager::CreateAtomicCommitSink(
+    const std::string &driver_name) {
+  // If backend override is not specified, the generic backend will be used.
+  std::string backend_name = Properties::GetBackendOverride();
+  if (backend_name.empty()) {
+    backend_name = driver_name;
+  }
+
+  auto *backend = GetBackendByName(backend_name);
+  if (backend == nullptr) {
+    ALOGE("Failed to find backend");
+    return nullptr;
+  }
+  return backend->CreateAtomicCommitSink();
+}
+
 BackendManager::Backend *BackendManager::GetBackendByName(std::string &name) {
   if (available_backends_.empty()) {
     ALOGE("No backends are specified");

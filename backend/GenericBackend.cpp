@@ -21,6 +21,7 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/GenericCompositionPlanner.h"
 #include "compositor/GenericLayerMapperCompositionPlanner.h"
+#include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -40,7 +41,7 @@ std::unique_ptr<DrmDisplayPipeline> GenericBackend::CreatePipeline(
   auto pipeline = DrmDisplayPipeline::CreatePipeline(connector);
   if (pipeline) {
     pipeline->planner = CreateCompositionPlanner();
-    pipeline->atomic_commit_sink = DrmAtomicStateManager::CreateInstance(
+    pipeline->atomic_state_manager = DrmAtomicStateManager::CreateInstance(
         pipeline.get());
   }
   return pipeline;
@@ -66,6 +67,10 @@ std::unique_ptr<CompositionPlanner> GenericBackend::CreateCompositionPlanner() {
   }
 
   return std::make_unique<GenericCompositionPlanner>();
+}
+
+std::unique_ptr<AtomicCommitSink> GenericBackend::CreateAtomicCommitSink() {
+  return std::make_unique<DrmAtomicCommitSink>();
 }
 
 // NOLINTNEXTLINE(cert-err58-cpp)

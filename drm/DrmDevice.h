@@ -21,11 +21,13 @@
 #include <optional>
 #include <tuple>
 
+#include "drm/AtomicCommitSink.h"
 #include "drm/DrmUnique.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 
+struct AtomicCommitArgs;
 struct BufferInfo;
 class DrmConnector;
 class DrmCrtc;
@@ -34,6 +36,7 @@ class DrmFbImporter;
 class DrmPlane;
 class DrmProperty;
 class ResourceManager;
+class HwcDisplay;
 
 class DrmDevice {
   friend class FakeDrmDevice;
@@ -55,6 +58,10 @@ class DrmDevice {
 
   auto &GetResMan() {
     return *res_man_;
+  }
+
+  auto &GetAtomicCommitSink() {
+    return *atomic_commit_sink_;
   }
 
   auto GetConnectors() -> const std::vector<std::unique_ptr<DrmConnector>> &;
@@ -127,6 +134,7 @@ class DrmDevice {
   bool HasAddFb2ModifiersSupport_{};
 
   std::unique_ptr<DrmFbImporter> drm_fb_importer_;
+  std::unique_ptr<AtomicCommitSink> atomic_commit_sink_;
 
   ResourceManager *const res_man_;
 };

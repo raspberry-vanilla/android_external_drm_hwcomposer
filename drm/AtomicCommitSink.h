@@ -16,16 +16,20 @@
 
 #pragma once
 
-#include "drm/AtomicCommitSink.h"
+#include "drm/AtomicStateManager.h"
 
 namespace android::drm_hwcomposer {
-class DrmAtomicCommitSink : public AtomicCommitSink {
-  bool TestAtomicCommit(
+
+class AtomicCommitSink {
+ public:
+  virtual ~AtomicCommitSink() = default;
+  virtual bool TestAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
-      const override;
-  std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>
+      const = 0;
+  virtual std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>
   ExecuteAtomicCommit(
-      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
-      override;
+      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+          args) = 0;
 };
+
 }  // namespace android::drm_hwcomposer
