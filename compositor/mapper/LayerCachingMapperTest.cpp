@@ -94,6 +94,65 @@ TEST(LayerCachingMapperTest, CachedLayersOccluded) {
                                       CompositionType::kInvalid))));
 }
 
+TEST(LayerCachingMapperTest, CachedLayersOccludedForDeviceOccludedType) {
+  LayerCachingMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/1,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque);
+  HwcLayer cached1 = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/2, CompositionType::kDeviceOccluded,
+                  /*alpha=*/kLayerCached);
+  HwcLayer cached2 = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/3, CompositionType::kDeviceOccluded,
+                  /*alpha=*/kLayerCached);
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor);
+
+  std::vector<LayerMapping> mappings = {{&non_cached,
+                                         CompositionType::kInvalid},
+                                        {&cached1, CompositionType::kInvalid},
+                                        {&cached2, CompositionType::kInvalid},
+                                        {&cursor, CompositionType::kInvalid}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cached2),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid))));
+}
+
 TEST(LayerCachingMapperTest, IgnoreNonSFClientCompositionRequest) {
   LayerCachingMapper mapper;
 

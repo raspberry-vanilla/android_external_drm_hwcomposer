@@ -28,7 +28,8 @@ std::vector<LayerMapping> LayerCachingMapper::AssignLayers(
   for (auto& [layer, composition_type] : new_layers) {
     // Only proceed for device composition eligible layers.
     const CompositionType sf_type = layer->GetSfType();
-    if (sf_type != CompositionType::kDevice) {
+    if (sf_type != CompositionType::kDevice &&
+        sf_type != CompositionType::kDeviceOccluded) {
       continue;
     }
 
