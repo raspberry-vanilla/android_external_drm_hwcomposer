@@ -44,7 +44,7 @@
 namespace android::drm_hwcomposer {
 
 DrmDevice::~DrmDevice() {
-  if (drmIsMaster(*GetFd()) != 0) {
+  if (GetFd() && drmIsMaster(*GetFd()) != 0) {
     drmDropMaster(*GetFd());
   }
 };

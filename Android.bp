@@ -320,6 +320,7 @@ cc_test_host {
         "hwc/HwcLayer.cpp",
         "stats/Stats.cpp",
         "stats/StatsTest.cpp",
+        "tests/backend_test_stub.cpp",
         "tests/host_test_stubs.cpp",
         "utils/BacklightController.cpp",
         "utils/BacklightControllerTest.cpp",
