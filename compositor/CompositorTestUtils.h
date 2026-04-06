@@ -44,6 +44,7 @@ class MockCompositorDisplay : public ICompositorDisplay {
   MOCK_METHOD(bool, CtmByGpu, (), (const));
   MOCK_METHOD(bool, ForcedScalingWithGpu, (), (const));
   MOCK_METHOD((std::pair<uint32_t, uint32_t>), GetSize, (), (const));
+  MOCK_METHOD(const HwcLayer&, GetClientLayer, (), (const));
 };
 
 class FakeFlatteningController : public FlatteningController {

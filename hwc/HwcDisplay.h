@@ -265,7 +265,7 @@ class HwcDisplay : public ICompositorDisplay {
     return client_layer_;
   }
 
-  auto GetClientLayer() const -> const HwcLayer & {
+  const HwcLayer &GetClientLayer() const override {
     return client_layer_;
   }
 

@@ -51,6 +51,8 @@ class ICompositorDisplay {
 
   // Returns the currently configured display resolution as {width, height}.
   virtual std::pair<uint32_t, uint32_t> GetSize() const = 0;
+
+  virtual const HwcLayer &GetClientLayer() const = 0;
 };
 
 }  // namespace android::drm_hwcomposer
