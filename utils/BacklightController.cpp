@@ -17,7 +17,8 @@
 #include "BacklightController.h"
 
 #include <algorithm>
-#include <cmath>
+
+#include "utils/ColorUtil.h"
 
 namespace android::drm_hwcomposer {
 
@@ -33,26 +34,12 @@ const float BacklightController::kMax = 1.0F;
 // This function is modeled from:
 //   com.android.settingslib.display.BrightnessUtils.convertLinearToGamma
 auto BacklightController::HlgOetf(float linear) -> float {
-  static const float kR = 0.5F;
-  static const float kA = 0.17883277F;
-  static const float kB = 0.28466892F;
-  static const float kC = 0.55991073F;
+  // Normalize to the range [0, 12] rather than [0, 1]
   static const float kScale = 12.0F;
-  static const float kGammaThreshold = 1.0F;
-
   if (linear < kMin || linear > kMax) {
     return std::clamp(linear, kMin, kMax);
   }
-
-  float hlg = linear * kScale;
-  float ret = kMin;
-  if (hlg <= kGammaThreshold) {
-    ret = std::sqrt(hlg) * kR;
-  } else {
-    ret = kA * log(hlg - kB) + kC;
-  }
-
-  return ret;
+  return static_cast<float>(ColorUtil::EvaluateHlgOetf(linear * kScale));
 }
 
 }  // namespace android::drm_hwcomposer

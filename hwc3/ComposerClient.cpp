@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "compositor/LayerData.h"
 #define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
 #include "ComposerClient.h"
@@ -44,6 +43,7 @@
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/GrallocBufferCache.h"
 #include "compositor/DisplayInfo.h"
+#include "compositor/LayerData.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
@@ -209,9 +209,13 @@ std::optional<TransferFunction> AidlToTransferFunc(
   switch (transfer_func) {
     case static_cast<int32_t>(common::Dataspace::TRANSFER_ST2084):
       return TransferFunction::kPq;
+    case static_cast<int32_t>(common::Dataspace::TRANSFER_HLG):
+      return TransferFunction::kHlg;
     case static_cast<int32_t>(common::Dataspace::TRANSFER_SRGB):
       return TransferFunction::kSrgb;
-    case static_cast<int32_t>(common::Dataspace::UNKNOWN):
+    case static_cast<int32_t>(common::Dataspace::TRANSFER_SMPTE_170M):
+      return TransferFunction::kSmpte170M;
+    case static_cast<int32_t>(common::Dataspace::TRANSFER_UNSPECIFIED):
       return TransferFunction::kUnknown;
     default:
       ALOGE("Unsupported transfer function: %d", transfer_func);

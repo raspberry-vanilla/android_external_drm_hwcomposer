@@ -324,6 +324,7 @@ cc_test_host {
         "tests/host_test_stubs.cpp",
         "utils/BacklightController.cpp",
         "utils/BacklightControllerTest.cpp",
+        "utils/ColorUtil.cpp",
         "utils/SysfsBacklightController.cpp",
         "utils/SysfsBacklightControllerTest.cpp",
         "utils/fd.cpp",
@@ -337,6 +338,7 @@ cc_test_host {
         "libgtest",
         "liblog",
         "libmath",
+        "libui-types",
     ],
     shared_libs: [
         "libhardware",

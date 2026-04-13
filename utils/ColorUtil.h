@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,11 +29,20 @@
 namespace android::drm_hwcomposer {
 
 using Lut1D = std::vector<drm_color_lut32>;
+using Lut1DCache = std::map<std::tuple<TransferFunction, size_t>, Lut1D>;
+using CscCache = std::map<std::tuple<Colorspace, Colorspace>, const mat3d>;
 
 inline const Lut1D kEmptyLut = {};
 
 class ColorUtil {
  public:
+  /**
+   * Keep in sync with the Dataspace.aidl ARIB STD-B67 Hybrid Log Gamma (HLG)
+   * definition
+   * https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/graphics/common/aidl/android/hardware/graphics/common/Dataspace.aidl;l=348;drc=dbf753b896a75f3e712bc362a01763d731e49f57
+   */
+  static double EvaluateHlgOetf(double l);
+
   /* HAL provides a transposed 4x4 float type matrix:
    * | 0  1  2  3|
    * | 4  5  6  7|
@@ -116,8 +125,7 @@ class ColorUtil {
   static std::shared_ptr<drm_color_ctm_3x4> GamutAdjustIfNeeded(
       Colorspace src_colorspace, Colorspace dest_colorspace,
       const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
-      std::map<std::tuple<Colorspace, Colorspace>, const mat3>
-          &color_transform_cache);
+      CscCache &color_transform_cache);
 
   /* Creates 1D Gamma/Degamma LUTs using an appropriate EOTF for the given
    * colorspace and adds it to the lut_1d_map and returns the map element
@@ -128,8 +136,7 @@ class ColorUtil {
   static std::tuple<const Lut1D &, const Lut1D &> Get1DLutsIfNeeded(
       TransferFunction src_tf, TransferFunction dest_tf,
       size_t degamma_lut_size, size_t gamma_lut_size,
-      std::map<std::tuple<TransferFunction, size_t>, Lut1D> &degamma_lut_map,
-      std::map<std::tuple<TransferFunction, size_t>, Lut1D> &gamma_lut_map);
+      Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map);
 
  private:
   /* Converts a column-major 4x4 float type flat array matrix into
@@ -141,7 +148,7 @@ class ColorUtil {
    * |12 13 14 15|
    */
   static std::shared_ptr<drm_color_ctm_3x4> ToColorTransform3x4(
-      const android::mat4 &color_transform_matrix);
+      const android::mat4d &color_transform_matrix);
 };
 
 }  // namespace android::drm_hwcomposer

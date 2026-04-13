@@ -182,7 +182,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
       colorspace_ = Colorspace::kBt2020Rgb;
-      transfer_func_ = TransferFunction::kPq;
       break;
     }
     case OutputType::kSystem: {
@@ -192,7 +191,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         SetHdrOutputMetadata(hdr_types.front());
         min_bpc_ = 8;
         colorspace_ = Colorspace::kBt2020Rgb;
-        transfer_func_ = TransferFunction::kPq;
         break;
       }
       [[fallthrough]];
@@ -1380,12 +1378,15 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
   switch (type) {
     case ui::Hdr::HDR10:
       m->eotf = 2;  // PQ
+      transfer_func_ = TransferFunction::kPq;
       break;
     case ui::Hdr::HLG:
       m->eotf = 3;  // HLG
+      transfer_func_ = TransferFunction::kHlg;
       break;
     default:
       ALOGW("HDR type %d is not supported.", static_cast<int>(type));
+      transfer_func_ = TransferFunction::kUnknown;
       return;
   }
 

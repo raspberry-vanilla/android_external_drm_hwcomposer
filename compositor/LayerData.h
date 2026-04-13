@@ -43,8 +43,10 @@ enum class CompositionType {
 
 enum class TransferFunction : int32_t {
   kUnknown,
+  kSmpte170M,
   kSrgb,
   kPq,
+  kHlg,
 };
 
 /* Rotation is defined in the clockwise direction */

@@ -162,10 +162,10 @@ class DrmAtomicStateManager : public AtomicStateManager {
   int frames_tracked_ GUARDED_BY(mutex_){};
 
   // Cached gamut mappings
-  std::map<std::tuple<Colorspace, Colorspace>, const mat3> color_transform_map_;
+  CscCache color_transform_map_;
   // Cached 1D LUTs
-  std::map<std::tuple<TransferFunction, size_t>, Lut1D> degamma_lut_1d_map_;
-  std::map<std::tuple<TransferFunction, size_t>, Lut1D> gamma_lut_1d_map_;
+  Lut1DCache degamma_lut_1d_map_;
+  Lut1DCache gamma_lut_1d_map_;
 };
 
 }  // namespace android::drm_hwcomposer
