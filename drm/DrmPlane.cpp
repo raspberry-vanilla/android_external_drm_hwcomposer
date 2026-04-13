@@ -510,7 +510,16 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
 }
 
 auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
-  if (!crtc_property_.AtomicSet(pset, 0) || !fb_property_.AtomicSet(pset, 0)) {
+  // FIXME: to check whether needs to reset other properties as well.
+  if (!crtc_property_.AtomicSet(pset, 0) || !fb_property_.AtomicSet(pset, 0) ||
+      !crtc_x_property_.AtomicSet(pset, 0) ||
+      !crtc_y_property_.AtomicSet(pset, 0) ||
+      !crtc_w_property_.AtomicSet(pset, 0) ||
+      !crtc_h_property_.AtomicSet(pset, 0) ||
+      !src_x_property_.AtomicSet(pset, 0) ||
+      !src_y_property_.AtomicSet(pset, 0) ||
+      !src_w_property_.AtomicSet(pset, 0) ||
+      !src_h_property_.AtomicSet(pset, 0)) {
     return -EINVAL;
   }
 
