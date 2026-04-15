@@ -16,6 +16,9 @@
 
 #include "GenericCompositionPlanner.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <tuple>
 #include <vector>
 

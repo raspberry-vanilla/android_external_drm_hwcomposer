@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
-#include "BacklightController.h"
-#include "SysfsBacklightController.h"
-#include "utils/BacklightFileInterface.h"
+#include <gtest/gtest.h>
+#include <linux/fb.h>
 
 #include <filesystem>
-#include <linux/fb.h>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
-#include <gtest/gtest.h>
+#include <utility>
+
+#include "utils/BacklightController.h"
+#include "utils/BacklightFileInterface.h"
+#include "utils/SysfsBacklightController.h"
 
 class SysfsBacklightFileInterfaceFake {
  public:

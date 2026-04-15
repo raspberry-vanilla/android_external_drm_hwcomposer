@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <map>
+#include <memory>
 #include <optional>
-#include <tuple>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "drm/AtomicCommitSink.h"
 #include "drm/DrmUnique.h"

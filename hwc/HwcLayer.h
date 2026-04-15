@@ -16,12 +16,14 @@
 
 #pragma once
 
-#include <map>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "bufferinfo/BufferInfo.h"
+#include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
-#include "hwc/HwcBufferCache.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {

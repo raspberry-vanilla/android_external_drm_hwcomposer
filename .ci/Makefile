@@ -45,7 +45,6 @@ TIDY_CHECKS_FINE := *                                   \
     -hicpp-special-member-functions                     \
     -misc-const-correctness                             \
     -readability-identifier-length                      \
-    -misc-include-cleaner                               \
     -performance-enum-size                              \
     -misc-use-anonymous-namespace                       \
     -boost-use-ranges                                   \

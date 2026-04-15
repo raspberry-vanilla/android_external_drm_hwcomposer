@@ -16,6 +16,14 @@
 
 #include "compositor/CompositorTestUtils.h"
 
+#include <cstdint>
+#include <memory>
+
+#include "bufferinfo/BufferInfo.h"
+#include "compositor/ICompositorDisplay.h"
+#include "compositor/LayerData.h"
+#include "hwc/HwcLayer.h"
+
 namespace android::drm_hwcomposer {
 
 HwcLayer CompositorTestUtils::CreateLayer(ICompositorDisplay* display,

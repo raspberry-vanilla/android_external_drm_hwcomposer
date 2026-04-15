@@ -16,7 +16,7 @@
 #pragma once
 // NOLINTBEGIN
 
-#include <drm_mode.h>
+#include <drm_mode.h>  // IWYU pragma: export
 #include <linux/types.h>
 
 #ifndef DRM_MODE_OBJECT_COLOROP

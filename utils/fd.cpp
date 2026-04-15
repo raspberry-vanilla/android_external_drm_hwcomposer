@@ -16,6 +16,9 @@
 
 #include "fd.h"
 
+#include <fcntl.h>  // IWYU pragma: keep
+#include <unistd.h>
+
 namespace android::drm_hwcomposer {
 
 static void CloseFd(const int *fd) {
@@ -46,6 +49,7 @@ auto DupFd(SharedFd const &fd) -> int {
   if (!fd)
     return -1;
 
+  // NOLINTNEXTLINE(misc-include-cleaner)
   return fcntl(*fd, F_DUPFD_CLOEXEC, 0);
 }
 

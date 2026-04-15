@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
+#include <drm/drm_fourcc.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <vector>
 
 #include "compositor/CompositorTestUtils.h"
+#include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 #include "compositor/mapper/UnderlayMapper.h"
-
-#include <drm/drm_fourcc.h>
+#include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
 using ::testing::AllOf;

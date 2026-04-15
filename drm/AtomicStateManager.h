@@ -16,14 +16,14 @@
 
 #pragma once
 
+#include <drm/drm_mode.h>
+
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmMode.h"
-#include "drm/drm_mode.h"
 #include "hwc/HwcDisplay.h"
 #include "utils/fd.h"
 

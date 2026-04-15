@@ -16,14 +16,18 @@
 
 #include "DrmConnector.h"
 
-#include <drm/drm_mode.h>
+#include <drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <array>
 #include <cerrno>
 #include <cinttypes>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <sstream>
+#include <utility>
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmDevice.h"

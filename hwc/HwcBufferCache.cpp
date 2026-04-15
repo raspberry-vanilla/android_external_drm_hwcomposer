@@ -16,8 +16,12 @@
 
 #include "HwcBufferCache.h"
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <utility>
 
+#include "bufferinfo/BufferInfo.h"
 #include "drm/DrmFbImporter.h"
 #include "utils/log.h"
 

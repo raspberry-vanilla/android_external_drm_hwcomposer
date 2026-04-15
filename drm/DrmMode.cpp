@@ -16,6 +16,10 @@
 
 #include "DrmMode.h"
 
+#include <drm_mode.h>
+#include <xf86drmMode.h>
+
+#include <cstddef>
 #include <cstring>
 
 #include "drm/DrmDevice.h"

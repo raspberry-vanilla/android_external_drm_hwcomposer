@@ -19,6 +19,12 @@
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <android-base/thread_annotations.h>
 
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"

@@ -16,10 +16,50 @@
 
 #pragma once
 
-#include <memory>
-
+#if __ANDROID_API__ >= 36
+#include <aidl/android/hardware/drm/HdcpLevels.h>
+#endif
+#include <aidl/android/hardware/graphics/common/Dataspace.h>
+#include <aidl/android/hardware/graphics/common/DisplayDecorationSupport.h>
+#include <aidl/android/hardware/graphics/common/Hdr.h>
+#include <aidl/android/hardware/graphics/common/HdrConversionCapability.h>
+#include <aidl/android/hardware/graphics/common/HdrConversionStrategy.h>
+#include <aidl/android/hardware/graphics/common/PixelFormat.h>
+#include <aidl/android/hardware/graphics/common/Transform.h>
 #include <aidl/android/hardware/graphics/composer3/BnComposerClient.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTarget.h>
+#include <aidl/android/hardware/graphics/composer3/ClockMonotonicTimestamp.h>
+#include <aidl/android/hardware/graphics/composer3/ColorMode.h>
+#include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
+#include <aidl/android/hardware/graphics/composer3/ContentType.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayAttribute.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayBrightness.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayCommand.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayConfiguration.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayConnectionType.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayContentSample.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayIdentification.h>
+#include <aidl/android/hardware/graphics/composer3/FormatColorComponent.h>
+#include <aidl/android/hardware/graphics/composer3/HdrCapabilities.h>
+#include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <aidl/android/hardware/graphics/composer3/LayerCommand.h>
+#include <aidl/android/hardware/graphics/composer3/OverlayProperties.h>
+#include <aidl/android/hardware/graphics/composer3/PerFrameMetadataKey.h>
+#include <aidl/android/hardware/graphics/composer3/PowerMode.h>
+#include <aidl/android/hardware/graphics/composer3/ReadbackBufferAttributes.h>
+#include <aidl/android/hardware/graphics/composer3/RenderIntent.h>
+#include <aidl/android/hardware/graphics/composer3/VirtualDisplay.h>
+#include <aidl/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.h>
+#include <aidl/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.h>
+#include <android/binder_auto_utils.h>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "hwc/HwcLayer.h"
 

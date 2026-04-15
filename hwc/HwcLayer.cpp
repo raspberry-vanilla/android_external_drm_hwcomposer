@@ -16,10 +16,13 @@
 
 #include "HwcLayer.h"
 
+#include <cstdint>
+
+#include "bufferinfo/BufferInfo.h"
+#include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
+#include "compositor/LayerData.h"
 #include "drm/DrmDevice.h"
-#include "drm/DrmDisplayPipeline.h"
-#include "drm/DrmFbImporter.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

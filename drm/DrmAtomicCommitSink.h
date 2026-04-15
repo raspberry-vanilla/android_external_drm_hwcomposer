@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "drm/AtomicCommitSink.h"
+#include "drm/AtomicStateManager.h"
 
 namespace android::drm_hwcomposer {
 class DrmAtomicCommitSink : public AtomicCommitSink {

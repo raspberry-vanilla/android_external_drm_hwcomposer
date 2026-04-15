@@ -18,7 +18,19 @@
 
 #include "Composer.h"
 
+#include <aidl/android/hardware/graphics/composer3/BnComposer.h>
+#include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
+#include <android/binder_auto_utils.h>
 #include <android/binder_ibinder_platform.h>
+#include <android/binder_interface_utils.h>
+#include <android/binder_status.h>
+#include <unistd.h>
+
+#include <cstdint>
+#include <memory>
+#include <sstream>
+#include <vector>
 
 #include "hwc3/ComposerClient.h"
 #include "hwc3/Utils.h"

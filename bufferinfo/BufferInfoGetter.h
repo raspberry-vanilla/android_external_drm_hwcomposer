@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <cutils/native_handle.h>
 #include <drm/drm_fourcc.h>
 #include <hardware/gralloc.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 

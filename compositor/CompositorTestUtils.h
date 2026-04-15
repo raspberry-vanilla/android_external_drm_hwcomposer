@@ -15,15 +15,23 @@
  */
 #pragma once
 
+#include <drm/drm_fourcc.h>
 #include <gmock/gmock.h>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "compositor/CompositionPlanner.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
 #include "hwc/HwcLayer.h"
-
-#include <drm/drm_fourcc.h>
 
 namespace android::drm_hwcomposer {
 

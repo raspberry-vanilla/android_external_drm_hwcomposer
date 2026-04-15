@@ -17,9 +17,14 @@
 #pragma once
 
 #include <aidl/android/hardware/graphics/composer3/BnComposer.h>
-#include <utils/Mutex.h>
+#include <aidl/android/hardware/graphics/composer3/Capability.h>
+#include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
+#include <android/binder_auto_utils.h>
+#include <android/binder_status.h>
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 

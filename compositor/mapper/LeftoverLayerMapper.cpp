@@ -15,7 +15,12 @@
  */
 #include "compositor/mapper/LeftoverLayerMapper.h"
 
+#include <cstddef>
+#include <optional>
+#include <vector>
+
 #include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 
 namespace android::drm_hwcomposer {
 std::vector<LayerMapping> LeftoverLayerMapper::AssignLayers(

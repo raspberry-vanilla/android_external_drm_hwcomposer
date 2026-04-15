@@ -16,16 +16,29 @@
 
 #include "DrmPlane.h"
 
+#include <drm/drm_mode.h>
+#include <xf86drmMode.h>
+
 #include <algorithm>
 #include <cerrno>
 #include <cinttypes>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "bufferinfo/BufferInfoGetter.h"
+#include "compositor/LayerData.h"
 #include "drm/DrmColorOp.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmFbImporter.h"
+#include "drm/DrmUnique.h"
 #include "drm/ResourceManager.h"
 #include "utils/log.h"
 

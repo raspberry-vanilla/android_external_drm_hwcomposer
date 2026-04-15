@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
-#include "BacklightController.h"
+#include <map>
+
+#include "utils/BacklightController.h"
 
 namespace android::drm_hwcomposer {
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cerrno>
 #include <iostream>
 
 #include "utils/UEvent.h"

@@ -16,7 +16,12 @@
 
 #include "StatsPoller.h"
 
+#include <android-base/thread_annotations.h>
+
 #include <chrono>
+#include <memory>
+#include <mutex>
+#include <utility>
 
 #include "stats/CompositionStatsAtomReporter.h"
 #include "stats/CountActiveDisplaysReporter.h"

@@ -16,13 +16,13 @@
 
 #pragma once
 
-#include "hwc/HwcLayer.h"
-
-#include <optional>
-
 #include <cutils/native_handle.h>
 
+#include <cstdint>
+#include <optional>
+
 #include "hwc/HwcBufferCache.h"
+#include "hwc/HwcLayer.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {

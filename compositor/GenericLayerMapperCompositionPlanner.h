@@ -16,11 +16,13 @@
 
 #pragma once
 
-#include "compositor/CompositionPlanner.h"
+#include <vector>
 
+#include "compositor/CompositionPlanner.h"
 #include "compositor/mapper/CursorLayerMapper.h"
 #include "compositor/mapper/ForceClientCompositionLayerMapper.h"
 #include "compositor/mapper/LayerCachingMapper.h"
+#include "compositor/mapper/LayerMapper.h"
 #include "compositor/mapper/LeftoverLayerMapper.h"
 #include "compositor/mapper/UnderlayMapper.h"
 

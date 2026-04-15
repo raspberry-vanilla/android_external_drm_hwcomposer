@@ -19,8 +19,8 @@
 #include <xf86drmMode.h>
 
 #include <cstdint>
-#include <set>
-#include <vector>
+#include <memory>
+#include <utility>
 
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmUnique.h"

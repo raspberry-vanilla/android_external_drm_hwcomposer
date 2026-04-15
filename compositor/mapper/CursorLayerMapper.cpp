@@ -15,7 +15,10 @@
  */
 #include "compositor/mapper/CursorLayerMapper.h"
 
+#include <vector>
+
 #include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {

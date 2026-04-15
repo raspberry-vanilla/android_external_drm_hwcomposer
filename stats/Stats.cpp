@@ -16,6 +16,8 @@
 
 #include "Stats.h"
 
+#include <tuple>
+
 namespace android::drm_hwcomposer {
 
 bool operator<(const CompositionAttributes& a, const CompositionAttributes& b) {

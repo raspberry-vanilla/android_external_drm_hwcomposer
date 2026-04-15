@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
-#include <unordered_map>
-#include <vector>
-
+#include <aidl/android/hardware/graphics/composer3/ChangedCompositionLayer.h>
 #include <aidl/android/hardware/graphics/composer3/CommandError.h>
 #include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
+#include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/PresentFence.h>
 #include <aidl/android/hardware/graphics/composer3/PresentOrValidate.h>
 #include <aidl/android/hardware/graphics/composer3/ReleaseFences.h>
 #include <android-base/unique_fd.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace aidl::android::hardware::graphics::composer3 {
 

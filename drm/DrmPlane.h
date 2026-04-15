@@ -16,9 +16,14 @@
 
 #pragma once
 
+#include <asm-generic/int-ll64.h>
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include "compositor/LayerData.h"

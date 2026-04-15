@@ -15,13 +15,20 @@
  */
 
 #if HAS_LIBDISPLAY_INFO
-
-#include "EdidWrapper.h"
-
+extern "C" {
+#include <libdisplay-info/edid.h>
+#include <libdisplay-info/info.h>
+}
 #include <ui/GraphicTypes.h>
+
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmUnique.h"
+#include "utils/EdidWrapper.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

@@ -16,9 +16,12 @@
 
 #pragma once
 
-#include "bufferinfo/BufferInfoGetter.h"
+#include <cutils/native_handle.h>
 
 #include <memory>
+#include <optional>
+
+#include "bufferinfo/BufferInfoGetter.h"
 
 namespace android::drm_hwcomposer {
 

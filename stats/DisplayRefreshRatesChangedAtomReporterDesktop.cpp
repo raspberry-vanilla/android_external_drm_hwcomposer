@@ -16,15 +16,17 @@
 
 // #define NLOG_DEBUG 0
 
-#include "DisplayRefreshRatesChangedAtomReporter.h"
-
-#include <cinttypes>
-#include <thread>
-
 #include <aidl/android/frameworks/stats/IStats.h>
+#include <android/binder_auto_utils.h>
 #include <android/binder_manager.h>
+#include <desktopatoms.h>
 
-#include "desktopatoms.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "stats/DisplayRefreshRatesChangedAtomReporter.h"
 #include "utils/log.h"
 
 using aidl::android::frameworks::stats::IStats;

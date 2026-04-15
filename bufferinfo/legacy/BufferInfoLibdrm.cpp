@@ -16,12 +16,19 @@
 
 #include "BufferInfoLibdrm.h"
 
+#include <cutils/native_handle.h>
+#include <drm/drm_fourcc.h>
 #include <gralloc_handle.h>
 #include <hardware/gralloc.h>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <system/graphics-base-v1.0.h>
+#include <system/graphics.h>
 
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
+#include <optional>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"

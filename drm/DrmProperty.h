@@ -16,13 +16,16 @@
 
 #pragma once
 
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <cinttypes>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "drm/DrmUnique.h"

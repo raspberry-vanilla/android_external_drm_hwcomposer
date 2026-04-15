@@ -16,11 +16,7 @@
 
 #pragma once
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <memory>
-#include <utility>
 
 namespace android::drm_hwcomposer {
 

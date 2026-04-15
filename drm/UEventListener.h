@@ -17,8 +17,10 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace android::drm_hwcomposer {
 

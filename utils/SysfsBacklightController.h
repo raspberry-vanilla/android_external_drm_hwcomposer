@@ -16,13 +16,14 @@
 
 #pragma once
 
-#include "utils/BacklightController.h"
-#include "utils/BacklightFileInterface.h"
-
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
+
+#include "utils/BacklightController.h"
+#include "utils/BacklightFileInterface.h"
 
 namespace android::drm_hwcomposer {
 

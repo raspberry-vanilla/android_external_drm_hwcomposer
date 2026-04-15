@@ -16,9 +16,16 @@
 
 #define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
 
+#include <android/binder_interface_utils.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
+#include <android/binder_status.h>
+#include <linux/sched.h>
 #include <sched.h>
+
+#include <cerrno>
+#include <cstdlib>
+#include <string>
 
 #include "hwc3/Composer.h"
 #include "utils/log.h"

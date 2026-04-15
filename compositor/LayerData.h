@@ -17,8 +17,8 @@
 #pragma once
 
 #include <cmath>
-#include <cstdbool>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 

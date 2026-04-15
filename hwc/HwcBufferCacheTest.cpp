@@ -17,7 +17,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drm/DrmFbImporter.h"
+#include <memory>
+#include <optional>
+
+#include "bufferinfo/BufferInfo.h"
 #include "hwc/HwcBufferCache.h"
 
 using ::testing::_;

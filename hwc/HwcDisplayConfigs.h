@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <drm/drm_mode.h>
+
+#include <cstdint>
 #include <map>
 
 #include "drm/DrmMode.h"

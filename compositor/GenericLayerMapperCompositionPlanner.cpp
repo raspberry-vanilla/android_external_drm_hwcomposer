@@ -18,11 +18,12 @@
 #include <algorithm>
 #include <vector>
 
+#include "compositor/CompositionPlanner.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 #include "drm/DrmPlane.h"
 #include "hwc/HwcLayer.h"
-#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

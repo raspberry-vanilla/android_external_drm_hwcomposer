@@ -16,14 +16,24 @@
 
 #include "SysfsBacklightController.h"
 
-#include <limits>
-#include <linux/fb.h>
-#include <set>
-
 #include <android-base/file.h>
 #include <android-base/parseint.h>
 #include <android-base/strings.h>
+#include <dirent.h>
+#include <linux/fb.h>
 
+#include <cerrno>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <string>
+#include <utility>
+
+#include "utils/BacklightController.h"
+#include "utils/BacklightFileInterface.h"
 #include "utils/log.h"
 
 // NOLINTNEXTLINE(cert-err58-cpp,warnings-as-errors)

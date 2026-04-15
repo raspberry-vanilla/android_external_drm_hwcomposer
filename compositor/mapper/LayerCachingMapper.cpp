@@ -15,9 +15,11 @@
  */
 #include "compositor/mapper/LayerCachingMapper.h"
 
+#include <vector>
+
 #include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 #include "hwc/HwcLayer.h"
-#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

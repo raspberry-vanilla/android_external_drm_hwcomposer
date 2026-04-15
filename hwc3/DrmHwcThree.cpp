@@ -16,11 +16,19 @@
 
 #include "DrmHwcThree.h"
 
-#include <cinttypes>
-
-#include <aidl/android/hardware/graphics/common/Dataspace.h>
+#include <aidl/android/hardware/drm/HdcpLevel.h>
+#include <aidl/android/hardware/drm/HdcpLevels.h>
 #include <aidl/android/hardware/graphics/common/DisplayHotplugEvent.h>
+#include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
+#include <aidl/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.h>
 
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <utility>
+
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
 

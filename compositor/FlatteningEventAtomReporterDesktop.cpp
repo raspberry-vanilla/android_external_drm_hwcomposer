@@ -24,9 +24,9 @@
 #include <aidl/android/frameworks/stats/IStats.h>
 #include <android/binder_auto_utils.h>
 #include <android/binder_manager.h>
+#include <desktopatoms.h>
 
 #include "compositor/FlatteningController.h"
-#include "desktopatoms.h"
 #include "utils/log.h"
 
 using aidl::android::frameworks::stats::IStats;

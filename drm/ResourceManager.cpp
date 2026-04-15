@@ -17,10 +17,18 @@
 #include "ResourceManager.h"
 
 #include <android-base/strings.h>
+#include <linux/time.h>
 #include <sys/stat.h>
 
+#include <cstdint>
 #include <ctime>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
@@ -139,6 +147,7 @@ const std::set<std::string>& ResourceManager::GetInternalDisplayNames() {
 
 auto ResourceManager::GetTimeMonotonicNs() -> int64_t {
   struct timespec ts {};
+  // NOLINTNEXTLINE(misc-include-cleaner)
   clock_gettime(CLOCK_MONOTONIC, &ts);
   constexpr int64_t kNsInSec = 1000000000LL;
   return (int64_t(ts.tv_sec) * kNsInSec) + int64_t(ts.tv_nsec);

@@ -16,11 +16,12 @@
 
 #include "BufferInfoMinigbm.h"
 
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <cutils/native_handle.h>
 
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"

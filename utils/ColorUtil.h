@@ -16,15 +16,20 @@
 
 #pragma once
 
-#include <map>
+#include <drm/drm_mode.h>
+#include <math/mat3.h>
+#include <math/mat4.h>
 
-#include <utils/log.h>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <tuple>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
-#include "drm/drm_mode.h"
-#include "math/mat3.h"
-#include "math/mat4.h"
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

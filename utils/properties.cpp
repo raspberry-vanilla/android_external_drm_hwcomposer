@@ -18,8 +18,6 @@
 
 #include <string>
 
-#include <android-base/properties.h>
-
 #include "utils/log.h"
 
 #ifdef ANDROID

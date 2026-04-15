@@ -16,15 +16,23 @@
 
 #include "DrmHwc.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <cmath>
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcDisplayConfigs.h"
+#include "stats/DisplayRefreshRatesChangedAtomReporter.h"
 #include "stats/Stats.h"
 #include "utils/log.h"
 #include "utils/properties.h"

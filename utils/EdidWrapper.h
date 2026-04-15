@@ -16,15 +16,21 @@
 
 #pragma once
 
+#include <cstdint>
+#include <utility>
+#include <vector>
+
 #if HAS_LIBDISPLAY_INFO
 extern "C" {
-#include <libdisplay-info/edid.h>
 #include <libdisplay-info/info.h>
 }
-#endif
+
+#include <memory>
+
+#include "drm/DrmUnique.h"
+#endif  // HAS_LIBDISPLAY_INFO
 
 #include "compositor/DisplayInfo.h"
-#include "drm/DrmUnique.h"
 
 namespace aidl::android::hardware::graphics::common {
 enum class Hdr;

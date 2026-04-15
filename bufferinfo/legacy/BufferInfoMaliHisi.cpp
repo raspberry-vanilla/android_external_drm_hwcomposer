@@ -16,14 +16,15 @@
 
 #include "BufferInfoMaliHisi.h"
 
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <cutils/native_handle.h>
+#include <drm/drm_fourcc.h>
 
-#include <cinttypes>
+#include <cstdint>
+#include <optional>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
-#include "gralloc_priv.h"
+#include "tests/test_include/gralloc_priv.h"
 
 #define MALI_ALIGN(value, base) (((value) + ((base)-1)) & ~((base)-1))
 

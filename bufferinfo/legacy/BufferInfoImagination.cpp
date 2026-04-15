@@ -16,13 +16,15 @@
 
 #include "BufferInfoImagination.h"
 
-#include <xf86drm.h>
+#include <cutils/native_handle.h>
+#include <drm/drm_fourcc.h>
 
 #include <cerrno>
+#include <optional>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
-#include "img_gralloc1_public.h"
+#include "tests/test_include/img_gralloc1_public.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

@@ -16,13 +16,26 @@
 
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
+#include "drm/DrmAtomicCommitSink.h"
+
+#include <cutils/trace.h>
+#include <drm/drm_mode.h>
 #include <utils/Trace.h>
+#include <xf86drmMode.h>
+
+#include <cerrno>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "compositor/LayerToPlaneJoiningPlan.h"
-#include "drm/DrmAtomicCommitSink.h"
+#include "drm/AtomicStateManager.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmUnique.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
@@ -102,6 +115,7 @@ bool CommitFrame(
   if (test_only) {
     ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
              seamless, err, errno,
+             // NOLINTNEXTLINE(misc-include-cleaner)
              strerror_r(errno, err_buf, error_buf_max_size));
     return err == 0;
   }
@@ -110,12 +124,14 @@ bool CommitFrame(
     ALOGE(
         "Seamless commit failed, retrying a full modeset (visual artifacts may "
         "be observed). Error: %s",
+        // NOLINTNEXTLINE(misc-include-cleaner)
         strerror_r(errno, err_buf, error_buf_max_size));
     err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
                               flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
   }
   if (err != 0) {
     ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
+          // NOLINTNEXTLINE(misc-include-cleaner)
           strerror_r(errno, err_buf, error_buf_max_size));
 
     return false;

@@ -16,15 +16,24 @@
 
 #include "ColorUtil.h"
 
+#include <drm/drm_mode.h>
+#include <math/TMatHelpers.h>
+#include <math/mat3.h>
+#include <math/mat4.h>
+#include <ui/ColorSpace.h>
+
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <tuple>
-
-#include <ui/ColorSpace.h>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
-#include "math/TMatHelpers.h"
+#include "utils/log.h"
 
 using ColorGamut = android::ColorSpace;
 

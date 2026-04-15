@@ -19,6 +19,7 @@
 #ifdef ANDROID
 
 #include <log/log.h>
+#include <log/log_main.h>  // IWYU pragma: export
 
 #else
 

@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-#include <functional>
-#include <map>
-#include <memory>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <ostream>
 
 #include "stats/Stats.h"
 

@@ -16,6 +16,13 @@
 
 #include "HdcpController.h"
 
+#include <android-base/thread_annotations.h>
+
+#include <chrono>
+#include <mutex>
+#include <optional>
+#include <utility>
+
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDisplayPipeline.h"

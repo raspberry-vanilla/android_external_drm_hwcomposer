@@ -16,14 +16,17 @@
 
 #include "DrmColorOp.h"
 
-#include <xf86drmMode.h>
+#include <drm/drm_mode.h>
 
 #include <cinttypes>
 #include <cstdint>
+#include <memory>
 #include <sstream>
+#include <string>
+#include <utility>
 
-#include "DrmDevice.h"
-#include "drm_mode.h"
+#include "drm/DrmDevice.h"
+#include "drm/DrmUnique.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

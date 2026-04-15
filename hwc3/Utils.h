@@ -17,6 +17,7 @@
 #pragma once
 
 #include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
+#include <android/binder_auto_utils.h>
 
 #include <cstdint>
 

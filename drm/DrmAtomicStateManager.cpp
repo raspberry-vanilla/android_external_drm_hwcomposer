@@ -20,15 +20,24 @@
 
 #include "DrmAtomicStateManager.h"
 
+#include <android-base/thread_annotations.h>
+#include <cutils/trace.h>
 #include <drm/drm_mode.h>
 #include <sync/sync.h>
 #include <utils/Trace.h>
 
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <tuple>
+#include <utility>
 
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/AtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"

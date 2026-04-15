@@ -31,16 +31,16 @@
 #include "utils/log.h"
 
 #if GRALLOC_USE_GRALLOC1_API
-#include <hardware/gralloc1.h>
+#include <hardware/gralloc1.h>  // IWYU pragma: export
 #else
-#include <hardware/gralloc.h>
+#include <hardware/gralloc.h>  // IWYU pragma: export
 #endif
 /**
  * mali_gralloc_formats.h needs the define for GRALLOC_MODULE_API_VERSION_0_3 and
  * GRALLOC_MODULE_API_VERSION_1_0, so include <gralloc1.h> or <gralloc.h> before
  * including mali_gralloc_formats.h
  **/
-#include "mali_gralloc_formats.h"
+#include "mali_gralloc_formats.h"  // IWYU pragma: export
 #include "mali_gralloc_usages.h"
 #include "gralloc_helper.h"
 
@@ -54,7 +54,7 @@
  * GRALLOC_DISABLE_PRIVATE_BUFFER_DEF is intended for DDKs to test while implementing
  * the new private API.
  */
-#include "mali_gralloc_buffer.h"
+#include "mali_gralloc_buffer.h"  // IWYU pragma: export
 #endif
 
 #if defined(GRALLOC_MODULE_API_VERSION_1_0)

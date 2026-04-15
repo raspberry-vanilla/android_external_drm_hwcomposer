@@ -15,11 +15,9 @@
  */
 #pragma once
 
-#include <memory>
 #include <vector>
 
 #include "compositor/mapper/LayerMapper.h"
-#include "drm/DrmDisplayPipeline.h"
 
 namespace android::drm_hwcomposer {
 

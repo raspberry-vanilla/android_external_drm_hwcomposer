@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include <hardware/gralloc.h>
+#include <cutils/native_handle.h>
+
+#include <optional>
 
 #include "bufferinfo/BufferInfoGetter.h"
 

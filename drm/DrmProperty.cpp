@@ -14,16 +14,18 @@
  * limitations under the License.
  */
 
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-
 #include "DrmProperty.h"
 
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
 #include <cerrno>
 #include <cinttypes>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include "utils/fd.h"
 #include "utils/log.h"

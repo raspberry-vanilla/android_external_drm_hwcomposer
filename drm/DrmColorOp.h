@@ -19,12 +19,16 @@
 #include <xf86drmMode.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <tuple>
+#include <utility>
 
-#include "DrmDisplayPipeline.h"
-#include "DrmMode.h"
-#include "DrmProperty.h"
-#include "DrmUnique.h"
+#include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmMode.h"
+#include "drm/DrmProperty.h"
+#include "drm/DrmUnique.h"
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

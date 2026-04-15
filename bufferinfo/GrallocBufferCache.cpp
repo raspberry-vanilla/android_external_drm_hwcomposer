@@ -16,11 +16,18 @@
 
 #include "bufferinfo/GrallocBufferCache.h"
 
+#include <cutils/native_handle.h>
+
+#include <cstdint>
+#include <optional>
 #include <utility>
 
 #include "bufferinfo/BufferInfoGetter.h"
-#include "bufferinfo/GrallocBufferHandle.h"
-#include "drm/DrmFbImporter.h"
+#include "bufferinfo/GrallocBufferHandle.h"  // IWYU pragma: keep for GrallocBufferHandle
+#include "drm/DrmFbImporter.h"  // IWYU pragma: keep for IDrmFbIdHandle
+#include "hwc/HwcBufferCache.h"
+#include "hwc/HwcLayer.h"
+#include "utils/fd.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

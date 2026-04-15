@@ -19,7 +19,6 @@
 #include <xf86drmMode.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <string>
 
 #include "drm/DrmUnique.h"

@@ -15,7 +15,10 @@
  */
 #include "compositor/mapper/ForceClientCompositionLayerMapper.h"
 
+#include <vector>
+
 #include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
 
 namespace android::drm_hwcomposer {
 std::vector<LayerMapping> ForceClientCompositionLayerMapper::AssignLayers(

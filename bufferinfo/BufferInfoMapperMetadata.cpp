@@ -16,12 +16,17 @@
 
 #include "BufferInfoMapperMetadata.h"
 
-#include <drm/drm_fourcc.h>
+#include <cutils/native_handle.h>
+#include <hardware/gralloc.h>
 #include <ui/GraphicBufferMapper.h>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <ui/GraphicTypes.h>
+#include <utils/Errors.h>
 
-#include <cinttypes>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"

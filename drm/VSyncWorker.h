@@ -17,9 +17,11 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
-#include <map>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include <android-base/thread_annotations.h>

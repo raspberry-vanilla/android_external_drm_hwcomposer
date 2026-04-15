@@ -31,11 +31,12 @@
 
 #include "FlatteningController.h"
 
+#include <android-base/thread_annotations.h>
+
 #include <chrono>
 #include <mutex>
 #include <thread>
-
-#include <android-base/thread_annotations.h>
+#include <utility>
 
 #include "compositor/FlatteningEventAtomReporter.h"
 #include "hwc/HwcDisplay.h"

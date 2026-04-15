@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "drm/AtomicStateManager.h"
 
 namespace android::drm_hwcomposer {

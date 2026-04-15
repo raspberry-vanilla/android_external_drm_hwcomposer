@@ -18,26 +18,62 @@
 
 #include "ComposerClient.h"
 
-#include <cinttypes>
-#include <cmath>
-#include <memory>
-#include <unordered_map>
-#include <vector>
-
+#include <aidl/android/hardware/graphics/common/BlendMode.h>
+#include <aidl/android/hardware/graphics/common/Dataspace.h>
+#include <aidl/android/hardware/graphics/common/FRect.h>
+#include <aidl/android/hardware/graphics/common/HdrConversionStrategy.h>
+#include <aidl/android/hardware/graphics/common/PixelFormat.h>
 #include <aidl/android/hardware/graphics/common/Transform.h>
+#include <aidl/android/hardware/graphics/composer3/BnComposerClient.h>
 #include <aidl/android/hardware/graphics/composer3/ClientTarget.h>
+#include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
-#include <aidl/android/hardware/graphics/composer3/DisplayRequest.h>
+#include <aidl/android/hardware/graphics/composer3/ContentType.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayAttribute.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayBrightness.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayConnectionType.h>
+#include <aidl/android/hardware/graphics/composer3/FormatColorComponent.h>
 #include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
+#include <aidl/android/hardware/graphics/composer3/LayerBrightness.h>
+#include <aidl/android/hardware/graphics/composer3/LayerCommand.h>
+#include <aidl/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.h>
+#include <aidl/android/hardware/graphics/composer3/ParcelableBlendMode.h>
+#include <aidl/android/hardware/graphics/composer3/ParcelableComposition.h>
+#include <aidl/android/hardware/graphics/composer3/ParcelableDataspace.h>
+#include <aidl/android/hardware/graphics/composer3/ParcelableTransform.h>
+#include <aidl/android/hardware/graphics/composer3/PerFrameMetadataKey.h>
+#include <aidl/android/hardware/graphics/composer3/PlaneAlpha.h>
 #include <aidl/android/hardware/graphics/composer3/PowerMode.h>
 #include <aidl/android/hardware/graphics/composer3/PresentOrValidate.h>
 #include <aidl/android/hardware/graphics/composer3/RenderIntent.h>
+#include <aidl/android/hardware/graphics/composer3/ZOrder.h>
 #include <aidlcommonsupport/NativeHandle.h>
+#include <android-base/unique_fd.h>
 #include <android/binder_auto_utils.h>
 #include <android/binder_ibinder_platform.h>
 #include <cutils/native_handle.h>
+#include <cutils/trace.h>
 #include <ui/GraphicBufferMapper.h>
+#include <utils/Errors.h>
 #include <utils/Trace.h>
+
+#if __ANDROID_API__ >= 36
+#include <aidl/android/hardware/drm/HdcpLevel.h>
+#include <aidl/android/hardware/graphics/composer3/OutputType.h>
+#endif
+
+#include <algorithm>
+#include <array>
+#include <cinttypes>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
@@ -79,8 +115,8 @@ using ::android::drm_hwcomposer::SrcRectInfo;
 using ::android::drm_hwcomposer::StatsPoller;
 using ::android::drm_hwcomposer::TransferFunction;
 
-using HwcOutputType = ::android::drm_hwcomposer::OutputType;
 #if __ANDROID_API__ >= 36
+using HwcOutputType = ::android::drm_hwcomposer::OutputType;
 using AidlOutputType = aidl::android::hardware::graphics::composer3::OutputType;
 #endif
 

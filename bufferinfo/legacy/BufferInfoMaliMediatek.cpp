@@ -16,16 +16,15 @@
 
 #include "BufferInfoMaliMediatek.h"
 
-#include <hardware/gralloc.h>
-#include <stdatomic.h>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <cutils/native_handle.h>
+#include <drm/drm_fourcc.h>
 
-#include <cinttypes>
+#include <cstdint>
+#include <optional>
 
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
-#include "gralloc_priv.h"
+#include "tests/test_include/gralloc_priv.h"
 
 namespace android::drm_hwcomposer {
 

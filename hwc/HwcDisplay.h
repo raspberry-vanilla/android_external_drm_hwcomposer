@@ -16,17 +16,27 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
 #include "utils/BacklightController.h"
 #include "utils/EdidWrapper.h"
+#include "utils/fd.h"
 
 namespace aidl::android::hardware::graphics::common {
 enum class Hdr;

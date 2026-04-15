@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <memory>
+#include <string>
+
 #include "backend/BackendManager.h"
 #include "compositor/CompositionPlanner.h"
 

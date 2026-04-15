@@ -16,6 +16,11 @@
 
 #include "LayerToPlaneJoiningPlan.h"
 
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include "compositor/LayerData.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"

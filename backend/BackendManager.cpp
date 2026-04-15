@@ -16,6 +16,11 @@
 
 #include "BackendManager.h"
 
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "bufferinfo/BufferInfoGetter.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"

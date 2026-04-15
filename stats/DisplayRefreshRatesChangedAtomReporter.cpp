@@ -16,6 +16,8 @@
 
 #include "DisplayRefreshRatesChangedAtomReporter.h"
 
+#include <memory>
+
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

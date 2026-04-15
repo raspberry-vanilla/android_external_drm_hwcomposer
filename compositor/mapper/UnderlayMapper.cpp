@@ -15,10 +15,13 @@
  */
 #include "compositor/mapper/UnderlayMapper.h"
 
-#include "compositor/LayerData.h"
-#include "hwc/HwcLayer.h"
-
 #include <drm/drm_fourcc.h>
+
+#include <vector>
+
+#include "compositor/LayerData.h"
+#include "compositor/mapper/LayerMapper.h"
+#include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
 namespace {

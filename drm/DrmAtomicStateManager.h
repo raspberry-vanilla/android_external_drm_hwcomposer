@@ -16,22 +16,20 @@
 
 #pragma once
 
-#include <pthread.h>
+#include <android-base/thread_annotations.h>
 
-#include <cstdint>
-#include <map>
+#include <condition_variable>
+#include <cstddef>
 #include <memory>
-#include <optional>
+#include <mutex>
 #include <queue>
 #include <thread>
-
-#include <android-base/thread_annotations.h>
+#include <vector>
 
 #include "compositor/LayerData.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
-#include "drm/DrmMode.h"
-#include "math/mat3.h"
+#include "drm/DrmUnique.h"
 #include "utils/ColorUtil.h"
 #include "utils/fd.h"
 

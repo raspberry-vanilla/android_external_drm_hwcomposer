@@ -16,12 +16,12 @@
 
 #pragma once
 
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
-
-#include "drm_mode.h"
 
 namespace android::drm_hwcomposer {
 

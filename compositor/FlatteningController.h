@@ -16,13 +16,14 @@
 
 #pragma once
 
+#include <android-base/thread_annotations.h>
+
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
-
-#include <android-base/thread_annotations.h>
 
 #include "hwc/HwcDisplay.h"
 

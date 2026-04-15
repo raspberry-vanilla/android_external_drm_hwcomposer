@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"

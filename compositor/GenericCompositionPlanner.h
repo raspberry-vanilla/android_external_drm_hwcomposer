@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <tuple>
+#include <vector>
+
 #include "compositor/CompositionPlanner.h"
 
 namespace android::drm_hwcomposer {

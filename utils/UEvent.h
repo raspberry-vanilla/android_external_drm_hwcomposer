@@ -16,15 +16,21 @@
 
 #pragma once
 
+#include <asm-generic/poll.h>
+#include <linux/eventfd.h>
 #include <linux/netlink.h>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <cerrno>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "utils/fd.h"
 #include "utils/log.h"

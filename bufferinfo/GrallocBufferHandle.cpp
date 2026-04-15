@@ -16,7 +16,13 @@
 
 #include "bufferinfo/GrallocBufferHandle.h"
 
+#include <cutils/native_handle.h>
 #include <ui/GraphicBufferMapper.h>
+#include <utils/Errors.h>
+
+#include <memory>
+
+#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 

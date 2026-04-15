@@ -14,19 +14,23 @@
  * limitations under the License.
  */
 
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 
 #include "DrmFbImporter.h"
 
-#include <hardware/gralloc.h>
+#include <cutils/trace.h>
+#include <drm/drm.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_mode.h>
 #include <utils/Trace.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include <cerrno>
 #include <cinttypes>
-#include <system_error>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 
 #include "bufferinfo/BufferInfo.h"
 #include "drm/DrmDevice.h"

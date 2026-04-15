@@ -16,9 +16,11 @@
 
 #include "DrmCrtc.h"
 
-#include <xf86drmMode.h>
+#include <drm_mode.h>
 
 #include <cstdint>
+#include <memory>
+#include <utility>
 
 #include "drm/DrmDevice.h"
 #include "drm/DrmProperty.h"

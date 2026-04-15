@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <vector>
 
 #include "compositor/CompositorTestUtils.h"
+#include "compositor/LayerData.h"
 #include "compositor/mapper/CursorLayerMapper.h"
 #include "compositor/mapper/LayerMapper.h"
 #include "hwc/HwcLayer.h"

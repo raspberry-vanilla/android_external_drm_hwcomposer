@@ -16,6 +16,8 @@
 
 #include "CompositionPlanner.h"
 
+#include <vector>
+
 #include "compositor/LayerData.h"
 #include "hwc/HwcLayer.h"
 

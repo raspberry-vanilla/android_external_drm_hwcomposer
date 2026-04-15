@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <cutils/native_handle.h>
+
+#include <memory>
+
 #include "bufferinfo/GrallocBufferHandle.h"
 
 namespace android::drm_hwcomposer {

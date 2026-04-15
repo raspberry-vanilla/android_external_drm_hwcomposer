@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string>
 #include <vector>
 
 namespace android::drm_hwcomposer {

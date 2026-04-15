@@ -16,16 +16,16 @@
 
 #pragma once
 
-#include <drm/drm_fourcc.h>
-#include <hardware/gralloc.h>
-
 #include <array>
+#include <cstdint>
 #include <map>
+#include <memory>
 
 #include "bufferinfo/BufferInfo.h"
 #include "utils/fd.h"
 
 #ifndef DRM_FORMAT_INVALID
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define DRM_FORMAT_INVALID 0
 #endif
 

@@ -15,6 +15,9 @@
  */
 #pragma once
 // NOLINTBEGIN
+
+#include <drm.h>  // IWYU pragma: export
+
 /**
  * DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE
  *

@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <memory>
 #include <vector>
 
 #include "compositor/mapper/LayerMapper.h"

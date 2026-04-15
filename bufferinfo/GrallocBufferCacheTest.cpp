@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
+#include <cutils/native_handle.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <optional>
+#include <utility>
+
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/GrallocBufferCache.h"
-#include "bufferinfo/GrallocBufferHandle.h"
+#include "hwc/HwcBufferCache.h"
 
 using ::testing::_;
 using ::testing::NiceMock;

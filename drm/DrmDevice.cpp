@@ -16,18 +16,31 @@
 
 #include "DrmDevice.h"
 
+#include <asm-generic/int-ll64.h>
+#include <asm-generic/mman-common.h>
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
 #include <drm_fourcc.h>
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include <cerrno>
 #include <cinttypes>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <memory>
+#include <optional>
+#include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
-#include "drm/AtomicCommitSink.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmEncoder.h"
@@ -36,8 +49,6 @@
 #include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
 #include "drm/ResourceManager.h"
-#include "drm/drm.h"
-#include "hwc/HwcDisplay.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -73,6 +84,7 @@ DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
 // NOLINTBEGIN(readability-function-cognitive-complexity)
 auto DrmDevice::Init(const char *path) -> int {
   /* TODO: Use drmOpenControl here instead */
+  // NOLINTNEXTLINE(misc-include-cleaner)
   fd_ = MakeSharedFd(open(path, O_RDWR | O_CLOEXEC));
   if (!fd_) {
     // NOLINTNEXTLINE(concurrency-mt-unsafe): Fixme
@@ -277,6 +289,7 @@ std::string DrmDevice::GetName() const {
 }
 
 auto DrmDevice::IsKMSDev(const char *path) -> bool {
+  // NOLINTNEXTLINE(misc-include-cleaner)
   auto fd = MakeUniqueFd(open(path, O_RDWR | O_CLOEXEC));
   if (!fd) {
     return false;
@@ -445,6 +458,7 @@ auto DrmDevice::CreateBufferForModeset(uint32_t width, uint32_t height)
     goto done;
   }
 
+  // NOLINTNEXTLINE(misc-include-cleaner)
   ptr = mmap(nullptr, create.size, PROT_READ | PROT_WRITE, MAP_SHARED, *fd_,
              (off_t)map.offset);
   if (ptr == MAP_FAILED) {

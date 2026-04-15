@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include "backend/BackendManager.h"
+#include <memory>
+#include <string>
 
-#include "utils/log.h"
+#include "backend/BackendManager.h"
 
 namespace android::drm_hwcomposer {
 BackendManager &BackendManager::GetInstance() {

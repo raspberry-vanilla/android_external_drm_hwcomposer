@@ -16,14 +16,23 @@
 
 #include "VSyncWorker.h"
 
-#include <sync/sync.h>
+#include <android-base/thread_annotations.h>
+#include <linux/sync_file.h>
+#include <linux/time.h>
+#include <ndk/sync.h>
 #include <utils/Trace.h>
 #include <xf86drm.h>
-#include <xf86drmMode.h>
 
+#include <algorithm>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <utility>
 
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
@@ -206,6 +215,7 @@ int VSyncWorker::SyntheticWaitVBlank(int64_t *timestamp) {
 
   int ret = 0;
   do {
+    // NOLINTNEXTLINE(misc-include-cleaner)
     ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &vsync, nullptr);
   } while (ret == EINTR);
   if (ret != 0)

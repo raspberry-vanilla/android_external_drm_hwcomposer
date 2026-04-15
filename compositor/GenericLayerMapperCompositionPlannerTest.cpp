@@ -14,21 +14,23 @@
  * limitations under the License.
  */
 
+#include <drm/drm_fourcc.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <xf86drmMode.h>
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 
+#include "compositor/CompositionPlanner.h"
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/GenericLayerMapperCompositionPlanner.h"
-#include "compositor/ICompositorDisplay.h"
+#include "compositor/LayerData.h"
 #include "drm/DrmDevice.h"
-#include "drm/DrmFbImporter.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
 #include "hwc/HwcLayer.h"
-
-#include <drm/drm_fourcc.h>
 
 namespace android::drm_hwcomposer {
 namespace {

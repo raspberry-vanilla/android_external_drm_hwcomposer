@@ -18,19 +18,38 @@
 
 #include "HwcDisplay.h"
 
-#include <cinttypes>
-#include <cstdint>
-#include <sstream>
-
+#include <cutils/trace.h>
+#include <drm/drm_mode.h>
+#include <linux/time.h>
 #include <ui/ColorSpace.h>
 #include <ui/GraphicTypes.h>
 #include <utils/Trace.h>
+#include <xf86drmMode.h>
+
+#include <algorithm>
+#include <array>
+#include <cinttypes>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <ctime>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "backend/BackendManager.h"
+#include "bufferinfo/BufferInfo.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/HdcpController.h"
+#include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
@@ -40,6 +59,7 @@
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmHwc.h"
 #include "drm/VSyncWorker.h"
+#include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
 #include "stats/DisplayConfigurationResultReporter.h"
 #include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
@@ -47,6 +67,7 @@
 #include "utils/ColorUtil.h"
 #include "utils/EdidWrapper.h"
 #include "utils/SysfsBacklightController.h"
+#include "utils/fd.h"
 #include "utils/log.h"
 #include "utils/properties.h"
 
@@ -58,8 +79,10 @@ using FlattenReason = CompositionPlanner::FlattenReason;
 
 namespace {
 
+// NOLINTBEGIN(misc-include-cleaner)
 constexpr auto kFlatteningTimeout = 1s;
 constexpr auto kHdcpRetryTimeout = 1s;
+// NOLINTEND(misc-include-cleaner)
 
 bool float_equals(float a, float b) {
   const float epsilon = 0.001F;
@@ -1005,6 +1028,7 @@ void HwcDisplay::WaitForPresentTime(int64_t present_time,
   sleep_until_ts.tv_sec = int(sleep_until / kOneSecondNs);
   sleep_until_ts.tv_nsec = int(sleep_until -
                                (sleep_until_ts.tv_sec * kOneSecondNs));
+  // NOLINTNEXTLINE(misc-include-cleaner)
   clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &sleep_until_ts, nullptr);
 }
 

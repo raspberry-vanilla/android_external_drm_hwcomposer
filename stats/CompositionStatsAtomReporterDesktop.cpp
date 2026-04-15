@@ -16,16 +16,18 @@
 
 // #define NLOG_DEBUG 0
 
-#include "CompositionStatsAtomReporter.h"
+#include <aidl/android/frameworks/stats/IStats.h>
+#include <android/binder_auto_utils.h>
+#include <android/binder_manager.h>
+#include <desktopatoms.h>
 
 #include <cinttypes>
-#include <thread>
-
-#include <aidl/android/frameworks/stats/IStats.h>
-#include <android/binder_manager.h>
+#include <cstdint>
+#include <memory>
+#include <string>
 
 #include "compositor/CompositionPlanner.h"
-#include "desktopatoms.h"
+#include "stats/CompositionStatsAtomReporter.h"
 #include "stats/Stats.h"
 #include "utils/log.h"
 

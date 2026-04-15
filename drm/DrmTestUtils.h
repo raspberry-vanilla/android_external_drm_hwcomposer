@@ -15,12 +15,16 @@
  */
 #pragma once
 
-#include <gmock/gmock.h>
 #include <xf86drmMode.h>
+
+#include <cstdint>
+#include <memory>
+#include <utility>
 
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmEncoder.h"
 #include "drm/DrmPlane.h"
 

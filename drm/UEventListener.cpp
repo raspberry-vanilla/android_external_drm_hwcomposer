@@ -16,6 +16,12 @@
 
 #include "UEventListener.h"
 
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <memory>
+#include <mutex>
+#include <string>
 #include <thread>
 
 #include "utils/UEvent.h"

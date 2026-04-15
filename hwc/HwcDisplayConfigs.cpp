@@ -16,7 +16,11 @@
 
 #include "HwcDisplayConfigs.h"
 
+#include <drm/drm_mode.h>
+#include <xf86drmMode.h>
+
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 
 #include "drm/DrmConnector.h"
