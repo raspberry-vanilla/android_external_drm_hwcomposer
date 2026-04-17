@@ -23,6 +23,7 @@ extern "C" {
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -118,6 +119,24 @@ auto LibdisplayEdidWrapper::GetBoundsMm() -> std::pair<int32_t, int32_t> {
   }
 
   return {dtd->horiz_image_mm, dtd->vert_image_mm};
+}
+
+EdidWrapper::VendorProductInfo LibdisplayEdidWrapper::GetVendorProductInfo()
+    const {
+  auto vendor = VendorProductInfo{.make = std::string(di_info_get_make(info_)),
+                                  .model = std::string(
+                                      di_info_get_model(info_)),
+                                  .year = 0};
+
+  const auto *edid = di_info_get_edid(info_);
+  if (edid != nullptr) {
+    const auto *vendor_product = di_edid_get_vendor_product(edid);
+    if (vendor_product != nullptr) {
+      vendor.year = vendor_product->manufacture_year;
+    }
+  }
+
+  return vendor;
 }
 
 }  // namespace android::drm_hwcomposer

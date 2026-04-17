@@ -18,6 +18,8 @@
 
 #include "drm/DrmAtomicCommitSink.h"
 
+#include <unistd.h>
+
 #include <cutils/trace.h>
 #include <drm/drm_mode.h>
 #include <utils/Trace.h>
@@ -118,6 +120,33 @@ bool CommitFrame(
              // NOLINTNEXTLINE(misc-include-cleaner)
              strerror_r(errno, err_buf, error_buf_max_size));
     return err == 0;
+  }
+
+  // Retry non-blocking commits that fail with EBUSY. The kernel returns EBUSY
+  // when the previous commit's cleanup_done (checked by stall_checks in
+  // drm_atomic_helper_setup_commit) has not yet completed. The out-fence
+  // signals at vblank after hw_done, but cleanup_done is signaled slightly
+  // later in the kernel's commit worker. This gap is typically < 1ms but
+  // becomes more frequent at high resolutions (e.g. 8K) where commit
+  // processing takes longer.
+  if (err != 0 && errno == EBUSY && nonblock) {
+    static constexpr int kMaxBusyRetries = 5;
+    static constexpr int kInitialRetryUs = 200;
+
+    for (int retry = 0; retry < kMaxBusyRetries; retry++) {
+      {
+        ATRACE_NAME("EbusyRetryWait");
+        usleep(kInitialRetryUs << retry);  // 200, 400, 800, 1600, 3200 us
+      }
+      {
+        ATRACE_NAME("EbusyRetryCommit");
+        err = drmModeAtomicCommit(*drm->GetFd(),
+                                  pset.get(), flags,
+                                  drm);
+      }
+      if (err == 0 || errno != EBUSY)
+        break;
+    }
   }
 
   if (err != 0 && seamless) {

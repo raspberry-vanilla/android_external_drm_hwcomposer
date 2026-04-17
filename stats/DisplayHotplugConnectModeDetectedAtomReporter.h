@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace android::drm_hwcomposer {
 class DisplayHotplugConnectModeDetectedAtomReporter {
@@ -40,6 +41,9 @@ class DisplayHotplugConnectModeDetectedAtomReporter {
     int32_t dpi_y = 0;
     DisplayType display_type = DisplayType::kUnspecified;
     bool is_preferred = false;
+    std::string make;
+    std::string model;
+    int32_t year = 0;
 
     bool operator==(const Atom& other) const {
       return display_handle == other.display_handle &&
@@ -47,7 +51,8 @@ class DisplayHotplugConnectModeDetectedAtomReporter {
              resolution_y == other.resolution_y &&
              refresh_rate == other.refresh_rate && dpi_x == other.dpi_x &&
              dpi_y == other.dpi_y && display_type == other.display_type &&
-             is_preferred == other.is_preferred;
+             is_preferred == other.is_preferred && make == other.make &&
+             model == other.model && year == other.year;
     };
   };
 

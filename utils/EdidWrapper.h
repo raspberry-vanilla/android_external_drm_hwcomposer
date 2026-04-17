@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,12 @@ namespace android::drm_hwcomposer {
 // Stub wrapper class for edid parsing
 class EdidWrapper {
  public:
+  struct VendorProductInfo {
+    std::string make;
+    std::string model;
+    int32_t year;
+  };
+
   EdidWrapper() = default;
   EdidWrapper(const EdidWrapper &) = delete;
   virtual ~EdidWrapper() = default;
@@ -63,6 +70,10 @@ class EdidWrapper {
   };
   virtual auto GetBoundsMm() -> std::pair<int32_t, int32_t> {
     return {-1, -1};
+  }
+
+  virtual VendorProductInfo GetVendorProductInfo() const {
+    return VendorProductInfo{};
   }
 };
 
@@ -87,6 +98,8 @@ class LibdisplayEdidWrapper final : public EdidWrapper {
   void GetColorModes(std::vector<ColorMode> &color_modes) override;
 
   auto GetBoundsMm() -> std::pair<int32_t, int32_t> override;
+
+  VendorProductInfo GetVendorProductInfo() const override;
 
  private:
   LibdisplayEdidWrapper(di_info *info) : info_(std::move(info)) {

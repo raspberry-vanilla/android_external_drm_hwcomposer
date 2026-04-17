@@ -67,7 +67,8 @@ class DisplayHotplugConnectModeDetectedAtomReporterDesktop
                          deprecated_reverse_domain_name, atom.display_handle,
                          atom.resolution_x, atom.resolution_y,
                          atom.refresh_rate, atom.dpi_x, atom.dpi_y,
-                         ToProtoEnum(atom.display_type), atom.is_preferred);
+                         ToProtoEnum(atom.display_type), atom.is_preferred,
+                         atom.make.c_str(), atom.model.c_str(), atom.year);
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));
