@@ -115,10 +115,6 @@ bool CommitFrame(
   }
 
   if (test_only) {
-    ALOGW_IF(err != 0, "Test-only seamless=%d ret=%d errno=%d strerror=%s\n",
-             seamless, err, errno,
-             // NOLINTNEXTLINE(misc-include-cleaner)
-             strerror_r(errno, err_buf, error_buf_max_size));
     return err == 0;
   }
 
