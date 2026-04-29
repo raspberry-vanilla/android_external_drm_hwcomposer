@@ -79,6 +79,7 @@ filegroup {
 
         "compositor/CompositionPlanner.cpp",
         "compositor/FlatteningController.cpp",
+        "compositor/FrameTimeHistory.cpp",
         "compositor/GenericCompositionPlanner.cpp",
         "compositor/GenericLayerMapperCompositionPlanner.cpp",
         "compositor/HdcpController.cpp",
@@ -87,6 +88,7 @@ filegroup {
         "compositor/mapper/ForceClientCompositionLayerMapper.cpp",
         "compositor/mapper/LayerCachingMapper.cpp",
         "compositor/mapper/LeftoverLayerMapper.cpp",
+        "compositor/mapper/MapperUtils.cpp",
         "compositor/mapper/UnderlayMapper.cpp",
 
         "drm/DrmAtomicCommitSink.cpp",
@@ -292,6 +294,8 @@ cc_test_host {
         "compositor/FlatteningController.cpp",
         "compositor/FlatteningControllerTests.cpp",
         "compositor/FlatteningEventAtomReporter.cpp",
+        "compositor/FrameTimeHistory.cpp",
+        "compositor/FrameTimeHistoryTest.cpp",
         "compositor/GenericLayerMapperCompositionPlanner.cpp",
         "compositor/GenericLayerMapperCompositionPlannerTest.cpp",
         "compositor/mapper/CursorLayerMapper.cpp",
@@ -302,6 +306,7 @@ cc_test_host {
         "compositor/mapper/LayerCachingMapperTest.cpp",
         "compositor/mapper/LeftoverLayerMapper.cpp",
         "compositor/mapper/LeftoverLayerMapperTest.cpp",
+        "compositor/mapper/MapperUtils.cpp",
         "compositor/mapper/UnderlayMapper.cpp",
         "compositor/mapper/UnderlayMapperTest.cpp",
         "drm/DrmColorOp.cpp",

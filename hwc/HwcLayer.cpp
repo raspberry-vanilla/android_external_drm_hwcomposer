@@ -33,6 +33,10 @@ HwcLayer::HwcLayer(ICompositorDisplay* parent_display)
 
 void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.buffer) {
+    if (layer_data_.fb != layer_properties.buffer->fb) {
+      layer_data_.frame_time_history.AddFrameTime();
+    }
+
     has_buffer_set_ = true;
     layer_data_.bi = layer_properties.buffer->bi;
     layer_data_.fb = layer_properties.buffer->fb;

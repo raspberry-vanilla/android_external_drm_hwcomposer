@@ -24,6 +24,7 @@
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
+#include "compositor/FrameTimeHistory.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -123,6 +124,7 @@ struct LayerData {
   SharedFd acquire_fence;
   Colorspace colorspace;
   TransferFunction transfer_func;
+  FrameTimeHistory frame_time_history;
 };
 
 }  // namespace android::drm_hwcomposer

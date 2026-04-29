@@ -116,6 +116,8 @@ class HwcLayer {
  private:
   void PopulateLayerData();
 
+  friend class CompositorTestUtils;
+
   // sf_type_ stores the initial type given to us by surfaceflinger,
   // validated_type_ stores the type after running ValidateDisplay
   CompositionType sf_type_ = CompositionType::kInvalid;

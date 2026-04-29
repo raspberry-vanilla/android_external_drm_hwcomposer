@@ -79,7 +79,8 @@ class CompositorTestUtils {
   static HwcLayer CreateLayer(ICompositorDisplay* display, IRect dest_ltrb,
                               uint32_t z_order, CompositionType type,
                               float alpha = 1.0F,
-                              uint32_t buffer_format = DRM_FORMAT_RGBA8888);
+                              uint32_t buffer_format = DRM_FORMAT_RGBA8888,
+                              bool is_active = false);
 };
 
 }  // namespace android::drm_hwcomposer

@@ -32,8 +32,7 @@ using ::testing::ElementsAre;
 using ::testing::Field;
 
 #ifndef DRM_FORMAT_P010
-#define DRM_FORMAT_P010 \
-  fourcc_code('P', '0', '1', '0')
+#define DRM_FORMAT_P010 fourcc_code('P', '0', '1', '0')
 #endif
 
 constexpr float kOpaque = 1.0F;
@@ -390,4 +389,448 @@ TEST(UnderlayMapperTest, NotUnderlayNotPromoted) {
                                 Field(&LayerMapping::composition_type,
                                       CompositionType::kCursor))));
 }
+
+TEST(UnderlayMapperTest, HotspotUnderlay) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // The bottom layer is not a video but is a hotspot.
+  HwcLayer non_vido_active_underlay = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/1, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  // Layer caching is required for hotspot underlay.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/2,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    /*is_active=*/false);
+  HwcLayer cached1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                      IRect{.left = 0,
+                                                            .top = 0,
+                                                            .right = 1920,
+                                                            .bottom = 1080},
+                                                      /*z_order=*/3,
+                                                      CompositionType::kDevice,
+                                                      /*alpha=*/kLayerCached,
+                                                      DRM_FORMAT_RGBA8888,
+                                                      /*is_active=*/false);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/false);
+
+  std::vector<LayerMapping> mappings =
+      {{&non_vido_active_underlay, CompositionType::kInvalid},
+       {&non_cached, CompositionType::kInvalid},
+       {&cached1, CompositionType::kDeviceOccluded},
+       {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer,
+                                      &non_vido_active_underlay),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDevice)),
+                          AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
+TEST(UnderlayMapperTest, HotspotUnderlayButNoLayerCaching) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // The bottom layer is not a video but is a hotspot.
+  HwcLayer non_vido_active_underlay = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/1, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  // Layer caching is required for hotspot underlay, but we don't have one here.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/2,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    /*is_active=*/false);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/false);
+
+  std::vector<LayerMapping> mappings = {{&non_vido_active_underlay,
+                                         CompositionType::kInvalid},
+                                        {&non_cached,
+                                         CompositionType::kInvalid},
+                                        {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer,
+                                      &non_vido_active_underlay),
+                                Field(&LayerMapping::composition_type,
+                                      // not underlay.
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
+TEST(UnderlayMapperTest, HotspotUnderlayButOtherActiveLayerPresent) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // The bottom layer is not a video but is a hotspot.
+  HwcLayer non_vido_active_underlay = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/1, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  // Layer caching is required for hotspot underlay.
+  // But |non_cached| being active ruins hotspot candidacy as all other layers
+  // (except for the cursor) are required to be inactive.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/2,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    // active layer
+                                                    /*is_active=*/true);
+  HwcLayer cached1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                      IRect{.left = 0,
+                                                            .top = 0,
+                                                            .right = 1920,
+                                                            .bottom = 1080},
+                                                      /*z_order=*/3,
+                                                      CompositionType::kDevice,
+                                                      /*alpha=*/kLayerCached,
+                                                      DRM_FORMAT_RGBA8888,
+                                                      /*is_active=*/false);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/false);
+
+  std::vector<LayerMapping> mappings =
+      {{&non_vido_active_underlay, CompositionType::kInvalid},
+       {&non_cached, CompositionType::kInvalid},
+       {&cached1, CompositionType::kDeviceOccluded},
+       {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer,
+                                      &non_vido_active_underlay),
+                                Field(&LayerMapping::composition_type,
+                                      // Not underlay
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
+TEST(UnderlayMapperTest, HotspotUnderlaysEvenWhenCursorMoves) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // The bottom layer is not a video but is a hotspot.
+  HwcLayer non_vido_active_underlay = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/1, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  // Layer caching is required for hotspot underlay.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/2,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    /*is_active=*/false);
+  HwcLayer cached1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                      IRect{.left = 0,
+                                                            .top = 0,
+                                                            .right = 1920,
+                                                            .bottom = 1080},
+                                                      /*z_order=*/3,
+                                                      CompositionType::kDevice,
+                                                      /*alpha=*/kLayerCached,
+                                                      DRM_FORMAT_RGBA8888,
+                                                      /*is_active=*/false);
+
+  // An active cursor should not have an impact on hotspot underlay eligibilty.
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/true);
+
+  std::vector<LayerMapping> mappings =
+      {{&non_vido_active_underlay, CompositionType::kInvalid},
+       {&non_cached, CompositionType::kInvalid},
+       {&cached1, CompositionType::kDeviceOccluded},
+       {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer,
+                                      &non_vido_active_underlay),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDevice)),
+                          AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
+TEST(UnderlayMapperTest, HotspotButNotUnderlay) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // Layer caching is required for hotspot underlay.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/1,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    /*is_active=*/false);
+  HwcLayer cached1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                      IRect{.left = 0,
+                                                            .top = 0,
+                                                            .right = 1920,
+                                                            .bottom = 1080},
+                                                      /*z_order=*/2,
+                                                      CompositionType::kDevice,
+                                                      /*alpha=*/kLayerCached,
+                                                      DRM_FORMAT_RGBA8888,
+                                                      /*is_active=*/false);
+
+  // Hotspot, but not the bottom layer.
+  HwcLayer non_vido_active = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/3, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/false);
+
+  std::vector<LayerMapping> mappings =
+      {{&non_cached, CompositionType::kInvalid},
+       {&cached1, CompositionType::kDeviceOccluded},
+       {&non_vido_active, CompositionType::kInvalid},
+       {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &non_vido_active),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
+TEST(UnderlayMapperTest, HotspotUnderlayButClientCompositionRequest) {
+  UnderlayMapper mapper;
+
+  MockCompositorDisplay mock_display;
+
+  // The bottom layer is not a video but is a hotspot.
+  HwcLayer non_vido_active_underlay = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 0, .right = 1920, .bottom = 1080},
+                  /*z_order=*/1, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  // Layer caching is required for hotspot underlay.
+  HwcLayer
+      non_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/2,
+                                                    CompositionType::kDevice,
+                                                    /*alpha=*/kOpaque,
+                                                    DRM_FORMAT_RGBA8888,
+                                                    /*is_active=*/false);
+  HwcLayer cached1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                      IRect{.left = 0,
+                                                            .top = 0,
+                                                            .right = 1920,
+                                                            .bottom = 1080},
+                                                      /*z_order=*/3,
+                                                      CompositionType::kDevice,
+                                                      /*alpha=*/kLayerCached,
+                                                      DRM_FORMAT_RGBA8888,
+                                                      /*is_active=*/false);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor,
+                                                     kOpaque,
+                                                     DRM_FORMAT_BGRA8888,
+                                                     /*is_active=*/false);
+
+  // Underlay candidate is requested to be client composited.
+  std::vector<LayerMapping> mappings =
+      {{&non_vido_active_underlay, CompositionType::kClient},
+       {&non_cached, CompositionType::kInvalid},
+       {&cached1, CompositionType::kDeviceOccluded},
+       {&cursor, CompositionType::kCursor}};
+
+  std::vector<LayerMapping>
+      result = mapper.AssignLayers(mappings,
+                                   [](const std::vector<LayerMapping>&) {
+                                     return true;
+                                   });
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer,
+                                      &non_vido_active_underlay),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kClient)),
+                          AllOf(Field(&LayerMapping::layer, &non_cached),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cached1),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kDeviceOccluded)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kCursor))));
+}
+
 }  // namespace android::drm_hwcomposer

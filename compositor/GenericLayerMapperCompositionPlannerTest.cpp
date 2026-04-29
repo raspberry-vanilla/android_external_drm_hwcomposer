@@ -836,6 +836,98 @@ TEST(GenericLayerMapperCompositionPlannerTest, UnderlayAndLayerCached) {
   EXPECT_TRUE(composition.cursor_plane_validated);
 }
 
+TEST(GenericLayerMapperCompositionPlannerTest, HotspotUnderlayAndLayerCached) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  // Task bar and window are cached.
+  // Underlay eligible for device composition.
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor);
+  HwcLayer
+      status_bar = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 52},
+                                                    /*z_order=*/3,
+                                                    CompositionType::kClient,
+                                                    /*alpha=*/kOpaque);
+  HwcLayer task_bar_cached = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 0, .top = 920, .right = 1920, .bottom = 1080},
+                  /*z_order=*/2, CompositionType::kDevice,
+                  /*alpha=*/kLayerCached);
+  HwcLayer
+      window_cached = CompositorTestUtils::CreateLayer(&mock_display,
+                                                       IRect{.left = 300,
+                                                             .top = 300,
+                                                             .right = 900,
+                                                             .bottom = 900},
+                                                       /*z_order=*/2,
+                                                       CompositionType::kDevice,
+                                                       /*alpha=*/kLayerCached);
+  HwcLayer
+      wallpaper = CompositorTestUtils::CreateLayer(&mock_display,
+                                                   IRect{.left = 0,
+                                                         .top = 0,
+                                                         .right = 1920,
+                                                         .bottom = 1080},
+                                                   /*z_order=*/1,
+                                                   CompositionType::kDevice,
+                                                   /*alpha=*/kOpaque);
+  HwcLayer underlayed_hotspot = CompositorTestUtils::
+      CreateLayer(&mock_display,
+                  IRect{.left = 400, .top = 400, .right = 900, .bottom = 900},
+                  /*z_order=*/0, CompositionType::kDevice,
+                  /*alpha=*/kOpaque, DRM_FORMAT_RGBA8888,
+                  /*is_active=*/true);
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(
+          Return(std::vector<const HwcLayer*>{&underlayed_hotspot, &wallpaper,
+                                              &window_cached, &task_bar_cached,
+                                              &status_bar, &cursor}));
+
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+
+  FakeDrmDevice device;
+  std::shared_ptr<FakeDrmPlane>
+      cursor_plane = std::make_shared<FakeDrmPlane>(device,
+                                                    DRM_PLANE_TYPE_CURSOR);
+  cursor_plane->is_valid_ = true;
+
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane())
+      .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+
+  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+
+  CompositionPlanner::ValidatedComposition
+      composition = planner.ValidateDisplay(&mock_display);
+
+  EXPECT_EQ(composition.composition_types,
+            (CompositionPlanner::
+                 CompositionTypeMap{{&underlayed_hotspot,
+                                     CompositionType::kDevice},
+                                    {&wallpaper, CompositionType::kClient},
+                                    {&window_cached,
+                                     CompositionType::kDeviceOccluded},
+                                    {&task_bar_cached,
+                                     CompositionType::kDeviceOccluded},
+                                    {&status_bar, CompositionType::kClient},
+                                    {&cursor, CompositionType::kCursor}}));
+  EXPECT_TRUE(composition.cursor_plane_validated);
+}
+
 TEST(GenericLayerMapperCompositionPlannerTest,
      LeftoverLayerWithCachedLayersShouldDeviceComposite) {
   GenericLayerMapperCompositionPlanner planner;

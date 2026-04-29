@@ -16,20 +16,37 @@
 
 #include "compositor/CompositorTestUtils.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 
 #include "bufferinfo/BufferInfo.h"
+#include "compositor/FrameTimeHistory.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
+namespace {
+
+FrameTimeHistory CreateFrameTimeHistory(bool is_active) {
+  FrameTimeHistory history;
+  if (is_active) {
+    const auto now = std::chrono::steady_clock::now();
+    // 10 samples for 1000fps, shoud be active enough.
+    for (int i = 10; i > 0; i--) {
+      history.AddFrameTime(now - std::chrono::milliseconds(i));
+    }
+  }
+  return history;
+}
+}  // namespace
 
 HwcLayer CompositorTestUtils::CreateLayer(ICompositorDisplay* display,
                                           IRect dest_ltrb, uint32_t z_order,
                                           CompositionType type, float alpha,
-                                          uint32_t buffer_format) {
+                                          uint32_t buffer_format,
+                                          bool is_active) {
   HwcLayer layer(display);
   HwcLayer::LayerProperties props{
       .buffer = HwcLayer::
@@ -45,6 +62,8 @@ HwcLayer CompositorTestUtils::CreateLayer(ICompositorDisplay* display,
       .z_order = z_order,
   };
   layer.SetLayerProperties(props);
+
+  layer.layer_data_.frame_time_history = CreateFrameTimeHistory(is_active);
 
   return layer;
 }

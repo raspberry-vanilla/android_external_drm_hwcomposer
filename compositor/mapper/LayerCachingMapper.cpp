@@ -19,6 +19,7 @@
 
 #include "compositor/LayerData.h"
 #include "compositor/mapper/LayerMapper.h"
+#include "compositor/mapper/MapperUtils.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
@@ -35,12 +36,7 @@ std::vector<LayerMapping> LayerCachingMapper::AssignLayers(
       continue;
     }
 
-    const float alpha = layer->GetLayerData().pi.alpha;
-    // The implicit contract between SF and HWC on layer caching is that cached
-    // layers are set to have 0.0f alpha, except for one in the set representing
-    // all layers.
-    constexpr float kCachedLayerOpacity = 0.0F;
-    if (alpha == kCachedLayerOpacity) {
+    if (IsLayerCached(*layer)) {
       composition_type = CompositionType::kDeviceOccluded;
     }
   }
