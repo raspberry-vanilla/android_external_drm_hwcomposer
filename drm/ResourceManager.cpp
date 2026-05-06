@@ -183,8 +183,10 @@ void ResourceManager::UpdateFrontendDisplays() {
       }
     }
     if (connected) {
-      if (!conn->IsLinkStatusGood())
+      if (!conn->IsLinkStatusGood()) {
+        conn->SetLinkRecoveryRequired(true);
         frontend_interface_->NotifyDisplayLinkStatus(attached_pipelines_[conn]);
+      }
 
       // If content protection is not enabled anymore, inform frontend so it
       // can terminate HDCP handling for this display.

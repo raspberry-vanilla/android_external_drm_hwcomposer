@@ -82,6 +82,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsLinkStatusGood();
 
+  void SetLinkRecoveryRequired(bool required) {
+    link_recovery_required_ = required;
+  }
+
+  bool IsLinkRecoveryRequired() const {
+    return link_recovery_required_;
+  }
+
   bool UpdateContentProtection();
 
   bool IsContentProtectionEnabled() const;
@@ -100,6 +108,10 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   auto &GetEdidProperty() const {
     return edid_property_;
+  }
+
+  auto &GetLinkStatusProperty() const {
+    return link_status_property_;
   }
 
   auto &GetColorspaceProperty() const {
@@ -186,6 +198,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmProperty hdcp_content_type_property_;
 
   DrmProperty link_status_property_;
+  bool link_recovery_required_ = false;
   DrmProperty panel_orientation_;
 
   DrmProperty writeback_pixel_formats_property_;
