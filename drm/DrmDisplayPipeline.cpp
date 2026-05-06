@@ -21,6 +21,7 @@
 #include <memory>
 #include <vector>
 
+#include "backend/BackendDisplayCapabilities.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"

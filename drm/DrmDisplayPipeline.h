@@ -22,8 +22,9 @@
 
 namespace android::drm_hwcomposer {
 
-class CompositionPlanner;
 class AtomicStateManager;
+class BackendDisplayCapabilities;
+class CompositionPlanner;
 class DrmConnector;
 class DrmCrtc;
 class DrmDevice;
@@ -108,8 +109,13 @@ struct DrmDisplayPipeline {
   std::shared_ptr<BindingOwner<DrmCrtc>> crtc;
   std::shared_ptr<BindingOwner<DrmPlane>> primary_plane;
 
+  // DrmDisplayPipeline owns these, and their lifetimes should not exceed
+  // that of the DrmDisplayPipeline.
+  // TODO: Make these private members of a DrmDisplayPipeline class and
+  // provide public accessor functions.
   std::unique_ptr<AtomicStateManager> atomic_state_manager;
   std::unique_ptr<CompositionPlanner> planner;
+  std::unique_ptr<BackendDisplayCapabilities> capabilities;
 };
 
 }  // namespace android::drm_hwcomposer

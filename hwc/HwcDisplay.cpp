@@ -43,6 +43,7 @@
 #include <utility>
 #include <vector>
 
+#include "backend/BackendDisplayCapabilities.h"
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/CompositionPlanner.h"
@@ -823,7 +824,20 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
 }
 
 auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
-  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline()) {
+  if (IsInHeadlessMode()) {
+    return {ColorMode::kNative};
+  }
+
+  // Return the backend overrides if they exist.
+  if (GetPipe().capabilities != nullptr) {
+    auto color_mode_overrides = GetPipe().capabilities->GetColorModeOverrides();
+    if (color_mode_overrides) {
+      ALOGI("Using backend ColorMode overrides");
+      return color_mode_overrides.value();
+    }
+  }
+
+  if (!hwc_->GetResMan().UseColorPipeline()) {
     return {ColorMode::kNative};
   }
 

@@ -79,7 +79,6 @@ class AtomicRequest {
   virtual ~AtomicRequest() = 0;
 };
 
-// NOLINTNEXTLINE(readability-redundant-inline-specifier)
 inline AtomicRequest::~AtomicRequest() = default;
 
 class AtomicStateManager {
