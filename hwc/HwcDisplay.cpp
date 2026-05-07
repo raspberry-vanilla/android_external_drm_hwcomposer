@@ -241,6 +241,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
   if (IsInHeadlessMode()) {
     configs_.active_config_id = config;
+    hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
 
@@ -262,8 +263,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   ALOGV("Blocking config succeeded.");
   configs_.active_config_id = config;
   staged_mode_config_id_.reset();
-  vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   // set new vsync period
+  vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+  hwc_->LogRefreshRateChanges();
   return ConfigError::kNone;
 }
 
@@ -302,6 +304,7 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
   // Enable vsync events until the mode has been applied.
   vsync_worker_->SetVsyncTimestampTracking(true);
 
+  hwc_->LogRefreshRateChanges();
   return ConfigError::kNone;
 }
 
