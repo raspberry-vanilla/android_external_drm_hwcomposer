@@ -205,7 +205,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     case OutputType::kHdr10: {
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
-      colorspace_ = Colorspace::kBt2020Rgb;
       break;
     }
     case OutputType::kSystem: {
@@ -214,7 +213,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       if (!hdr_types.empty()) {
         SetHdrOutputMetadata(hdr_types.front());
         min_bpc_ = 8;
-        colorspace_ = Colorspace::kBt2020Rgb;
         break;
       }
       [[fallthrough]];
@@ -226,7 +224,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     default:
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
-      colorspace_ = Colorspace::kDefault;
       transfer_func_ = TransferFunction::kUnknown;
   }
 }

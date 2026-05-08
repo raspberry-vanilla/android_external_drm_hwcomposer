@@ -784,10 +784,10 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     std::vector<HwcDisplay::ChangedLayer>
         changed_layers = display->ValidateStagedComposition();
     for (auto [layer_id, composition_type] : changed_layers) {
-      // Device occluded layers are exposed as device composited to
+      // Occluded layers are exposed as client composited to
       // SurfaceFlinger, but dropped by drmhwc before committing.
       if (composition_type == CompositionType::kDeviceOccluded) {
-        composition_type = CompositionType::kDevice;
+        composition_type = CompositionType::kClient;
       }
 
       changes.AddLayerCompositionChange(command.display, layer_id,

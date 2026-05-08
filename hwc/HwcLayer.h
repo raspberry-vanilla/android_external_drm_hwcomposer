@@ -73,9 +73,9 @@ class HwcLayer {
     validated_type_ = type;
   }
   bool IsTypeChanged() const {
-    // Device occluded layers are exposed as device composited to
+    // Occluded layers are exposed as client composited to
     // SurfaceFlinger.
-    if (sf_type_ == CompositionType::kDevice &&
+    if (sf_type_ == CompositionType::kClient &&
         validated_type_ == CompositionType::kDeviceOccluded) {
       return false;
     }
