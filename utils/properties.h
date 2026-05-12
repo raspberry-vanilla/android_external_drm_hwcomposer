@@ -32,6 +32,7 @@ class Properties {
   static auto UseOverlayPlanes() -> bool;
   static auto ScaleWithGpu() -> bool;
   static auto EnableVirtualDisplay() -> bool;
+  static auto EnableExternalDisplays() -> bool;
   static auto GetCtmHandling() -> CtmHandling;
   static auto GetBackendOverride() -> std::string;
   static auto GetDevicePath() -> std::string;

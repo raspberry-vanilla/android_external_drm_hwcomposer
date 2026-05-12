@@ -118,6 +118,7 @@ class DrmDevice {
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);
   auto Init(const char *path) -> int;
+  auto IsConnectorAllowed(DrmConnector &conn) const -> bool;
 
   static auto IsKMSDev(const char *path) -> bool;
 
@@ -126,6 +127,7 @@ class DrmDevice {
 
   std::vector<std::unique_ptr<DrmConnector>> connectors_;
   std::vector<std::unique_ptr<DrmConnector>> writeback_connectors_;
+  std::vector<std::unique_ptr<DrmConnector>> ignored_connectors_;
   std::vector<std::unique_ptr<DrmEncoder>> encoders_;
   std::vector<std::unique_ptr<DrmCrtc>> crtcs_;
   std::vector<std::unique_ptr<DrmPlane>> planes_;
@@ -140,6 +142,8 @@ class DrmDevice {
   std::unique_ptr<AtomicCommitSink> atomic_commit_sink_;
 
   ResourceManager *const res_man_;
+
+  bool external_displays_enabled_;
 };
 
 }  // namespace android::drm_hwcomposer

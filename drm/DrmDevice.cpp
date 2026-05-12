@@ -27,11 +27,13 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <set>
@@ -51,6 +53,7 @@
 #include "drm/ResourceManager.h"
 #include "utils/fd.h"
 #include "utils/log.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 
@@ -77,7 +80,9 @@ auto DrmDevice::CreateInstance(std::string const &path,
 }
 
 DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
-    : index_in_dev_array_(index), res_man_(res_man) {
+    : index_in_dev_array_(index),
+      res_man_(res_man),
+      external_displays_enabled_(true) {
   drm_fb_importer_ = std::make_unique<DrmFbCachedImporter>(*this);
 }
 
@@ -141,6 +146,8 @@ auto DrmDevice::Init(const char *path) -> int {
     return -EACCES;
   }
 
+  external_displays_enabled_ = Properties::EnableExternalDisplays();
+
   auto res = MakeDrmModeResUnique(*GetFd());
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
@@ -178,8 +185,10 @@ auto DrmDevice::Init(const char *path) -> int {
 
     if (conn->IsWriteback()) {
       writeback_connectors_.emplace_back(std::move(conn));
-    } else {
+    } else if (IsConnectorAllowed(*conn)) {
       connectors_.emplace_back(std::move(conn));
+    } else {
+      ignored_connectors_.emplace_back(std::move(conn));
     }
   }
 
@@ -202,9 +211,13 @@ auto DrmDevice::Init(const char *path) -> int {
 }
 // NOLINTEND(readability-function-cognitive-complexity)
 
+auto DrmDevice::IsConnectorAllowed(DrmConnector &conn) const -> bool {
+  return !conn.IsExternal() || external_displays_enabled_;
+}
+
 auto DrmDevice::RegisterUserPropertyBlob(const void *data, size_t length) const
     -> DrmModeUserPropertyBlobUnique {
-  struct drm_mode_create_blob create_blob {};
+  struct drm_mode_create_blob create_blob{};
   create_blob.length = length;
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-cstyle-cast)
   create_blob.data = (__u64)data;
@@ -321,29 +334,34 @@ auto DrmDevice::RefreshConnectors()
     return stale_connectors;
   }
 
-  // Remove stale connectors (present in connectors_ but not in DRM resources)
-  // and transfer their ownership to the returned vector.
+  // Remove stale connectors (present in connectors_ or ignored_connectors_ but
+  // not in DRM resources) and transfer their ownership to the returned vector.
   std::set<uint32_t> conn_ids_present;
-  for (auto it = begin(connectors_); it != end(connectors_);) {
-    auto stale = true;
-    for (int i = 0; i < res->count_connectors; ++i) {
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      if (it->get()->GetId() == res->connectors[i]) {
-        stale = false;
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        conn_ids_present.insert(res->connectors[i]);
-        break;
-      }
+  auto remove_stale = [&](std::vector<std::unique_ptr<DrmConnector>> &conns,
+                          bool is_ignored) {
+    auto stale_it =
+        std::stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
+          auto *first = res->connectors;
+          auto *last = std::next(res->connectors, res->count_connectors);
+          if (std::find(first, last, conn->GetId()) != last) {
+            conn_ids_present.insert(conn->GetId());
+            return true;
+          }
+          return false;
+        });
+
+    if (!is_ignored) {
+      std::move(stale_it, conns.end(), std::back_inserter(stale_connectors));
     }
-    if (stale) {
-      stale_connectors.emplace_back(std::move(*it));
-      it = connectors_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+
+    conns.erase(stale_it, conns.end());
+  };
+
+  remove_stale(connectors_, false);
+  remove_stale(ignored_connectors_, true);
 
   // Add new connectors in DRM resources that are not present in connectors_
+  // or ignored_connectors_
   for (int i = 0; i < res->count_connectors; ++i) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     if (conn_ids_present.count(res->connectors[i]) != 0) {
@@ -354,8 +372,14 @@ auto DrmDevice::RefreshConnectors()
     if (!conn) {
       continue;
     }
-    if (!conn->IsWriteback()) {
+    if (conn->IsWriteback()) {
+      continue;
+    }
+
+    if (IsConnectorAllowed(*conn)) {
       connectors_.emplace_back(std::move(conn));
+    } else {
+      ignored_connectors_.emplace_back(std::move(conn));
     }
   }
 
@@ -371,6 +395,13 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
   for (const auto &conn : connectors_) {
     if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
       ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
+      return;
+    }
+  }
+  for (const auto &conn : ignored_connectors_) {
+    if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
+      ALOGE("Failed to Set Crtc Id Prop to Null for Ignored Conn = %d",
+            conn->GetId());
       return;
     }
   }
