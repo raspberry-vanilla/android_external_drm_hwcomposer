@@ -64,7 +64,9 @@ auto GenericCompositionPlanner::ValidateDisplay(
   const auto cursor_plane = display->GetCursorPlane();
   if (cursor_layer != nullptr && cursor_plane != nullptr &&
       !IsClientLayer(display, cursor_layer) &&
-      cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData())) {
+      cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData()) &&
+      // TODO: Add a check for cursor plane color transform support.
+      !display->CursorPlaneNeedsColorPipeline(*cursor_layer)) {
     // Create and test a composition using only cursor plane and all other
     // layers client-composited to infer whether the cursor plane can be used.
     ValidatedComposition cursor_composition{

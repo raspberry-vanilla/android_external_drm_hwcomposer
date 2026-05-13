@@ -486,6 +486,15 @@ std::optional<DamageInfo> AidlToDamage(
   return std::make_optional(damage_info);
 }
 
+struct NativeHandleDeleter {
+  void operator()(const native_handle_t* h) const {
+    if (h != nullptr) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+      native_handle_delete(const_cast<native_handle_t*>(h));
+    }
+  }
+};
+
 }  // namespace
 
 static auto ImportFb(HwcDisplay* display,
@@ -679,9 +688,9 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   HwcLayer::LayerProperties properties;
   if (command.buffer) {
     auto buffer_cache = GetBufferCache(display, *layer);
-    std::optional<buffer_handle_t> buffer_handle = std::nullopt;
+    std::unique_ptr<const native_handle_t, NativeHandleDeleter> buffer_handle;
     if (command.buffer->handle) {
-      buffer_handle = ::android::makeFromAidl(*command.buffer->handle);
+      buffer_handle.reset(::android::makeFromAidl(*command.buffer->handle));
     }
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
@@ -689,7 +698,9 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
                      .release();
 
     auto lp = buffer_cache
-                  ->HandleNextBuffer(buffer_handle,
+                  ->HandleNextBuffer(buffer_handle ? std::make_optional(
+                                                         buffer_handle.get())
+                                                   : std::nullopt,
                                      ::android::drm_hwcomposer::MakeSharedFd(
                                          fence),
                                      command.buffer->slot);
@@ -1497,7 +1508,8 @@ ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
     return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
-  buffer_handle_t raw_buffer = ::android::makeFromAidl(aidl_buffer);
+  std::unique_ptr<const native_handle_t, NativeHandleDeleter> raw_buffer(
+      ::android::makeFromAidl(aidl_buffer));
   if (raw_buffer == nullptr) {
     ALOGE("ComposerClient: Failed to convert AIDL handle to buffer_handle_t");
     return ToBinderStatus(hwc3::Error::kBadParameter);
@@ -1505,7 +1517,8 @@ ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
 
   buffer_handle_t imported_handle = nullptr;
   auto result = ::android::GraphicBufferMapper::get()
-                    .importBufferNoValidate(raw_buffer, &imported_handle);
+                    .importBufferNoValidate(raw_buffer.get(), &imported_handle);
+
   if (result != ::android::OK) {
     ALOGE("ComposerClient: Failed to import readback buffer handle: %d",
           result);
@@ -1676,9 +1689,9 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
   auto& client_layer = display->GetClientLayer();
   auto buffer_cache = GetBufferCache(display, client_layer);
 
-  std::optional<buffer_handle_t> raw_buffer = std::nullopt;
+  std::unique_ptr<const native_handle_t, NativeHandleDeleter> raw_buffer;
   if (command.buffer.handle) {
-    raw_buffer = ::android::makeFromAidl(*command.buffer.handle);
+    raw_buffer.reset(::android::makeFromAidl(*command.buffer.handle));
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
@@ -1686,7 +1699,9 @@ void ComposerClient::ExecuteSetDisplayClientTarget(
                    .release();
 
   auto buffer = buffer_cache
-                    ->HandleNextBuffer(raw_buffer,
+                    ->HandleNextBuffer(raw_buffer ? std::make_optional(
+                                                        raw_buffer.get())
+                                                  : std::nullopt,
                                        ::android::drm_hwcomposer::MakeSharedFd(
                                            fence),
                                        command.buffer.slot);
@@ -1725,9 +1740,9 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(int64_t display_handle,
 
   auto buffer_cache = GetBufferCache(display, *writeback_layer);
 
-  std::optional<buffer_handle_t> raw_buffer = std::nullopt;
+  std::unique_ptr<const native_handle_t, NativeHandleDeleter> raw_buffer;
   if (buffer.handle) {
-    raw_buffer = ::android::makeFromAidl(*buffer.handle);
+    raw_buffer.reset(::android::makeFromAidl(*buffer.handle));
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
@@ -1735,7 +1750,9 @@ void ComposerClient::ExecuteSetDisplayOutputBuffer(int64_t display_handle,
 
   HwcLayer::LayerProperties properties = {
       .buffer = buffer_cache
-                    ->HandleNextBuffer(raw_buffer,
+                    ->HandleNextBuffer(raw_buffer ? std::make_optional(
+                                                        raw_buffer.get())
+                                                  : std::nullopt,
                                        ::android::drm_hwcomposer::MakeSharedFd(
                                            fence),
                                        buffer.slot),

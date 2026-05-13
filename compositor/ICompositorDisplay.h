@@ -56,6 +56,9 @@ class ICompositorDisplay {
   virtual std::pair<uint32_t, uint32_t> GetSize() const = 0;
 
   virtual const HwcLayer &GetClientLayer() const = 0;
+
+  virtual bool CursorPlaneNeedsColorPipeline(
+      const HwcLayer &cursor_layer) const = 0;
 };
 
 }  // namespace android::drm_hwcomposer

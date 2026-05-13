@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <iterator>
 #include <map>
@@ -1637,6 +1638,34 @@ void HwcDisplay::LogConfigResult(bool blocking, bool success) const {
       .display_type = display_type,
   };
   config_result_reporter_->PushAtom(atom);
+}
+
+bool HwcDisplay::CursorPlaneNeedsColorPipeline(
+    const HwcLayer &cursor_layer) const {
+  if (!identity_color_matrix_) {
+    return false;
+  }
+
+  if (!hwc_->GetResMan().UseColorPipeline()) {
+    return false;
+  }
+
+  const Colorspace cursor_colorspace = cursor_layer.GetLayerData().colorspace;
+  CscCache cursor_color_map;
+  std::shared_ptr<drm_color_ctm_3x4>
+      cursor_matrix = ColorUtil::GamutAdjustIfNeeded(cursor_colorspace,
+                                                     colorspace_, color_matrix_,
+                                                     cursor_color_map);
+
+  if (!cursor_matrix) {
+    return false;
+  }
+
+  std::shared_ptr<drm_color_ctm_3x4>
+      identity_3x4 = ColorUtil::ToColorTransform3x4(identity_color_matrix_);
+
+  return (memcmp(cursor_matrix->matrix, identity_3x4->matrix,
+                 sizeof(identity_3x4->matrix)) != 0);
 }
 
 }  // namespace android::drm_hwcomposer

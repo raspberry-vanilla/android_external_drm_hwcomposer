@@ -250,6 +250,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, SingleLayerAndCursor) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -261,6 +263,60 @@ TEST(GenericLayerMapperCompositionPlannerTest, SingleLayerAndCursor) {
                  CompositionTypeMap{{&layer1, CompositionType::kDevice},
                                     {&cursor, CompositionType::kCursor}}));
   EXPECT_TRUE(composition.cursor_plane_validated);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest,
+     SingleLayerAndCursorNonIdentityCTMFallback) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/0,
+                                                     CompositionType::kDevice);
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/1,
+                                                     CompositionType::kCursor);
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
+
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+
+  FakeDrmDevice device;
+  std::shared_ptr<FakeDrmPlane>
+      cursor_plane = std::make_shared<FakeDrmPlane>(device,
+                                                    DRM_PLANE_TYPE_CURSOR);
+  cursor_plane->is_valid_ = true;
+
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane())
+      .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  // Cursor with non-identity color transform should use the device plane
+  // instead.
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(true));
+
+  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+
+  CompositionPlanner::ValidatedComposition
+      composition = planner.ValidateDisplay(&mock_display);
+
+  EXPECT_EQ(composition.composition_types,
+            (CompositionPlanner::
+                 CompositionTypeMap{{&layer1, CompositionType::kDevice},
+                                    {&cursor, CompositionType::kDevice}}));
+  EXPECT_FALSE(composition.cursor_plane_validated);
 }
 
 TEST(GenericLayerMapperCompositionPlannerTest,
@@ -301,6 +357,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillByDefault(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -353,6 +411,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillByDefault(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -414,6 +474,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillByDefault(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -495,6 +557,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, LayerCachingDeviceOcclusion) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -581,6 +645,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -655,6 +721,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, Underlay) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -728,6 +796,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, AttemptUnderlayButIneligible) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -816,6 +886,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, UnderlayAndLayerCached) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -908,6 +980,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, HotspotUnderlayAndLayerCached) {
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -991,6 +1065,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
@@ -1062,6 +1138,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(2));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 

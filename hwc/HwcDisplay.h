@@ -106,6 +106,9 @@ class HwcDisplay : public ICompositorDisplay {
   void SetColorTransformMatrix(
       const std::array<float, 16> &color_transform_matrix);
 
+  bool CursorPlaneNeedsColorPipeline(
+      const HwcLayer &cursor_layer) const override;
+
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
