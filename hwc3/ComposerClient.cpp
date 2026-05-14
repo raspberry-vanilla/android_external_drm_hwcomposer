@@ -725,6 +725,10 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   properties.transform = AidlToLayerTransform(command.transform);
   properties.z_order = AidlToZOrder(command.z);
   properties.damage = AidlToDamage(command.damage);
+  properties.brightness = command.brightness.has_value()
+                              ? std::make_optional(
+                                    command.brightness->brightness)
+                              : std::nullopt;
 
   layer->SetLayerProperties(properties);
 
@@ -792,8 +796,8 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
 
   DisplayChanges changes{};
   if (command.validateDisplay || command.presentOrValidateDisplay) {
-    std::vector<HwcDisplay::ChangedLayer>
-        changed_layers = display->ValidateStagedComposition();
+    auto [changed_layers,
+          punch_out_layers] = display->ValidateStagedComposition();
     for (auto [layer_id, composition_type] : changed_layers) {
       // Occluded layers are exposed as client composited to
       // SurfaceFlinger, but dropped by drmhwc before committing.
@@ -805,13 +809,14 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
                                         static_cast<Composition>(
                                             composition_type));
     }
+    for (auto layer_id : punch_out_layers) {
+      changes.AddLayerClearRequest(command.display, layer_id);
+    }
     cmd_result_writer_->AddChanges(changes);
     auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
     hwc_->ClearMustValidateDisplay(display_handle);
     hwc3_display->desired_present_time = AidlToPresentTimeNs(
         command.expectedPresentTime);
-
-    // TODO: DisplayRequests are not implemented.
   }
 
   if (command.presentOrValidateDisplay) {

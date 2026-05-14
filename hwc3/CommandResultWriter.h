@@ -53,6 +53,17 @@ struct DisplayChanges {
     composition_changes->layers.emplace_back(composition_change);
   }
 
+  void AddLayerClearRequest(int64_t display_handle, int64_t layer_id) {
+    if (!display_request_changes) {
+      display_request_changes.emplace();
+      display_request_changes->display = display_handle;
+    }
+    DisplayRequest::LayerRequest layer_request;
+    layer_request.layer = layer_id;
+    layer_request.mask = DisplayRequest::LayerRequest::CLEAR_CLIENT_TARGET;
+    display_request_changes->layerRequests.emplace_back(layer_request);
+  }
+
   void ClearLayerCompositionChanges() {
     composition_changes.reset();
   }

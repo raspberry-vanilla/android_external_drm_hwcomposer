@@ -47,6 +47,11 @@ class CompositionPlanner {
   struct ValidatedComposition {
     // The resulting composition type for each layer.
     CompositionTypeMap composition_types{};
+
+    // Request the client to draw transparent pixels where these layers would
+    // be.
+    std::vector<const HwcLayer*> punch_out_layers{};
+
     // The DrmKms resources required for the composition. The lifetime of
     // the LayerToPlaneJoiningPlan ensures that corresponding drm resources are
     // reserved for use by this display. As such, the caller must ensure that

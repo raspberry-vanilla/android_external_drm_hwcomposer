@@ -201,9 +201,24 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
+void HwcDisplay::SetHdrHeadroom() {
+  // Internal display HDR headrom is configured in HwcLayer
+  if (GetPipe().connector->Get()->IsInternal()) {
+    hdr_headroom_ = {};
+    return;
+  }
+
+  float hdr_luminance[3]{500.F, 500.F, 0.F};
+  GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
+                             &hdr_luminance[2]);
+  hdr_headroom_ = 203.F / hdr_luminance[0];
+  hdr_headroom_ *= 0.2F;
+}
+
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   switch (hdr_output_type) {
     case OutputType::kHdr10: {
+      SetHdrHeadroom();
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
       break;
@@ -212,6 +227,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
       if (!hdr_types.empty()) {
+        SetHdrHeadroom();
         SetHdrOutputMetadata(hdr_types.front());
         min_bpc_ = 8;
         break;
@@ -223,6 +239,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     case OutputType::kSdr:
       [[fallthrough]];
     default:
+      hdr_headroom_ = {};
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kUnknown;
@@ -306,7 +323,7 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
   return ConfigError::kNone;
 }
 
-auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
+auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
   if (validated_composition_.has_value()) {
     ALOGE("%s: Previously validated composition was not presented", __func__);
     validated_composition_.reset();
@@ -354,7 +371,22 @@ auto HwcDisplay::ValidateStagedComposition() -> std::vector<ChangedLayer> {
     }
   }
 
-  return changed_layers;
+  // Get the layer id for the punch out layers.
+  std::vector<ILayerId> punch_out_layers;
+  for (const auto *layer : validated_composition_->punch_out_layers) {
+    const auto it = std::find_if(layers_.begin(), layers_.end(),
+                                 [&](const auto &pair) {
+                                   return &pair.second == layer;
+                                 });
+    if (it != layers_.end()) {
+      punch_out_layers.push_back(it->first);
+    }
+  }
+
+  return ValidateResult{
+      .changed_layers = std::move(changed_layers),
+      .punch_out_layers = std::move(punch_out_layers),
+  };
 }
 
 auto HwcDisplay::GetDisplayBoundsMm() -> std::pair<int32_t, int32_t> {
@@ -953,12 +985,14 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const std::optional<LayerData> &modeset_layer) {
   AtomicCommitArgs args{};
 
+  args.brightness = brightness_;
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.transfer_func = transfer_func_;
   args.hdr_metadata = hdr_metadata_;
   args.min_bpc = min_bpc_;
+  args.hdr_headroom = hdr_headroom_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -1087,12 +1121,14 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   AtomicCommitArgs a_args;
+  a_args.brightness = brightness_;
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.transfer_func = transfer_func_;
   a_args.hdr_metadata = hdr_metadata_;
   a_args.min_bpc = min_bpc_;
+  a_args.hdr_headroom = hdr_headroom_;
 
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
@@ -1541,8 +1577,15 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
   if (!HasBacklight()) {
     return false;
   }
-  return backlight_controller_->SetBrightness(
-      brightness >= 0.0F ? std::optional<float>(brightness) : std::nullopt);
+
+  if (brightness >= 0.0F && GetPipe().connector->Get()->IsInternal()) {
+    brightness_ = brightness;
+    return backlight_controller_->SetBrightness(
+        std::optional<float>(brightness));
+  }
+
+  brightness_ = -1.F;
+  return backlight_controller_->SetBrightness(std::nullopt);
 }
 
 void HwcDisplay::LogModesOnHotplug() {

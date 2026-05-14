@@ -155,7 +155,15 @@ class HwcDisplay : public ICompositorDisplay {
   // requested layers have been validated, otherwise the vector describes
   // the requested composition type changes.
   using ChangedLayer = std::pair<ILayerId, CompositionType>;
-  auto ValidateStagedComposition() -> std::vector<ChangedLayer>;
+
+  struct ValidateResult {
+    // Layers whose composition type was changed my the HWC.
+    std::vector<ChangedLayer> changed_layers;
+    // Request the client to write transparent pixels where these layers would
+    // be.
+    std::vector<ILayerId> punch_out_layers;
+  };
+  auto ValidateStagedComposition() -> ValidateResult;
 
   // Mark previously validated properties as ready to present.
   auto AcceptValidatedComposition() -> void;
@@ -350,6 +358,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool Init();
 
+  void SetHdrHeadroom();
   void SetHdrOutputMetadata(ui::Hdr hdrType);
   void SetOutputType(OutputType hdr_output_type);
 
@@ -394,6 +403,9 @@ class HwcDisplay : public ICompositorDisplay {
   TransferFunction transfer_func_{};
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
+  float brightness_ = -1.F;
+  float hdr_headroom_{};
+
   // Most recent result of ValidateStagedComposition. Must be kept alive until
   // the composition is committed.
   std::optional<CompositionPlanner::ValidatedComposition>
