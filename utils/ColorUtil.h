@@ -34,7 +34,7 @@
 namespace android::drm_hwcomposer {
 
 using Lut1D = std::vector<drm_color_lut32>;
-using Lut1DCache = std::map<std::tuple<TransferFunction, size_t, float>, Lut1D>;
+using Lut1DCache = std::map<std::tuple<TransferFunction, size_t>, Lut1D>;
 using CscCache = std::map<std::tuple<Colorspace, Colorspace>, const mat3d>;
 
 inline const Lut1D kEmptyLut = {};
@@ -141,8 +141,7 @@ class ColorUtil {
   static std::tuple<const Lut1D &, const Lut1D &> Get1DLutsIfNeeded(
       TransferFunction src_tf, TransferFunction dest_tf,
       size_t degamma_lut_size, size_t gamma_lut_size,
-      Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map,
-      float layer_brightness, float display_brightness, float hdr_headroom);
+      Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map);
 
  private:
   /* Converts a column-major 4x4 float type flat array matrix into
