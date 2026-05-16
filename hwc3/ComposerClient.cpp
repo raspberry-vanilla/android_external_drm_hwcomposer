@@ -725,6 +725,10 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   properties.transform = AidlToLayerTransform(command.transform);
   properties.z_order = AidlToZOrder(command.z);
   properties.damage = AidlToDamage(command.damage);
+  properties.brightness = command.brightness.has_value()
+                              ? std::make_optional(
+                                    command.brightness->brightness)
+                              : std::nullopt;
 
   layer->SetLayerProperties(properties);
 

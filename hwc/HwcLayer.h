@@ -57,6 +57,7 @@ class HwcLayer {
     std::optional<LayerTransform> transform;
     std::optional<uint32_t> z_order;
     std::optional<DamageInfo> damage;
+    std::optional<float> brightness;
   };
 
   explicit HwcLayer(ICompositorDisplay *parent_display);
@@ -138,6 +139,7 @@ class HwcLayer {
   BufferBlendMode blend_mode_{};
   Colorspace colorspace_{};
   TransferFunction transfer_func_{};
+  std::optional<float> brightness_{};
 
   bool prior_buffer_scanout_flag_{};
 

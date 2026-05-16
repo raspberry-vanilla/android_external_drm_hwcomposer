@@ -77,6 +77,13 @@ using ColorGamut = ::android::ColorSpace;
 
 namespace android::drm_hwcomposer {
 
+// ITU-R BT.2408 reference white level for HDR
+constexpr float kSdrReferenceWhiteLuminance = 203.F;
+// Practical reference peak luminance, matches libtonemap
+constexpr float kHdrReferenceLuminance = 1000.F;
+// Default fallback max luminance of internal panels if unspecified by EDID
+constexpr float kDefaultMaxLuminance = 500.F;
+
 using FlattenReason = CompositionPlanner::FlattenReason;
 
 namespace {
@@ -201,9 +208,31 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
+void HwcDisplay::SetHdrHeadroom() {
+  float hdr_luminance[3]{0.F, 0.F, 0.F};
+  GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
+                             &hdr_luminance[2]);
+
+  float max_lum = hdr_luminance[0];
+  if (max_lum <= 0.F) {
+    max_lum = kDefaultMaxLuminance;
+  }
+
+  // For internal displays, scale the headroom relative to practical HDR content
+  // peak luminance
+  if (GetPipe().connector->Get()->IsInternal()) {
+    hdr_headroom_ = max_lum / kHdrReferenceLuminance;
+    return;
+  }
+
+  hdr_headroom_ = kSdrReferenceWhiteLuminance / max_lum;
+  hdr_headroom_ *= 0.2F;
+}
+
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   switch (hdr_output_type) {
     case OutputType::kHdr10: {
+      SetHdrHeadroom();
       SetHdrOutputMetadata(ui::Hdr::HDR10);
       min_bpc_ = 8;
       break;
@@ -212,17 +241,23 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
       if (!hdr_types.empty()) {
+        SetHdrHeadroom();
         SetHdrOutputMetadata(hdr_types.front());
         min_bpc_ = 8;
         break;
       }
       [[fallthrough]];
     }
+    case OutputType::kSdr:
+      hdr_headroom_ = {};
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
+      min_bpc_ = 6;
+      transfer_func_ = TransferFunction::kSrgb;
+      break;
     case OutputType::kInvalid:
       [[fallthrough]];
-    case OutputType::kSdr:
-      [[fallthrough]];
     default:
+      hdr_headroom_ = {};
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kUnknown;
@@ -968,12 +1003,14 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const std::optional<LayerData> &modeset_layer) {
   AtomicCommitArgs args{};
 
+  args.brightness = brightness_;
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.transfer_func = transfer_func_;
   args.hdr_metadata = hdr_metadata_;
   args.min_bpc = min_bpc_;
+  args.hdr_headroom = hdr_headroom_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -1102,12 +1139,14 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   AtomicCommitArgs a_args;
+  a_args.brightness = brightness_;
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.transfer_func = transfer_func_;
   a_args.hdr_metadata = hdr_metadata_;
   a_args.min_bpc = min_bpc_;
+  a_args.hdr_headroom = hdr_headroom_;
 
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
@@ -1556,8 +1595,15 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
   if (!HasBacklight()) {
     return false;
   }
-  return backlight_controller_->SetBrightness(
-      brightness >= 0.0F ? std::optional<float>(brightness) : std::nullopt);
+
+  if (brightness >= 0.0F && GetPipe().connector->Get()->IsInternal()) {
+    brightness_ = brightness;
+    return backlight_controller_->SetBrightness(
+        std::optional<float>(brightness));
+  }
+
+  brightness_ = -1.F;
+  return backlight_controller_->SetBrightness(std::nullopt);
 }
 
 void HwcDisplay::LogModesOnHotplug() {
