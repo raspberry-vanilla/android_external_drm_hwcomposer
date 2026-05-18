@@ -189,7 +189,7 @@ auto SysfsBacklightController::SetBrightness(std::optional<float> brightness)
 
   float val = hw_handles_encoding_ ? *brightness : HlgOetf(*brightness);
 
-  int normalized = static_cast<int>(max_ * val);
+  int normalized = 1 + static_cast<int>((max_ - 1) * val);
   ALOGV("Set brightness to %f (signal=%f/value=%d)", *brightness, val,
         normalized);
   std::string brightness_path(sysfs_path_);
