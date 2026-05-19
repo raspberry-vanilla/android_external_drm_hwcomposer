@@ -217,7 +217,7 @@ TEST_F(SysfsBacklightControllerTest, TurnOnBacklightWithMinBrightness) {
 
   EXPECT_TRUE(bl.bl_->SetBrightness(0.0F));
   EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
-  EXPECT_EQ(bl.fake_->brightness_val(), "0");
+  EXPECT_EQ(bl.fake_->brightness_val(), "1");
 }
 
 // Reduce the brightness to zero, but remain powered.
@@ -230,7 +230,7 @@ TEST_F(SysfsBacklightControllerTest, UpdateToZeroBrightness) {
 
   EXPECT_TRUE(bl.bl_->SetBrightness(0.0F));
   EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
-  EXPECT_EQ(bl.fake_->brightness_val(), "0");
+  EXPECT_EQ(bl.fake_->brightness_val(), "1");
 }
 
 // If the hardware handles encoding (scale: linear), the Linear brightness

@@ -19,35 +19,42 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "utils/UEvent.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
+UEventListener::UEventListener(std::function<void()> hotplug_handler)
+    : hotplug_handler_(std::move(hotplug_handler)) {
+}
+
 UEventListener::~UEventListener() {
-  StopThread();
+  exit_ = true;
+  uevent_->Stop();
   thread_.join();
 }
 
-void UEventListener::StopThread() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    exit_ = true;
+auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
+    -> std::shared_ptr<UEventListener> {
+  if (!hotplug_handler) {
+    ALOGE("Invalid hotplug handler");
+    return {};
   }
-  uevent_->Stop();
-}
 
-auto UEventListener::CreateInstance() -> std::shared_ptr<UEventListener> {
-  auto uel = std::shared_ptr<UEventListener>(new UEventListener());
+  auto uel = std::shared_ptr<UEventListener>(
+      new UEventListener(std::move(hotplug_handler)));
 
   uel->uevent_ = UEvent::CreateInstance();
-  if (!uel->uevent_)
+  if (!uel->uevent_) {
+    ALOGE("Failed to create UEvent");
     return {};
+  }
 
   uel->thread_ = std::thread(&UEventListener::ThreadFn, uel.get());
   return uel;
@@ -56,8 +63,12 @@ auto UEventListener::CreateInstance() -> std::shared_ptr<UEventListener> {
 void UEventListener::ThreadFn() {
   while (!exit_) {
     auto uevent_str = uevent_->ReadNext();
-    if (!hotplug_handler_ || !uevent_str)
+    if (exit_) {
+      break;
+    }
+    if (!uevent_str) {
       continue;
+    }
 
     auto drm_event = uevent_str->find("DEVTYPE=drm_minor") != std::string::npos;
     auto hotplug_event = uevent_str->find("HOTPLUG=1") != std::string::npos;
@@ -67,6 +78,9 @@ void UEventListener::ThreadFn() {
       /* We need some delay to ensure DrmConnector::UpdateModes() will query
        * correct modes list, otherwise at least RPI4 board may report 0 modes */
       usleep(kDelayAfterUeventUs);
+      if (exit_) {
+        break;
+      }
       hotplug_handler_();
     }
   }

@@ -44,12 +44,9 @@ namespace android::drm_hwcomposer {
 ResourceManager::ResourceManager(
     PipelineToFrontendBindingInterface *p2f_bind_interface)
     : frontend_interface_(p2f_bind_interface) {
-  uevent_listener_ = UEventListener::CreateInstance();
 }
 
-ResourceManager::~ResourceManager() {
-  uevent_listener_->StopThread();
-}
+ResourceManager::~ResourceManager() = default;
 
 void ResourceManager::Init() {
   if (initialized_) {
@@ -113,7 +110,7 @@ void ResourceManager::Init() {
     drm->ResetConnectorsAndCrtcs();
   }
 
-  uevent_listener_->RegisterHotplugHandler([this] {
+  uevent_listener_ = UEventListener::CreateInstance([this] {
     const std::unique_lock lock(GetMainLock());
     for (auto &drm : drms_) {
       auto stale_connectors = drm->RefreshConnectors();
@@ -133,7 +130,7 @@ void ResourceManager::DeInit() {
     return;
   }
 
-  uevent_listener_->RegisterHotplugHandler({});
+  uevent_listener_.reset();
 
   DetachAllFrontendDisplays();
   drms_.clear();

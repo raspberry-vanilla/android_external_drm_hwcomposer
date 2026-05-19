@@ -16,11 +16,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <thread>
-#include <utility>
 
 namespace android::drm_hwcomposer {
 
@@ -30,22 +29,16 @@ class UEventListener {
  public:
   ~UEventListener();
 
-  static auto CreateInstance() -> std::shared_ptr<UEventListener>;
-
-  void RegisterHotplugHandler(std::function<void()> hotplug_handler) {
-    hotplug_handler_ = std::move(hotplug_handler);
-  }
-
-  void StopThread();
+  static auto CreateInstance(std::function<void()> hotplug_handler)
+      -> std::shared_ptr<UEventListener>;
 
  private:
-  UEventListener() = default;
+  explicit UEventListener(std::function<void()> hotplug_handler);
 
   void ThreadFn();
 
   std::thread thread_;
-  std::mutex mutex_;
-  bool exit_ = false;
+  std::atomic<bool> exit_ = false;
   std::unique_ptr<UEvent> uevent_;
 
   std::function<void()> hotplug_handler_;
