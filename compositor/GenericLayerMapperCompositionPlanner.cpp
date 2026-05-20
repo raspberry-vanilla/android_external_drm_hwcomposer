@@ -16,6 +16,8 @@
 #include "GenericLayerMapperCompositionPlanner.h"
 
 #include <algorithm>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"
@@ -148,7 +150,7 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
 
   layers = MapAllClientCompositionRequiredLayers(display, layers);
 
-  LayerMapper::MappingValidator validator =
+  const LayerMapper::MappingValidator validator =
       [display](const std::vector<LayerMapping>& layers) {
         return CountRemainingPlanes(display, layers) >= 0;
       };
@@ -164,36 +166,42 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   // not consume actual hardware resources.
   layers = layer_caching_mapper_.AssignLayers(layers, validator);
 
+  std::optional<ValidatedComposition> validated_composition = std::nullopt;
+
   {
     auto new_layers = underlay_mapper_.AssignLayers(layers, validator);
 
-    ValidatedComposition test_composition = CreateValidatedComposition(
+    ValidatedComposition new_composition = CreateValidatedComposition(
         new_layers);
-    if (display->TestComposition(test_composition)) {
-      layers = new_layers;
+    if (display->TestComposition(new_composition)) {
+      layers = std::move(new_layers);
+      validated_composition = std::move(new_composition);
     }
   }
 
-  {
-    auto new_layers = leftover_mapper_.AssignLayers(layers, validator);
-
-    ValidatedComposition test_composition = CreateValidatedComposition(
+  if (auto new_layers = leftover_mapper_.AssignLayers(layers, validator);
+      new_layers != layers) {
+    ValidatedComposition new_composition = CreateValidatedComposition(
         new_layers);
-    if (display->TestComposition(test_composition)) {
-      layers = new_layers;
+    if (display->TestComposition(new_composition)) {
+      layers = std::move(new_layers);
+      validated_composition = std::move(new_composition);
     }
   }
 
-  // Convert all unmapped layers into client composited layers.
-  ValidatedComposition validated_composition = CreateValidatedComposition(
-      layers);
-  bool success = display->TestComposition(validated_composition);
-  validated_composition.composition_plan.reset();
+  // If UnderlayMapper and LeftoverMapper didn't produce a valid composition,
+  // convert all unmapped layers into client composited layers and try.
+  if (!validated_composition) {
+    ValidatedComposition new_composition = CreateValidatedComposition(layers);
+    if (display->TestComposition(new_composition)) {
+      validated_composition = std::move(new_composition);
+    }
+  }
 
   // Cursor fallback: convert all non-cursor layers to client composition and
   // reattempt.
   // The cursor layer is preserved as _either_ cursor _or_ device composited.
-  if (!success && GetCursorLayer(layers) != nullptr) {
+  if (!validated_composition && GetCursorLayer(layers) != nullptr) {
     if (IsCursorPlaneUsed(layers)) {
       layers = force_client_composition_mapper_.AssignLayers(layers, validator);
       layers.back().composition_type = CompositionType::kInvalid;
@@ -203,24 +211,27 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
         layers = device_cursor_mapper_.AssignLayers(layers, validator);
       }
 
-      validated_composition.composition_types = ToCompositionTypes(layers);
-      success = display->TestComposition(validated_composition);
-      validated_composition.composition_plan.reset();
+      ValidatedComposition new_composition = ValidatedComposition{
+          .composition_types = ToCompositionTypes(layers)};
+      if (display->TestComposition(new_composition)) {
+        validated_composition = std::move(new_composition);
+      }
     }
   }
 
+  const bool success_before_flattening = validated_composition.has_value();
+
   // Final fallback: convert all layers to client composition.
-  if (!success) {
-    validated_composition = CreateFlattenedComposition(layers,
-                                                       FlattenReason::
-                                                           kValidateFailed);
+  if (!success_before_flattening) {
+    constexpr auto kFlattenReason = FlattenReason::kValidateFailed;
+    validated_composition = CreateFlattenedComposition(layers, kFlattenReason);
   }
 
   if (use_cursor_plane) {
-    validated_composition.cursor_plane_validated = success;
+    validated_composition->cursor_plane_validated = success_before_flattening;
   }
-
-  return validated_composition;
+  validated_composition->composition_plan.reset();
+  return *validated_composition;
 }
 
 bool GenericLayerMapperCompositionPlanner::MustBeClientComposited(

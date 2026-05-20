@@ -339,8 +339,8 @@ auto DrmDevice::RefreshConnectors()
   std::set<uint32_t> conn_ids_present;
   auto remove_stale = [&](std::vector<std::unique_ptr<DrmConnector>> &conns,
                           bool is_ignored) {
-    auto stale_it =
-        std::stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
+    auto stale_it = std::
+        stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
           auto *first = res->connectors;
           auto *last = std::next(res->connectors, res->count_connectors);
           if (std::find(first, last, conn->GetId()) != last) {

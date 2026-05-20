@@ -26,6 +26,13 @@ namespace android::drm_hwcomposer {
 struct LayerMapping {
   const HwcLayer* layer = nullptr;
   CompositionType composition_type = CompositionType::kInvalid;
+
+  constexpr bool operator==(const LayerMapping& rhs) const {
+    return layer == rhs.layer && composition_type == rhs.composition_type;
+  }
+  constexpr bool operator!=(const LayerMapping& rhs) const {
+    return !(*this == rhs);
+  }
 };
 
 class LayerMapper {
