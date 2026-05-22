@@ -18,6 +18,8 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -180,6 +182,21 @@ BackendManager::Backend *BackendManager::GetBackendByName(std::string &name) {
   }
 
   return available_backends_[name];
+}
+
+std::optional<std::string> BackendManager::DumpBackends() {
+  std::stringstream output;
+  for (auto &[name, backend] : available_backends_) {
+    auto dump = backend->Dump();
+    if (dump.has_value()) {
+      output << "\n<start " << name << ">\n";
+      output << dump.value();
+      output << "\n<end " << name << ">\n";
+    }
+  }
+
+  auto result = output.str();
+  return result.empty() ? std::make_optional(result) : std::nullopt;
 }
 
 }  // namespace android::drm_hwcomposer

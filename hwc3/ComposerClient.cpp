@@ -71,10 +71,12 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/GrallocBufferCache.h"
@@ -96,6 +98,7 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
+using ::android::drm_hwcomposer::BackendManager;
 using ::android::drm_hwcomposer::BufferBlendMode;
 using ::android::drm_hwcomposer::BufferColorEncoding;
 using ::android::drm_hwcomposer::BufferSampleRange;
@@ -1656,7 +1659,12 @@ ndk::ScopedAStatus ComposerClient::getLuts(int64_t /* display */,
 #endif
 
 std::string ComposerClient::Dump() {
-  return hwc_->DumpState();
+  std::stringstream output;
+  output << hwc_->DumpState();
+  output << "\n- Backends\n";
+  auto dump = BackendManager::GetInstance().DumpBackends();
+  output << dump.value_or("N/A\n");
+  return output.str();
 }
 
 ::ndk::SpAIBinder ComposerClient::createBinder() {

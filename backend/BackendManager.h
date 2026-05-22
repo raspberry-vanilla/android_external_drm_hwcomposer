@@ -18,6 +18,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace android::drm_hwcomposer {
@@ -72,6 +73,10 @@ class BackendManager {
     // Get the atomiCommitSink for the Backend.
     virtual std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink() = 0;
 
+    virtual std::optional<std::string> Dump() {
+      return std::nullopt;
+    }
+
    private:
     std::string name_;
   };
@@ -93,6 +98,8 @@ class BackendManager {
   bool IsSuspendSupported(const std::string &driver_name);
   std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink(
       const std::string &driver_name);
+
+  std::optional<std::string> DumpBackends();
 
  private:
   Backend *GetBackendByName(std::string &name);
