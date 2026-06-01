@@ -22,6 +22,7 @@
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <aidl/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.h>
 
+#include <cinttypes>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -31,6 +32,7 @@
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
+#include "utils/log.h"
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
@@ -142,6 +144,22 @@ void DrmHwcThree::ClearMustValidateDisplay(
     ::android::drm_hwcomposer::DisplayHandle display_handle) {
   std::scoped_lock lock(must_validate_lock_);
   must_validate_.erase(display_handle);
+}
+
+void DrmHwcThree::RequestHdcpNegotiation(
+    ::android::drm_hwcomposer::DisplayHandle display_handle) {
+  auto* display = DrmHwc::GetDisplay(display_handle);
+  if (display == nullptr) {
+    ALOGE("%s, display is null for handle: %" PRIu64, __func__, display_handle);
+    return;
+  }
+
+  if (!display->StartHdcp()) {
+    ALOGI(
+        "%s, StartHdcp() requested on Hotplug event not supported for display: "
+        "%" PRIu64,
+        __func__, display_handle);
+  }
 }
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

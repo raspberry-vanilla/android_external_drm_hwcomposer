@@ -41,6 +41,8 @@ namespace android::drm_hwcomposer {
 
 namespace {
 
+// TODO: use layer data and display luminance to set this value
+constexpr double kHdrHeadroom = 1000.0 / 10000.0;
 const double kSignalMin = 0.0;
 const double kSignalMax = 1.0;
 
@@ -142,6 +144,7 @@ const PqConstants kPq = {.n = 0.1593017578125,
                          .c3 = 18.68359375};
 // NOLINTBEGIN(readability-magic-numbers)
 double EvaluatePqOetf(double l) {
+  l *= kHdrHeadroom;
   if (l <= kSignalMin)
     return kSignalMin;
   double l1 = pow(l, kPq.n);
@@ -153,7 +156,7 @@ double EvaluatePqEotf(double e) {
     return kSignalMin;
   double em = pow(e, 1.0 / kPq.m);
   double base = (std::max(em - kPq.c1, kSignalMin)) / (kPq.c2 - (kPq.c3 * em));
-  return pow(base, 1.0 / kPq.n);
+  return pow(base, 1.0 / kPq.n) / kHdrHeadroom;
 }
 
 /**
@@ -193,13 +196,11 @@ uint32_t SignalToInt(double signal) {
   return static_cast<uint32_t>(signal);
 }
 
-Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
-                bool is_degamma) {
-  const double scaled_step = std::clamp(lut_scale, kSignalMin, kSignalMax) /
-                             (static_cast<double>(lut_size) - 1.0);
+Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, bool is_degamma) {
   std::vector<drm_color_lut32> lut(lut_size);
   for (size_t i = 0; i < lut_size; ++i) {
-    double signal = static_cast<double>(i) * scaled_step;
+    double signal = static_cast<double>(i) /
+                    (static_cast<double>(lut_size) - 1.0);
     switch (tf) {
       case TransferFunction::kPq:
         signal = is_degamma ? EvaluatePqEotf(signal) : EvaluatePqOetf(signal);
@@ -217,10 +218,7 @@ Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
         signal = is_degamma ? ColorGamut::BT709().toLinear(signal)[0]
                             : ColorGamut::BT709().fromLinear(signal)[0];
         break;
-      case TransferFunction::kUnknown:
-        [[fallthrough]];
       default:
-        // Fallback to linear mapping for unknown transfer functions
         break;
     }
 
@@ -233,16 +231,15 @@ Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
 // NOLINTEND(readability-magic-numbers)
 
 const Lut1D &Get1DLut(TransferFunction tf, const size_t lut_size,
-                      Lut1DCache &lut_1d_map, const float lut_scale,
-                      bool is_degamma) {
+                      Lut1DCache &lut_1d_map, bool is_degamma) {
   if (lut_size < 2) {
     ALOGE("Bad LUT size requested: %zu", lut_size);
     return kEmptyLut;
   }
 
-  auto key = std::tie(tf, lut_size, lut_scale);
+  auto key = std::tie(tf, lut_size);
   if (lut_1d_map.count(key) == 0) {
-    lut_1d_map.emplace(key, CreateLut(tf, lut_size, lut_scale, is_degamma));
+    lut_1d_map.emplace(key, CreateLut(tf, lut_size, is_degamma));
   }
   return lut_1d_map.at(key);
 }
@@ -334,37 +331,15 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::GamutAdjustIfNeeded(
 std::tuple<const Lut1D &, const Lut1D &> ColorUtil::Get1DLutsIfNeeded(
     TransferFunction src_tf, TransferFunction dest_tf,
     const size_t degamma_lut_size, const size_t gamma_lut_size,
-    Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map,
-    const float layer_brightness, const float display_brightness,
-    const float hdr_headroom) {
-  bool needs_lut = src_tf != dest_tf &&
-                   (NeedsTonemapping(src_tf) || NeedsTonemapping(dest_tf));
-
-  auto lut_scale = (float)kSignalMax;
-
-  // Validate display brightness
-  if (display_brightness >= kSignalMin) {
-    needs_lut = true;
-    lut_scale *= display_brightness;
+    Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map) {
+  if (src_tf == dest_tf) {
+    return std::tie(kEmptyLut, kEmptyLut);
   }
 
-  // Validate HDR headroom
-  if (hdr_headroom > kSignalMin && hdr_headroom < kSignalMax) {
-    needs_lut = true;
-    lut_scale *= hdr_headroom;
-  }
-
-  // Validate layer brightness
-  if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
-    needs_lut = true;
-    lut_scale *= layer_brightness;
-  }
-
-  if (needs_lut) {
+  if (NeedsTonemapping(src_tf) || NeedsTonemapping(dest_tf)) {
     return {Get1DLut(src_tf, degamma_lut_size, degamma_lut_map,
-                     /*lut_scale=*/(float)kSignalMax,
                      /*is_degamma=*/true),
-            Get1DLut(dest_tf, gamma_lut_size, gamma_lut_map, lut_scale,
+            Get1DLut(dest_tf, gamma_lut_size, gamma_lut_map,
                      /*is_degamma=*/false)};
   }
 

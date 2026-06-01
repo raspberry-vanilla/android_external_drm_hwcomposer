@@ -125,7 +125,6 @@ struct LayerData {
   Colorspace colorspace;
   TransferFunction transfer_func;
   FrameTimeHistory frame_time_history;
-  std::optional<float> brightness;
 };
 
 }  // namespace android::drm_hwcomposer
