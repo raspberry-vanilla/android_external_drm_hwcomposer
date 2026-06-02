@@ -39,6 +39,7 @@ class Properties {
   static auto UseColorPipeline() -> bool;
   static auto ForcedHolePunchingEnabled() -> bool;
   static auto ForceColorMode() -> int;
+  static auto PersistentHdrEnabled() -> bool;
   static auto GetForceMode() -> std::string;
 };
 

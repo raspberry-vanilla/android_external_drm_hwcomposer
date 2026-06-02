@@ -218,9 +218,12 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       }
       [[fallthrough]];
     }
-    case OutputType::kInvalid:
-      [[fallthrough]];
     case OutputType::kSdr:
+      hdr_metadata_ = std::make_shared<hdr_output_metadata>();
+      min_bpc_ = 6;
+      transfer_func_ = TransferFunction::kSrgb;
+      break;
+    case OutputType::kInvalid:
       [[fallthrough]];
     default:
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
@@ -892,8 +895,14 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *max_luminance,
                                     float *max_average_luminance,
                                     float *min_luminance) {
-  if (IsInHeadlessMode())
+  if (IsInHeadlessMode() && !hwc_->GetResMan().UseColorPipeline()) {
     return;
+  }
+
+  if (GetPipe().connector->Get()->IsInternal() &&
+      !hwc_->GetResMan().PersistentHdrEnabled()) {
+    return;
+  }
 
   // Return HDR caps only when we have the ability to set HDR
   DrmDisplayPipeline &pipeline = GetPipe();

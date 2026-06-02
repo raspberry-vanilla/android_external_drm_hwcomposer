@@ -42,9 +42,12 @@ namespace android::drm_hwcomposer {
 namespace {
 
 // TODO: use layer data and display luminance to set this value
-constexpr double kHdrHeadroom = 1000.0 / 10000.0;
+constexpr double kHdrHeadroom = 500.0 / 10000.0;
 const double kSignalMin = 0.0;
 const double kSignalMax = 1.0;
+
+// Normalize to the range [0, 12] rather than [0, 1]
+const double kHlgScale = 12.0;
 
 uint64_t To3132FixPt(double in) {
   constexpr uint64_t kSignMask = (1ULL << 63);
@@ -140,8 +143,8 @@ struct PqConstants {
 const PqConstants kPq = {.n = 0.1593017578125,
                          .m = 78.84375,
                          .c1 = 0.8359375,
-                         .c2 = 18.83203125,
-                         .c3 = 18.68359375};
+                         .c2 = 18.8515625,
+                         .c3 = 18.6875};
 // NOLINTBEGIN(readability-magic-numbers)
 double EvaluatePqOetf(double l) {
   l *= kHdrHeadroom;
@@ -184,10 +187,10 @@ const HlgConstants kHlg = {.a = 0.17883277,
                            .r = 0.5};
 double EvaluateHlgEotf(double e) {
   if (e < kSignalMin)
-    return kSignalMin;
+    return kSignalMin / kHlgScale;
   if (e <= kHlg.r)
-    return pow(e / kHlg.r, 2.0);
-  return exp((e - kHlg.c) / kHlg.a) + kHlg.b;
+    return pow(e / kHlg.r, 2.0) / kHlgScale;
+  return (exp((e - kHlg.c) / kHlg.a) + kHlg.b) / kHlgScale;
 }
 
 uint32_t SignalToInt(double signal) {
@@ -248,6 +251,7 @@ const Lut1D &Get1DLut(TransferFunction tf, const size_t lut_size,
 
 double ColorUtil::EvaluateHlgOetf(double l) {
   const double gamma_threshold = 1.0;
+  l *= kHlgScale;
   if (l < kSignalMin)
     return kSignalMin;
   if (l <= gamma_threshold)

@@ -128,6 +128,10 @@ auto Properties::UseColorPipeline() -> bool {
   return (property_get_bool("vendor.hwc.drm.enable_color_pipeline", 0) != 0);
 }
 
+auto Properties::PersistentHdrEnabled() -> bool {
+  return (property_get_bool("vendor.hwc.drm.persistent_hdr", 0) != 0);
+}
+
 /**
  * @brief Determine if the "Present Not Reliable" property is enabled.
  *

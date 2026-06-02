@@ -55,7 +55,7 @@ void LibdisplayEdidWrapper::GetSupportedHdrTypes(std::vector<ui::Hdr> &types) {
   const auto *hdr_static_meta = di_info_get_hdr_static_metadata(info_);
   const auto *colorimetries = di_info_get_supported_signal_colorimetry(info_);
   if (colorimetries->bt2020_cycc || colorimetries->bt2020_ycc ||
-      colorimetries->bt2020_rgb) {
+      colorimetries->bt2020_rgb || colorimetries->ictcp) {
     if (hdr_static_meta->pq)
       types.emplace_back(ui::Hdr::HDR10);
     if (hdr_static_meta->hlg)
@@ -85,25 +85,22 @@ void LibdisplayEdidWrapper::GetColorModes(std::vector<ColorMode> &color_modes) {
 
   /* Rec. ITU-R BT.2020 constant luminance YCbCr */
   /* Rec. ITU-R BT.2020 non-constant luminance YCbCr */
-  if (colorimetries->bt2020_cycc || colorimetries->bt2020_ycc)
-    color_modes.emplace_back(ColorMode::kBt2020);
-
   /* Rec. ITU-R BT.2020 RGB */
-  if (colorimetries->bt2020_rgb)
+  /* Rec. ITU-R BT.2100 ICtCp (with PQ and/or HLG) */
+  if (colorimetries->bt2020_cycc || colorimetries->bt2020_ycc ||
+      colorimetries->bt2020_rgb || colorimetries->ictcp) {
+    color_modes.emplace_back(ColorMode::kBt2020);
     color_modes.emplace_back(ColorMode::kDisplayBt2020);
+    if (hdr_static_meta->pq)
+      color_modes.emplace_back(ColorMode::kBt2100Pq);
+    if (hdr_static_meta->hlg)
+      color_modes.emplace_back(ColorMode::kBt2100Hlg);
+  }
 
   /* SMPTE ST 2113 RGB: P3D65 and P3DCI */
   if (colorimetries->st2113_rgb) {
     color_modes.emplace_back(ColorMode::kDciP3);
     color_modes.emplace_back(ColorMode::kDisplayP3);
-  }
-
-  /* Rec. ITU-R BT.2100 ICtCp HDR (with PQ and/or HLG) */
-  if (colorimetries->ictcp) {
-    if (hdr_static_meta->pq)
-      color_modes.emplace_back(ColorMode::kBt2100Pq);
-    if (hdr_static_meta->hlg)
-      color_modes.emplace_back(ColorMode::kBt2100Hlg);
   }
 }
 

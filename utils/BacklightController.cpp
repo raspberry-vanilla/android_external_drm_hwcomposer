@@ -34,12 +34,10 @@ const float BacklightController::kMax = 1.0F;
 // This function is modeled from:
 //   com.android.settingslib.display.BrightnessUtils.convertLinearToGamma
 auto BacklightController::HlgOetf(float linear) -> float {
-  // Normalize to the range [0, 12] rather than [0, 1]
-  static const float kScale = 12.0F;
   if (linear < kMin || linear > kMax) {
     return std::clamp(linear, kMin, kMax);
   }
-  return static_cast<float>(ColorUtil::EvaluateHlgOetf(linear * kScale));
+  return static_cast<float>(ColorUtil::EvaluateHlgOetf(linear));
 }
 
 }  // namespace android::drm_hwcomposer

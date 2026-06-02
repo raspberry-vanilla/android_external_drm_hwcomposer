@@ -71,6 +71,10 @@ class ResourceManager {
     return color_pipeline_enabled_;
   }
 
+  bool PersistentHdrEnabled() const {
+    return persistent_hdr_enabled_;
+  }
+
   int ForceColorMode() const {
     return force_color_mode_;
   }
@@ -100,6 +104,7 @@ class ResourceManager {
   CtmHandling ctm_handling_{};
   bool color_pipeline_enabled_{};
   int force_color_mode_{};
+  bool persistent_hdr_enabled_{};
 
   std::shared_ptr<UEventListener> uevent_listener_;
 

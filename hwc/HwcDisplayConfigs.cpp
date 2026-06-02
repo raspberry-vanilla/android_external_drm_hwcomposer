@@ -128,8 +128,10 @@ bool HwcDisplayConfigs::Init(DrmConnector &connector) {
 
   ConfigId first_config_id = next_config_id;
   uint32_t next_group_id = 1;
-  const auto output_type = Properties::UseColorPipeline() ? OutputType::kSystem
-                                                          : OutputType::kSdr;
+  bool enable_hdr = Properties::UseColorPipeline() &&
+                    (connector.IsExternal() ||
+                     Properties::PersistentHdrEnabled());
+  const auto output_type = enable_hdr ? OutputType::kSystem : OutputType::kSdr;
   for (const auto &mode : connector.GetModes()) {
     bool disabled = false;
     if ((mode.GetRawMode().flags & DRM_MODE_FLAG_3D_MASK) != 0) {
