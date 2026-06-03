@@ -58,9 +58,6 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
       DisplayHandle display_handle,
       std::optional<enum HdcpContentType> current_hdcp_level) = 0;
 
-  // HwcDisplay management functions:
-  virtual void RequestHdcpNegotiation(DisplayHandle display_handle) = 0;
-
   // StatsProvider:
   auto PullCompositionStats()
       -> std::map<CompositionAttributes, CompositionStats> override;

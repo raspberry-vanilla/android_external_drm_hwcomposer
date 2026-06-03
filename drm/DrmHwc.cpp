@@ -108,9 +108,6 @@ void DrmHwc::FinalizeDisplayBinding() {
   // Finally, send hotplug events to the client
   for (auto &dhe : deferred_hotplug_events_) {
     SendHotplugEventToClient(dhe.first, dhe.second);
-    if (dhe.second == kConnected) {
-      RequestHdcpNegotiation(dhe.first);
-    }
   }
   deferred_hotplug_events_.clear();
 
@@ -193,14 +190,18 @@ void DrmHwc::NotifyHdcpTermination(
   }
 
   auto handle = display_handles_[pipeline];
-  auto *display = GetDisplay(handle);
+  if (displays_.count(handle) == 0) {
+    ALOGE("%s, can't find the display, handle: %" PRIu64, __func__, handle);
+    return;
+  }
+
+  HwcDisplay *display = displays_[handle].get();
   if (display == nullptr) {
     ALOGE("%s, display is null for handle: %" PRIu64, __func__, handle);
     return;
   }
 
-  // Trigger HwcDisplay to terminate HDCP negotiation only if it was previously
-  // enabled.
+  // Trigger HwcDisplay to terminate HDCP negotiation.
   if (!display->StopHdcp()) {
     ALOGI("%s, StopHdcp() failed for display: %" PRIu64, __func__, handle);
   }
