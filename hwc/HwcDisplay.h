@@ -26,6 +26,8 @@
 #include <utility>
 #include <vector>
 
+#include <ui/ColorSpace.h>
+
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
@@ -64,6 +66,7 @@ struct DrmDisplayPipeline;
 
 using DisplayHandle = int64_t;
 using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
+using ColorGamut = ::android::ColorSpace;
 
 class FrontendDisplayBase {
  public:
@@ -71,6 +74,7 @@ class FrontendDisplayBase {
 };
 
 inline constexpr uint32_t kPrimaryDisplay = 0;
+inline constexpr float kBrightnessUnset = -1;
 
 // NOLINTNEXTLINE
 class HwcDisplay : public ICompositorDisplay {
@@ -358,7 +362,9 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool Init();
 
-  void SetHdrOutputMetadata(ui::Hdr hdrType);
+  void SetHdrHeadroom();
+  void SetHdrOutputMetadata(const ColorGamut &color_gamut,
+                            TransferFunction transfer_function);
   void SetOutputType(OutputType hdr_output_type);
 
   auto GetEdid() const -> const EdidWrapperUnique & {
@@ -402,6 +408,9 @@ class HwcDisplay : public ICompositorDisplay {
   TransferFunction transfer_func_{};
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
+  float brightness_ = kBrightnessUnset;
+  float hdr_headroom_{};
+
   // Most recent result of ValidateStagedComposition. Must be kept alive until
   // the composition is committed.
   std::optional<CompositionPlanner::ValidatedComposition>

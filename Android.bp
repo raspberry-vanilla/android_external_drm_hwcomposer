@@ -403,6 +403,7 @@ drm_hwcomposer_atom_reporter_library {
                     "android.frameworks.stats-V2-ndk",
                     "libbinder_ndk",
                     "libdesktopatoms",
+                    "libui",
                 ],
             },
             conditions_default: {

@@ -63,17 +63,22 @@ void LibdisplayEdidWrapper::GetSupportedHdrTypes(std::vector<ui::Hdr> &types) {
   }
 }
 
-void LibdisplayEdidWrapper::GetHdrCapabilities(std::vector<ui::Hdr> &types,
-                                               float *max_luminance,
-                                               float *max_average_luminance,
-                                               float *min_luminance) {
-  GetSupportedHdrTypes(types);
-
+void LibdisplayEdidWrapper::GetHdrLuminance(float *max_luminance,
+                                            float *max_average_luminance,
+                                            float *min_luminance) {
   const auto *hdr_static_meta = di_info_get_hdr_static_metadata(info_);
   *max_luminance = hdr_static_meta->desired_content_max_luminance;
   *max_average_luminance = hdr_static_meta
                                ->desired_content_max_frame_avg_luminance;
   *min_luminance = hdr_static_meta->desired_content_min_luminance;
+}
+
+void LibdisplayEdidWrapper::GetHdrCapabilities(std::vector<ui::Hdr> &types,
+                                               float *max_luminance,
+                                               float *max_average_luminance,
+                                               float *min_luminance) {
+  GetSupportedHdrTypes(types);
+  GetHdrLuminance(max_luminance, max_average_luminance, min_luminance);
 }
 
 void LibdisplayEdidWrapper::GetColorModes(std::vector<ColorMode> &color_modes) {

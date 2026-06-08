@@ -21,7 +21,6 @@
 #include <cutils/trace.h>
 #include <drm/drm_mode.h>
 #include <linux/time.h>
-#include <ui/ColorSpace.h>
 #include <ui/GraphicTypes.h>
 #include <utils/Trace.h>
 #include <xf86drmMode.h>
@@ -72,8 +71,6 @@
 #include "utils/fd.h"
 #include "utils/log.h"
 #include "utils/properties.h"
-
-using ColorGamut = ::android::ColorSpace;
 
 namespace android::drm_hwcomposer {
 
@@ -201,24 +198,50 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
+void HwcDisplay::SetHdrHeadroom() {
+  float hdr_luminance[3]{kDefaultMaxLuminance, kDefaultMaxLuminance, 0.F};
+  GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
+                             &hdr_luminance[2]);
+  float max_lum = hdr_luminance[0] > 0.F ? hdr_luminance[0]
+                                         : kDefaultMaxLuminance;
+  hdr_headroom_ = max_lum / kHdrReferenceLuminance;
+}
+
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   switch (hdr_output_type) {
-    case OutputType::kHdr10: {
-      SetHdrOutputMetadata(ui::Hdr::HDR10);
-      min_bpc_ = 8;
-      break;
-    }
     case OutputType::kSystem: {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
       if (!hdr_types.empty()) {
-        SetHdrOutputMetadata(hdr_types.front());
+        SetHdrHeadroom();
+        auto type = hdr_types.front();
+        switch (type) {
+          case ui::Hdr::HDR10:
+            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
+            break;
+          case ui::Hdr::HLG:
+            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kHlg);
+            break;
+          default:
+            ALOGW("HDR type %d is not supported, using Display BT2020 instead.",
+                  static_cast<int>(type));
+            SetHdrOutputMetadata(ColorGamut::BT2020(),
+                                 TransferFunction::kSmpte170M);
+            break;
+        }
         min_bpc_ = 8;
         break;
       }
       [[fallthrough]];
     }
+    case OutputType::kHdr10: {
+      SetHdrHeadroom();
+      SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
+      min_bpc_ = 8;
+      break;
+    }
     case OutputType::kSdr:
+      hdr_headroom_ = {};
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kSrgb;
@@ -226,6 +249,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     case OutputType::kInvalid:
       [[fallthrough]];
     default:
+      hdr_headroom_ = {};
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kUnknown;
@@ -977,12 +1001,14 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const std::optional<LayerData> &modeset_layer) {
   AtomicCommitArgs args{};
 
+  args.brightness = brightness_;
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
   args.transfer_func = transfer_func_;
   args.hdr_metadata = hdr_metadata_;
   args.min_bpc = min_bpc_;
+  args.hdr_headroom = hdr_headroom_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -1111,12 +1137,14 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   AtomicCommitArgs a_args;
+  a_args.brightness = brightness_;
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
   a_args.transfer_func = transfer_func_;
   a_args.hdr_metadata = hdr_metadata_;
   a_args.min_bpc = min_bpc_;
+  a_args.hdr_headroom = hdr_headroom_;
 
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
@@ -1435,23 +1463,30 @@ static uint64_t ToU16ColorValue(float in) {
   return static_cast<uint64_t>(kPrimariesFixedPoint * in);
 }
 
-void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
+void HwcDisplay::SetHdrOutputMetadata(const ColorGamut &color_gamut,
+                                      TransferFunction transfer_function) {
   hdr_metadata_ = std::make_shared<hdr_output_metadata>();
   hdr_metadata_->metadata_type = 0;
   auto *m = &hdr_metadata_->hdmi_metadata_type1;
   m->metadata_type = 0;
 
-  switch (type) {
-    case ui::Hdr::HDR10:
-      m->eotf = 2;  // PQ
-      transfer_func_ = TransferFunction::kPq;
+  switch (transfer_function) {
+    case TransferFunction::kSmpte170M:
+      m->eotf = 1;
+      transfer_func_ = transfer_function;
       break;
-    case ui::Hdr::HLG:
-      m->eotf = 3;  // HLG
-      transfer_func_ = TransferFunction::kHlg;
+    case TransferFunction::kPq:
+      m->eotf = 2;
+      transfer_func_ = transfer_function;
       break;
+    case TransferFunction::kHlg:
+      m->eotf = 3;
+      transfer_func_ = transfer_function;
+      break;
+    case TransferFunction::kUnknown:
+      [[fallthrough]];
     default:
-      ALOGW("HDR type %d is not supported.", static_cast<int>(type));
+      ALOGW("Transfer function %d is not supported.", transfer_function);
       transfer_func_ = TransferFunction::kUnknown;
       return;
   }
@@ -1471,8 +1506,7 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
   m->min_display_mastering_luminance = static_cast<uint64_t>(hdr_luminance[2] *
                                                              10000.F);
 
-  auto gamut = ColorGamut::BT2020();
-  auto primaries = gamut.getPrimaries();
+  auto primaries = color_gamut.getPrimaries();
   m->display_primaries[0].x = ToU16ColorValue(primaries[0].x);
   m->display_primaries[0].y = ToU16ColorValue(primaries[0].y);
   m->display_primaries[1].x = ToU16ColorValue(primaries[1].x);
@@ -1480,7 +1514,7 @@ void HwcDisplay::SetHdrOutputMetadata(ui::Hdr type) {
   m->display_primaries[2].x = ToU16ColorValue(primaries[2].x);
   m->display_primaries[2].y = ToU16ColorValue(primaries[2].y);
 
-  auto whitePoint = gamut.getWhitePoint();
+  auto whitePoint = color_gamut.getWhitePoint();
   m->white_point.x = ToU16ColorValue(whitePoint.x);
   m->white_point.y = ToU16ColorValue(whitePoint.y);
 }
@@ -1565,8 +1599,15 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
   if (!HasBacklight()) {
     return false;
   }
-  return backlight_controller_->SetBrightness(
-      brightness >= 0.0F ? std::optional<float>(brightness) : std::nullopt);
+
+  if (brightness >= 0.0F && GetPipe().connector->Get()->IsInternal()) {
+    brightness_ = brightness;
+    return backlight_controller_->SetBrightness(
+        std::optional<float>(brightness));
+  }
+
+  brightness_ = kBrightnessUnset;
+  return backlight_controller_->SetBrightness(std::nullopt);
 }
 
 void HwcDisplay::LogModesOnHotplug() {
