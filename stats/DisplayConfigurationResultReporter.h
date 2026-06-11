@@ -35,6 +35,11 @@ class DisplayConfigurationResultReporter {
     bool success;
     bool is_seamless;
     DisplayType display_type;
+    bool is_blocking;
+    bool is_display_mode;
+    bool is_power_mode;
+    bool is_teardown;
+    int64_t duration_ns;
   };
   // Pushes a Vendor Atom to IStats::reportVendorAtom.
   virtual void PushAtom(const Atom& atom) = 0;

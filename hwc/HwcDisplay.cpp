@@ -40,6 +40,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1030,16 +1031,21 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
 
 std::optional<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
     AtomicCommitArgs &a_args) const {
+  const int64_t commit_start_time = ResourceManager::GetTimeMonotonicNs();
   auto res = GetPipe().device->GetAtomicCommitSink().ExecuteAtomicCommit(
       {{GetPipe().atomic_state_manager.get(), a_args}});
+  const int64_t commit_end_time = ResourceManager::GetTimeMonotonicNs();
+
   // Log successful modesets (seamless and full), including teardowns.
+  const bool is_config_change = a_args.display_mode || a_args.power_mode ||
+                                a_args.teardown;
+  if (is_config_change) {
+    LogConfigResult(a_args, res.size() == 1,
+                    commit_end_time - commit_start_time);
+  }
+
   ALOGE_IF(res.size() > 1,
            "More than one result returned for a singular display");
-  if (a_args.display_mode || a_args.power_mode || a_args.teardown) {
-    const bool blocking = a_args.blocking || a_args.power_mode ||
-                          a_args.teardown;
-    LogConfigResult(blocking, res.size() == 1);
-  }
   if (res.empty()) {
     return std::nullopt;
   }
@@ -1621,9 +1627,23 @@ void HwcDisplay::LogModesOnHotplug() {
     return;
   }
 
+  const uint32_t
+      connection_type = GetPipe().connector->Get()->GetConnectorType();
+  const bool has_path = GetPipe().connector->Get()->HasPathProperty();
+
   auto vendor = EdidWrapper::VendorProductInfo{};
+  uint32_t vrr_range_min = 0;
+  uint32_t vrr_range_max = 0;
+  std::vector<ui::Hdr> hdr_types;
+  float max_luminance = 0.0F;
+  float max_average_luminance = 0.0F;
+  float min_luminance = 0.0F;
   if (edid_wrapper_ != nullptr) {
     vendor = edid_wrapper_->GetVendorProductInfo();
+    std::tie(vrr_range_min,
+             vrr_range_max) = edid_wrapper_->GetVerticalDisplayRangeLimits();
+    edid_wrapper_->GetHdrCapabilities(hdr_types, &max_luminance,
+                                      &max_average_luminance, &min_luminance);
   }
 
   using ModeAtom = DisplayHotplugConnectModeDetectedAtomReporter::Atom;
@@ -1663,7 +1683,15 @@ void HwcDisplay::LogModesOnHotplug() {
          .is_preferred = is_preferred,
          .make = vendor.make,
          .model = vendor.model,
-         .year = vendor.year};
+         .year = vendor.year,
+         .hdr_types = hdr_types,
+         .max_luminance = max_luminance,
+         .max_average_luminance = max_average_luminance,
+         .min_luminance = min_luminance,
+         .connection_type = connection_type,
+         .has_path = has_path,
+         .vrr_range_min = vrr_range_min,
+         .vrr_range_max = vrr_range_max};
 
     if (std::find(submitted_atoms.begin(), submitted_atoms.end(), atom) !=
         submitted_atoms.end()) {
@@ -1675,7 +1703,8 @@ void HwcDisplay::LogModesOnHotplug() {
   }
 }
 
-void HwcDisplay::LogConfigResult(bool blocking, bool success) const {
+void HwcDisplay::LogConfigResult(const AtomicCommitArgs &args, bool is_success,
+                                 int64_t duration_ns) const {
   if (!config_result_reporter_) {
     return;
   }
@@ -1698,9 +1727,14 @@ void HwcDisplay::LogConfigResult(bool blocking, bool success) const {
 
   const DisplayConfigurationResultReporter::Atom atom{
       .display_handle = handle_,
-      .success = success,
-      .is_seamless = !blocking,
+      .success = is_success,
+      .is_seamless = args.seamless,
       .display_type = display_type,
+      .is_blocking = args.blocking,
+      .is_display_mode = args.display_mode.has_value(),
+      .is_power_mode = args.power_mode.has_value(),
+      .is_teardown = args.teardown,
+      .duration_ns = duration_ns,
   };
   config_result_reporter_->PushAtom(atom);
 }

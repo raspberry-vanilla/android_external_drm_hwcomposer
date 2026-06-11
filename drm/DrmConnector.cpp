@@ -189,6 +189,8 @@ auto DrmConnector::Init()-> bool {
                              panel_orientation_enum_map_);
   }
 
+  GetOptionalConnectorProperty("PATH", &path_property_);
+
   return true;
 }
 

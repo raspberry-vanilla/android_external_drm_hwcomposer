@@ -372,7 +372,8 @@ class HwcDisplay : public ICompositorDisplay {
   }
 
   void LogModesOnHotplug();
-  void LogConfigResult(bool blocking, bool success) const;
+  void LogConfigResult(const AtomicCommitArgs &args, bool success,
+                       int64_t duration_ns) const;
 
   HwcDisplayConfigs configs_;
 

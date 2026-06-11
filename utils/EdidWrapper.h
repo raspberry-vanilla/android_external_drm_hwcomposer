@@ -79,6 +79,10 @@ class EdidWrapper {
   virtual VendorProductInfo GetVendorProductInfo() const {
     return VendorProductInfo{};
   }
+
+  virtual std::pair<uint32_t, uint32_t> GetVerticalDisplayRangeLimits() const {
+    return {};
+  }
 };
 
 #if HAS_LIBDISPLAY_INFO
@@ -107,6 +111,8 @@ class LibdisplayEdidWrapper final : public EdidWrapper {
   auto GetBoundsMm() -> std::pair<int32_t, int32_t> override;
 
   VendorProductInfo GetVendorProductInfo() const override;
+
+  std::pair<uint32_t, uint32_t> GetVerticalDisplayRangeLimits() const override;
 
  private:
   LibdisplayEdidWrapper(di_info *info) : info_(std::move(info)) {

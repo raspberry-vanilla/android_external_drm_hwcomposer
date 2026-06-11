@@ -58,7 +58,9 @@ class DisplayConfigurationResultReporterDesktop
         createVendorAtom(DesktopAtoms::DISPLAY_CONFIGURATION_RESULT,
                          kDeprecatedReverseDomainName, atom.display_handle,
                          atom.success, atom.is_seamless,
-                         ToProtoEnum(atom.display_type));
+                         ToProtoEnum(atom.display_type), atom.is_blocking,
+                         atom.is_display_mode, atom.is_power_mode,
+                         atom.is_teardown, atom.duration_ns);
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));

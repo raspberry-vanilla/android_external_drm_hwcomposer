@@ -145,6 +145,21 @@ EdidWrapper::VendorProductInfo LibdisplayEdidWrapper::GetVendorProductInfo()
   return vendor;
 }
 
+std::pair<uint32_t, uint32_t>
+LibdisplayEdidWrapper::GetVerticalDisplayRangeLimits() const {
+  const auto *edid = di_info_get_edid(info_);
+  if (edid != nullptr) {
+    const auto *const *desc = di_edid_get_display_descriptors(edid);
+    for (size_t i = 0; desc[i] != nullptr; ++i) {
+      const auto *limits = di_edid_display_descriptor_get_range_limits(desc[i]);
+      if (limits != nullptr) {
+        return {limits->min_vert_rate_hz, limits->max_vert_rate_hz};
+      }
+    }
+  }
+  return {};
+}
+
 }  // namespace android::drm_hwcomposer
 
 #endif

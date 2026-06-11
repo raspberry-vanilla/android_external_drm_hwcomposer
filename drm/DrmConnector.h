@@ -168,6 +168,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   auto GetPanelOrientation() -> std::optional<PanelOrientation>;
 
+  uint32_t GetConnectorType() const {
+    return connector_->connector_type;
+  }
+
+  bool HasPathProperty() const {
+    return path_property_.GetValue().has_value();
+  }
+
  private:
   DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
                uint32_t index);
@@ -196,6 +204,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmProperty min_bpc_property_;
   DrmProperty hdr_output_metadata_property_;
   DrmProperty hdcp_content_type_property_;
+  DrmProperty path_property_;
 
   DrmProperty link_status_property_;
   bool link_recovery_required_ = false;

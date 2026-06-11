@@ -20,6 +20,8 @@
 #include <android/binder_auto_utils.h>
 #include <android/binder_manager.h>
 #include <desktopatoms.h>
+#include <drm/drm_mode.h>
+#include <ui/GraphicTypes.h>
 
 #include <memory>
 #include <string>
@@ -34,7 +36,8 @@ namespace DesktopAtoms = android::vendor::google::desktop::stats::DesktopAtoms;
 namespace android::drm_hwcomposer {
 namespace {
 
-DesktopAtoms::DisplayHotplugConnectModeDetected::DisplayType ToProtoEnum(
+DesktopAtoms::DisplayHotplugConnectModeDetected::DisplayType
+DisplayTypeToProtoEnum(
     DisplayHotplugConnectModeDetectedAtomReporter::DisplayType type) {
   switch (type) {
     case DisplayHotplugConnectModeDetectedAtomReporter::DisplayType::
@@ -50,6 +53,104 @@ DesktopAtoms::DisplayHotplugConnectModeDetected::DisplayType ToProtoEnum(
   }
 }
 
+DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType
+ConnectionTypeToProtoEnum(uint32_t type, bool has_path) {
+  switch (type) {
+    case DRM_MODE_CONNECTOR_Unknown:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_UNSPECIFIED;
+    case DRM_MODE_CONNECTOR_VGA:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_VGA;
+    case DRM_MODE_CONNECTOR_DVII:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_DVII;
+    case DRM_MODE_CONNECTOR_DVID:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_DVID;
+    case DRM_MODE_CONNECTOR_DVIA:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_DVIA;
+    case DRM_MODE_CONNECTOR_Composite:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_COMPOSITE;
+    case DRM_MODE_CONNECTOR_SVIDEO:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_SVIDEO;
+    case DRM_MODE_CONNECTOR_LVDS:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_LVDS;
+    case DRM_MODE_CONNECTOR_Component:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_COMPONENT;
+    case DRM_MODE_CONNECTOR_9PinDIN:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_9_PIN_DIN;
+    case DRM_MODE_CONNECTOR_DisplayPort:
+      return has_path ? DesktopAtoms::DisplayHotplugConnectModeDetected::
+                            ConnectionType::CONNECTION_TYPE_DP_MST
+                      : DesktopAtoms::DisplayHotplugConnectModeDetected::
+                            ConnectionType::CONNECTION_TYPE_DP_SST;
+    case DRM_MODE_CONNECTOR_HDMIA:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_HDMIA;
+    case DRM_MODE_CONNECTOR_HDMIB:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_HDMIB;
+    case DRM_MODE_CONNECTOR_TV:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_TV;
+    case DRM_MODE_CONNECTOR_eDP:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_EDP;
+    case DRM_MODE_CONNECTOR_VIRTUAL:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_VIRTUAL;
+    case DRM_MODE_CONNECTOR_DSI:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_DSI;
+    case DRM_MODE_CONNECTOR_DPI:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_DPI;
+    case DRM_MODE_CONNECTOR_WRITEBACK:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_WRITEBACK;
+    case DRM_MODE_CONNECTOR_SPI:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_SPI;
+    case DRM_MODE_CONNECTOR_USB:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_USB;
+    default:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::ConnectionType::
+          CONNECTION_TYPE_UNSPECIFIED;
+  }
+}
+
+DesktopAtoms::DisplayHotplugConnectModeDetected::HdrType HdrTypeToProtoEnum(
+    ui::Hdr hdr) {
+  switch (hdr) {
+    case ui::Hdr::INVALID:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::
+          HDR_TYPE_UNSPECIFIED;
+    case ui::Hdr::DOLBY_VISION:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::
+          HDR_TYPE_DOLBY_VISION;
+    case ui::Hdr::HDR10:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::HDR_TYPE_HDR10;
+    case ui::Hdr::HLG:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::HDR_TYPE_HLG;
+    case ui::Hdr::HDR10_PLUS:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::
+          HDR_TYPE_HDR10_PLUS;
+    case ui::Hdr::DOLBY_VISION_4K30:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::
+          HDR_TYPE_DOLBY_VISION_4K30;
+    case ui::Hdr::HLG_PLUS:
+      return DesktopAtoms::DisplayHotplugConnectModeDetected::HDR_TYPE_HLG_PLUS;
+  }
+}
+
 const std::string kStatsServiceName = std::string(IStats::descriptor)
                                           .append("/default");
 
@@ -62,13 +163,25 @@ class DisplayHotplugConnectModeDetectedAtomReporterDesktop
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
     const char* deprecated_reverse_domain_name = "";
+
+    std::vector<int32_t> hdr_types;
+    for (const auto hdr_type : atom.hdr_types) {
+      hdr_types.push_back(HdrTypeToProtoEnum(hdr_type));
+    }
+
     const VendorAtom vendor_atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::DISPLAY_HOTPLUG_CONNECT_MODE_DETECTED,
                          deprecated_reverse_domain_name, atom.display_handle,
                          atom.resolution_x, atom.resolution_y,
                          atom.refresh_rate, atom.dpi_x, atom.dpi_y,
-                         ToProtoEnum(atom.display_type), atom.is_preferred,
-                         atom.make.c_str(), atom.model.c_str(), atom.year);
+                         DisplayTypeToProtoEnum(atom.display_type),
+                         atom.is_preferred, atom.make.c_str(),
+                         atom.model.c_str(), atom.year, hdr_types,
+                         atom.max_luminance, atom.max_average_luminance,
+                         atom.min_luminance,
+                         ConnectionTypeToProtoEnum(atom.connection_type,
+                                                   atom.has_path),
+                         atom.vrr_range_min, atom.vrr_range_max);
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));

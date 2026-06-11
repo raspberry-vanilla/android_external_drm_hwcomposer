@@ -16,9 +16,16 @@
 
 #pragma once
 
+#include <drm/drm_mode.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
+
+namespace ui {
+enum class Hdr;
+}  // namespace ui
 
 namespace android::drm_hwcomposer {
 class DisplayHotplugConnectModeDetectedAtomReporter {
@@ -44,6 +51,14 @@ class DisplayHotplugConnectModeDetectedAtomReporter {
     std::string make;
     std::string model;
     int32_t year = 0;
+    std::vector<ui::Hdr> hdr_types;
+    float max_luminance = 0.0F;
+    float max_average_luminance = 0.0F;
+    float min_luminance = 0.0F;
+    uint32_t connection_type = DRM_MODE_CONNECTOR_Unknown;
+    bool has_path = false;
+    uint32_t vrr_range_min = 0;
+    uint32_t vrr_range_max = 0;
 
     bool operator==(const Atom& other) const {
       return display_handle == other.display_handle &&
@@ -52,7 +67,15 @@ class DisplayHotplugConnectModeDetectedAtomReporter {
              refresh_rate == other.refresh_rate && dpi_x == other.dpi_x &&
              dpi_y == other.dpi_y && display_type == other.display_type &&
              is_preferred == other.is_preferred && make == other.make &&
-             model == other.model && year == other.year;
+             model == other.model && year == other.year &&
+             hdr_types == other.hdr_types &&
+             max_luminance == other.max_luminance &&
+             max_average_luminance == other.max_average_luminance &&
+             min_luminance == other.min_luminance &&
+             connection_type == other.connection_type &&
+             has_path == other.has_path &&
+             vrr_range_min == other.vrr_range_min &&
+             vrr_range_max == other.vrr_range_max;
     };
   };
 
