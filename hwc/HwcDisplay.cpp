@@ -210,6 +210,12 @@ void HwcDisplay::SetHdrHeadroom() {
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
   switch (hdr_output_type) {
+    case OutputType::kHdr10: {
+      SetHdrHeadroom();
+      SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
+      min_bpc_ = 8;
+      break;
+    }
     case OutputType::kSystem: {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
@@ -234,12 +240,6 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         break;
       }
       [[fallthrough]];
-    }
-    case OutputType::kHdr10: {
-      SetHdrHeadroom();
-      SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
-      min_bpc_ = 8;
-      break;
     }
     case OutputType::kSdr:
       hdr_headroom_ = {};
