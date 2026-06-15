@@ -72,6 +72,14 @@ struct Rect {
   T Height() const {
     return bottom - top;
   }
+
+  bool operator==(const Rect<T>& rhs) const {
+    return left == rhs.left && top == rhs.top && right == rhs.right &&
+           bottom == rhs.bottom;
+  }
+  bool operator!=(const Rect<T>& rhs) const {
+    return !(*this == rhs);
+  }
 };
 
 using IRect = Rect<int32_t>;
@@ -80,11 +88,25 @@ using FRect = Rect<float>;
 struct SrcRectInfo {
   /* nullopt means the whole buffer */
   std::optional<FRect> f_rect;
+
+  bool operator==(const SrcRectInfo& rhs) const {
+    return f_rect == rhs.f_rect;
+  }
+  bool operator!=(const SrcRectInfo& rhs) const {
+    return !(*this == rhs);
+  }
 };
 
 struct DstRectInfo {
   /* nullopt means the whole display */
   std::optional<IRect> i_rect;
+
+  bool operator==(const DstRectInfo& rhs) const {
+    return i_rect == rhs.i_rect;
+  }
+  bool operator!=(const DstRectInfo& rhs) const {
+    return !(*this == rhs);
+  }
 };
 
 struct DamageInfo {

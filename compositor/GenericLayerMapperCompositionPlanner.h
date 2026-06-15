@@ -39,16 +39,12 @@ class GenericLayerMapperCompositionPlanner : public CompositionPlanner {
   GenericLayerMapperCompositionPlanner();
   ~GenericLayerMapperCompositionPlanner() override = default;
 
-  ValidatedComposition ValidateDisplay(
-      const ICompositorDisplay* display) override;
+  ValidationResult ValidateDisplay(const ICompositorDisplay* display) override;
 
  private:
-  static bool MustBeClientComposited(const ICompositorDisplay* display,
-                                     const HwcLayer* layer);
   static std::vector<LayerMapping> MapAllClientCompositionRequiredLayers(
       const ICompositorDisplay* display,
       const std::vector<LayerMapping>& layers);
-  static bool HardwareSupportsLayerType(CompositionType comp_type);
 
   ValidatedComposition CreateFlattenedComposition(
       const std::vector<LayerMapping>& layers,
@@ -56,6 +52,8 @@ class GenericLayerMapperCompositionPlanner : public CompositionPlanner {
 
   bool ShouldUseCursorPlane(const ICompositorDisplay* display,
                             const std::vector<LayerMapping>& layers) const;
+
+  const CursorLayerMapper& GetCursorMapper(bool use_cursor_plane) const;
 
   // Maps cursor layer to kCursor composition type.
   CursorLayerMapper cursor_mapper_;

@@ -49,10 +49,14 @@ class MockCompositorDisplay : public ICompositorDisplay {
               (const));
   MOCK_METHOD(bool, TestComposition,
               (CompositionPlanner::ValidatedComposition&), (const));
+  MOCK_METHOD((const PresentedCompositionCache&), GetLastPresentedComposition,
+              (), (const));
   MOCK_METHOD(bool, CtmByGpu, (), (const));
   MOCK_METHOD(bool, ForcedScalingWithGpu, (), (const));
   MOCK_METHOD((std::pair<uint32_t, uint32_t>), GetSize, (), (const));
   MOCK_METHOD(const HwcLayer&, GetClientLayer, (), (const));
+  MOCK_METHOD((std::shared_ptr<const HalColorTransforMatrix>),
+              GetColorTransformMatrix, (), (const));
   MOCK_METHOD(bool, CursorPlaneNeedsColorPipeline, (const HwcLayer&), (const));
 };
 

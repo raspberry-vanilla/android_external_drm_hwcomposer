@@ -21,6 +21,8 @@ src_common = files(
     'compositor/GenericLayerMapperCompositionPlanner.cpp',
     'compositor/HdcpController.cpp',
     'compositor/LayerToPlaneJoiningPlan.cpp',
+    'compositor/PresentedCompositionCache.cpp',
+    'compositor/ShortCircuitor.cpp',
     'compositor/mapper/CursorLayerMapper.cpp',
     'compositor/mapper/ForceClientCompositionLayerMapper.cpp',
     'compositor/mapper/LayerCachingMapper.cpp',

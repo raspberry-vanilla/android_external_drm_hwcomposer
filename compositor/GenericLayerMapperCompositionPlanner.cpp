@@ -16,6 +16,7 @@
 #include "GenericLayerMapperCompositionPlanner.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -23,8 +24,9 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
+#include "compositor/ShortCircuitor.h"
 #include "compositor/mapper/LayerMapper.h"
-#include "drm/DrmPlane.h"
+#include "compositor/mapper/MapperUtils.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
@@ -123,6 +125,35 @@ int CountRemainingPlanes(const ICompositorDisplay* display,
 bool NoOpValidator(const std::vector<LayerMapping>& /*unused*/) {
   return true;
 }
+
+// Tests |proposed_layers| and updates |layers_to_update| and
+// |composition_to_update| if the proposed layer composition is valid.
+void TestLayerMappings(std::vector<LayerMapping>&& proposed_layers,
+                       const ICompositorDisplay* display,
+                       std::vector<LayerMapping>& layers_to_update,
+                       std::optional<CompositionPlanner::ValidatedComposition>&
+                           composition_to_update) {
+  CompositionPlanner::ValidatedComposition
+      new_composition = CreateValidatedComposition(proposed_layers);
+
+  if (display->TestComposition(new_composition)) {
+    layers_to_update = std::move(proposed_layers);
+    composition_to_update = std::move(new_composition);
+  }
+}
+
+// Updates |composition_to_update| if the proposed composition is valid.
+void TestLayerMappings(const std::vector<LayerMapping>& layers,
+                       const ICompositorDisplay* display,
+                       std::optional<CompositionPlanner::ValidatedComposition>&
+                           composition_to_update) {
+  CompositionPlanner::ValidatedComposition
+      new_composition = CreateValidatedComposition(layers);
+
+  if (display->TestComposition(new_composition)) {
+    composition_to_update = std::move(new_composition);
+  }
+}
 }  // namespace
 
 GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner()
@@ -130,22 +161,40 @@ GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner()
       device_cursor_mapper_(CompositionType::kDevice) {
 }
 
-CompositionPlanner::ValidatedComposition
+CompositionPlanner::ValidationResult
 GenericLayerMapperCompositionPlanner::ValidateDisplay(
     const ICompositorDisplay* display) {
   // An element with higher stack order is always in front of an element with a
   // lower stack order.
-  std::vector<LayerMapping> layers = CreateZOrderedLayerMapping(
-      display->GetOrderLayersByZPos());
+  const auto hwclayers = display->GetOrderLayersByZPos();
+  std::vector<LayerMapping> layers = CreateZOrderedLayerMapping(hwclayers);
 
   // Early check and exit for flattened scenes.
   const FlatteningController* flatcon = display->GetFlatCon();
   if (flatcon != nullptr && flatcon->ShouldFlatten()) {
-    return CreateFlattenedComposition(layers, FlattenReason::kStaticScene);
+    return {.composition = CreateFlattenedComposition(layers, FlattenReason::
+                                                                  kStaticScene),
+            .short_circuited = false};
   }
 
   if (display->CtmByGpu()) {
-    return CreateFlattenedComposition(layers, FlattenReason::kCtmWithOffset);
+    return {.composition = CreateFlattenedComposition(layers,
+                                                      FlattenReason::
+                                                          kCtmWithOffset),
+            .short_circuited = false};
+  }
+
+  // Check if short-circuit is applicable in this validation request. If so,
+  // skip the validation and use the previously presented composition.
+  {
+    auto last_presented = ShortCircuitor::
+        Get(ShortCircuitor::Config::FromProperties(),
+            display->GetLastPresentedComposition(),
+            ValidationRequestContext(*display, hwclayers));
+    if (last_presented) {
+      return {.composition = std::move(*last_presented),
+              .short_circuited = true};
+    }
   }
 
   layers = MapAllClientCompositionRequiredLayers(display, layers);
@@ -156,11 +205,7 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
       };
 
   const bool use_cursor_plane = ShouldUseCursorPlane(display, layers);
-  if (use_cursor_plane) {
-    layers = cursor_mapper_.AssignLayers(layers, validator);
-  } else {
-    layers = device_cursor_mapper_.AssignLayers(layers, validator);
-  }
+  layers = GetCursorMapper(use_cursor_plane).AssignLayers(layers, validator);
 
   // Mapping dealing with layer caching does not need any testing as they do
   // not consume actual hardware resources.
@@ -170,32 +215,20 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
 
   {
     auto new_layers = underlay_mapper_.AssignLayers(layers, validator);
-
-    ValidatedComposition new_composition = CreateValidatedComposition(
-        new_layers);
-    if (display->TestComposition(new_composition)) {
-      layers = std::move(new_layers);
-      validated_composition = std::move(new_composition);
-    }
+    TestLayerMappings(std::move(new_layers), display, layers,
+                      validated_composition);
   }
 
   if (auto new_layers = leftover_mapper_.AssignLayers(layers, validator);
       new_layers != layers) {
-    ValidatedComposition new_composition = CreateValidatedComposition(
-        new_layers);
-    if (display->TestComposition(new_composition)) {
-      layers = std::move(new_layers);
-      validated_composition = std::move(new_composition);
-    }
+    TestLayerMappings(std::move(new_layers), display, layers,
+                      validated_composition);
   }
 
   // If UnderlayMapper and LeftoverMapper didn't produce a valid composition,
   // convert all unmapped layers into client composited layers and try.
   if (!validated_composition) {
-    ValidatedComposition new_composition = CreateValidatedComposition(layers);
-    if (display->TestComposition(new_composition)) {
-      validated_composition = std::move(new_composition);
-    }
+    TestLayerMappings(layers, display, validated_composition);
   }
 
   // Cursor fallback: convert all non-cursor layers to client composition and
@@ -205,11 +238,8 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
     if (IsCursorPlaneUsed(layers)) {
       layers = force_client_composition_mapper_.AssignLayers(layers, validator);
       layers.back().composition_type = CompositionType::kInvalid;
-      if (use_cursor_plane) {
-        layers = cursor_mapper_.AssignLayers(layers, validator);
-      } else {
-        layers = device_cursor_mapper_.AssignLayers(layers, validator);
-      }
+      layers = GetCursorMapper(use_cursor_plane)
+                   .AssignLayers(layers, validator);
 
       ValidatedComposition new_composition = ValidatedComposition{
           .composition_types = ToCompositionTypes(layers)};
@@ -231,24 +261,8 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
     validated_composition->cursor_plane_validated = success_before_flattening;
   }
   validated_composition->composition_plan.reset();
-  return *validated_composition;
-}
-
-bool GenericLayerMapperCompositionPlanner::MustBeClientComposited(
-    const ICompositorDisplay* display, const HwcLayer* layer) {
-  // As per Composition.aidl, if Composition is CLIENT, HWC is not allowed to
-  // request a change.
-  return !HardwareSupportsLayerType(layer->GetSfType()) ||
-         !layer->IsLayerUsableAsDevice() || display->CtmByGpu() ||
-         (layer->GetLayerData().pi.RequireScalingOrPhasing() &&
-          display->ForcedScalingWithGpu());
-}
-
-bool GenericLayerMapperCompositionPlanner::HardwareSupportsLayerType(
-    CompositionType comp_type) {
-  return comp_type == CompositionType::kDevice ||
-         comp_type == CompositionType::kCursor ||
-         comp_type == CompositionType::kDeviceOccluded;
+  return {.composition = std::move(*validated_composition),
+          .short_circuited = false};
 }
 
 CompositionPlanner::ValidatedComposition
@@ -265,13 +279,7 @@ GenericLayerMapperCompositionPlanner::CreateFlattenedComposition(
 bool GenericLayerMapperCompositionPlanner::ShouldUseCursorPlane(
     const ICompositorDisplay* display,
     const std::vector<LayerMapping>& layers) const {
-  const auto* cursor_layer = GetCursorLayer(layers);
-  const auto cursor_plane = display->GetCursorPlane();
-  if (cursor_layer != nullptr && cursor_plane != nullptr &&
-      !MustBeClientComposited(display, cursor_layer) &&
-      cursor_plane->Get()->IsValidForLayer(&cursor_layer->GetLayerData()) &&
-      // TODO: Add a check for cursor plane color transform support.
-      !display->CursorPlaneNeedsColorPipeline(*cursor_layer)) {
+  if (DisplayCanUseCursorPlane(display, GetCursorLayer(layers))) {
     // Create and test a composition using only cursor plane and all other
     // layers client-composited to infer whether the cursor plane can be used.
     auto test_mappings = force_client_composition_mapper_
@@ -284,6 +292,11 @@ bool GenericLayerMapperCompositionPlanner::ShouldUseCursorPlane(
   }
 
   return false;
+}
+
+const CursorLayerMapper& GenericLayerMapperCompositionPlanner::GetCursorMapper(
+    bool use_cursor_plane) const {
+  return use_cursor_plane ? cursor_mapper_ : device_cursor_mapper_;
 }
 
 std::vector<LayerMapping>

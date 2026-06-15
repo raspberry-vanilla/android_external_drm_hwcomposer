@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "compositor/FlatteningController.h"
@@ -47,16 +48,20 @@ const HwcLayer* GetCursorLayer(const std::vector<const HwcLayer*>& layers) {
 }  // namespace
 
 auto GenericCompositionPlanner::ValidateDisplay(
-    const ICompositorDisplay* display) -> ValidatedComposition {
+    const ICompositorDisplay* display) -> ValidationResult {
   const auto layers = display->GetOrderLayersByZPos();
 
   const FlatteningController* flatcon = display->GetFlatCon();
   if (flatcon != nullptr && flatcon->ShouldFlatten()) {
-    return GetFlattenedComposition(layers, FlattenReason::kStaticScene);
+    return {.composition = GetFlattenedComposition(layers,
+                                                   FlattenReason::kStaticScene),
+            .short_circuited = false};
   }
 
   if (display->CtmByGpu()) {
-    return GetFlattenedComposition(layers, FlattenReason::kCtmWithOffset);
+    return {.composition = GetFlattenedComposition(layers, FlattenReason::
+                                                               kCtmWithOffset),
+            .short_circuited = false};
   }
 
   bool use_cursor_plane = false;
@@ -127,7 +132,8 @@ auto GenericCompositionPlanner::ValidateDisplay(
     validated_composition.cursor_plane_validated = success;
   }
 
-  return validated_composition;
+  return {.composition = std::move(validated_composition),
+          .short_circuited = false};
 }
 
 std::tuple<size_t, size_t> GenericCompositionPlanner::GetClientLayers(

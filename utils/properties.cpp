@@ -206,4 +206,22 @@ auto Properties::GetForceMode() -> std::string {
   return {force_mode};
 }
 
+auto Properties::ValidationShortCircuiting() -> bool {
+  constexpr int kDefault = 0;
+  return (property_get_bool("vendor.hwc.drm.validation_short_circuiting",
+                            kDefault) != 0);
+}
+
+auto Properties::ShortCircuitIgnoreGeometry() -> bool {
+  constexpr int kDefault = 1;
+  return (property_get_bool("vendor.hwc.drm.short_circuit_ignore_geometry",
+                            kDefault) != 0);
+}
+
+auto Properties::ShortCircuitIgnoreCtm() -> bool {
+  constexpr int kDefault = 1;
+  return (property_get_bool("vendor.hwc.drm.short_circuit_ignore_ctm",
+                            kDefault) != 0);
+}
+
 }  // namespace android::drm_hwcomposer

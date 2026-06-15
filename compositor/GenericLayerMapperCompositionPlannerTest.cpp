@@ -40,6 +40,7 @@ using ::testing::Contains;
 using ::testing::Field;
 using ::testing::Pair;
 using ::testing::Return;
+using ::testing::ReturnRefOfCopy;
 
 constexpr float kOpaque = 1.0F;
 constexpr float kLayerCached = 0.0F;
@@ -61,6 +62,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -78,8 +82,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::CompositionTypeMap{
@@ -103,6 +106,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -114,8 +120,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(&flatcon));
   ASSERT_TRUE(flatcon.ShouldFlatten());
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::CompositionTypeMap{
@@ -140,6 +145,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   // CTM by GPU forces the entire layer stack to GPU composite even if there's
   // only one device-compositable layer and thus should device composite.
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(true));
@@ -148,8 +156,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
       .WillRepeatedly(Return(false));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::CompositionTypeMap{
@@ -196,6 +203,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
       .WillOnce(
           Return(std::vector<const HwcLayer*>{&scaled_underlay_candidate}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   // |scaled_underlay_candidate| requires scaling due to its source crop, and
   // with ForcedScalingWithGpu() being true the layer is going to be forced into
   // GPU composition.
@@ -205,8 +215,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::CompositionTypeMap{
@@ -236,6 +245,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, SingleLayerAndCursor) {
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -255,8 +267,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, SingleLayerAndCursor) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::
@@ -288,6 +299,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -309,8 +323,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::
@@ -342,6 +355,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -362,8 +378,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::
@@ -395,6 +410,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -424,8 +442,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                         Contains(Pair(&cursor, CompositionType::kCursor)))))
       .WillRepeatedly(Return(false));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // The cursor layer should be mapped to the device layer instead.
   EXPECT_EQ(composition.composition_types,
@@ -458,6 +475,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
       .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -482,8 +502,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   // All test compositions should fail.
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(false));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // The cursor layer should be mapped to client instead.
   EXPECT_EQ(composition.composition_types,
@@ -543,6 +562,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, LayerCachingDeviceOcclusion) {
                                                     &task_bar_cached,
                                                     &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -562,8 +584,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, LayerCachingDeviceOcclusion) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Cached layers (window, task bar) are supposed to be device occluded if
   // possible.
@@ -631,6 +652,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                                     &task_bar_cached,
                                                     &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -650,8 +674,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Cached layers (window, task bar) are marked kClient by SF and must be
   // respected.
@@ -707,6 +730,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, Underlay) {
           Return(std::vector<const HwcLayer*>{&underlayed_nv12, &wallpaper,
                                               &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -726,8 +752,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, Underlay) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Underlay layer should be device composited.
   EXPECT_EQ(composition.composition_types,
@@ -782,6 +807,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, AttemptUnderlayButIneligible) {
           Return(std::vector<const HwcLayer*>{&underlayed_nv12, &wallpaper,
                                               &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -801,8 +829,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, AttemptUnderlayButIneligible) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Underlay layer should be forced into client composition.
   EXPECT_EQ(composition.composition_types,
@@ -872,6 +899,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, UnderlayAndLayerCached) {
                                               &window_cached, &task_bar_cached,
                                               &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -891,8 +921,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, UnderlayAndLayerCached) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::
@@ -966,6 +995,9 @@ TEST(GenericLayerMapperCompositionPlannerTest, HotspotUnderlayAndLayerCached) {
                                               &window_cached, &task_bar_cached,
                                               &status_bar, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -985,8 +1017,7 @@ TEST(GenericLayerMapperCompositionPlannerTest, HotspotUnderlayAndLayerCached) {
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(composition.composition_types,
             (CompositionPlanner::
@@ -1051,6 +1082,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                               &task_bar_cached,
                                               &status_bar_cached, &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -1070,8 +1104,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Cached layers (status bar, window, task bar) are supposed to be device
   // occluded if possible. Since there is only one non-cached, non-device
@@ -1123,6 +1156,9 @@ TEST(GenericLayerMapperCompositionPlannerTest,
           Return(std::vector<const HwcLayer*>{&underlayed_nv12, &wallpaper,
                                               &cursor}));
 
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
   EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
   EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
   EXPECT_CALL(mock_display, ForcedScalingWithGpu())
@@ -1143,8 +1179,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
   EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
 
-  CompositionPlanner::ValidatedComposition
-      composition = planner.ValidateDisplay(&mock_display);
+  auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
   // Underlay layer should be device composited.
   // Leftover wallpaper layer should be device composited.

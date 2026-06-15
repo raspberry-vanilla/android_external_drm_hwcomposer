@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -32,6 +31,7 @@
 #include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
+#include "compositor/PresentedCompositionCache.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
@@ -107,8 +107,13 @@ class HwcDisplay : public ICompositorDisplay {
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay() override;
 
+  auto GetColorTransformMatrix() const
+      -> std::shared_ptr<const HalColorTransforMatrix> override {
+    return color_matrix_;
+  }
+
   void SetColorTransformMatrix(
-      const std::array<float, 16> &color_transform_matrix);
+      const HalColorTransforMatrix &color_transform_matrix);
 
   bool CursorPlaneNeedsColorPipeline(
       const HwcLayer &cursor_layer) const override;
@@ -118,6 +123,11 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool TestComposition(
       CompositionPlanner::ValidatedComposition &composition) const override;
+
+  auto GetLastPresentedComposition() const
+      -> const PresentedCompositionCache & override {
+    return last_presented_composition_;
+  }
 
   std::vector<const HwcLayer *> GetOrderLayersByZPos() const override;
 
@@ -317,11 +327,19 @@ class HwcDisplay : public ICompositorDisplay {
   bool IsDozeSuspendSupported() const;
   bool IsSuspendSupported() const;
 
+  // Before CreateFrameUpdateCommit() can be called, it must be ensured that
+  // the composition's internal states are up to date and ready to create an
+  // AtomicCommitArgs.
+  void PrepareCompositionForCommit(
+      CompositionPlanner::ValidatedComposition &composition) const;
+
   // Create AtomicCommitArgs to commit at the next vsync. Returns nullopt if
   // such AtomicCommitArgs cannot be created due to lack of drm resources or
   // invalid HwcDisplay or HwcLayer state.
   // The caller must do a test commit on the returned args to ensure that the
   // hardware can perform the commit.
+  // PrepareCompositionForCommit() must be called before this function to
+  // ensure that the composition's internal states are up to date.
   std::optional<AtomicCommitArgs> CreateFrameUpdateCommit(
       const CompositionPlanner::ValidatedComposition &composition) const;
 
@@ -429,6 +447,8 @@ class HwcDisplay : public ICompositorDisplay {
   std::unique_ptr<DisplayConfigurationResultReporter> config_result_reporter_;
 
   std::unique_ptr<BacklightController> backlight_controller_;
+
+  PresentedCompositionCache last_presented_composition_;
 };
 
 }  // namespace android::drm_hwcomposer

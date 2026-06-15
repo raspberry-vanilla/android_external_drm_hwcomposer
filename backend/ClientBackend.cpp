@@ -25,9 +25,11 @@ namespace {
 class ClientCompositionPlanner : public CompositionPlanner {
  public:
   auto ValidateDisplay(const ICompositorDisplay* display)
-      -> ValidatedComposition override {
-    return GetFlattenedComposition(display->GetOrderLayersByZPos(),
-                                   FlattenReason::kNone);
+      -> ValidationResult override {
+    return {.composition = GetFlattenedComposition(display
+                                                       ->GetOrderLayersByZPos(),
+                                                   FlattenReason::kNone),
+            .short_circuited = false};
   }
 };
 

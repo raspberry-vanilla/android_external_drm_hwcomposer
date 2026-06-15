@@ -53,6 +53,7 @@
 #include "compositor/HdcpController.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "compositor/PresentedCompositionCache.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
@@ -98,6 +99,16 @@ bool TransformHasOffsetValue(const float *matrix) {
   return false;
 }
 
+// Client target buffer may be updated since the composition was validated,
+// so get the latest LayerData.
+void UpdateClientTargetIfNeeded(const HwcLayer &client_layer,
+                                LayerToPlaneJoiningPlan *composition_plan) {
+  if (!composition_plan)
+    return;
+  if (const auto client_z = composition_plan->client_z_order)
+    composition_plan->plan[*client_z].layer = client_layer.GetLayerData();
+}
+
 }  // namespace
 
 auto HwcDisplay::GetDisplayName() const -> std::string {
@@ -138,7 +149,7 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
 }
 
 void HwcDisplay::SetColorTransformMatrix(
-    const std::array<float, 16> &color_transform_matrix) {
+    const HalColorTransforMatrix &color_transform_matrix) {
   color_transform_is_identity_ = std::equal(color_transform_matrix.begin(),
                                             color_transform_matrix.end(),
                                             kIdentityMatrix.begin(),
@@ -365,7 +376,13 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
     flatcon_->NewFrame();
   }
 
-  validated_composition_.emplace(pipeline_->planner->ValidateDisplay(this));
+  auto [composition,
+        short_circuited] = pipeline_->planner->ValidateDisplay(this);
+  validated_composition_.emplace(std::move(composition));
+  if (!short_circuited) {
+    last_presented_composition_.SetRequestedContext(
+        ValidationRequestContext(*this, GetOrderLayersByZPos()));
+  }
 
   // Iterate through the layers to find which layers actually changed.
   std::vector<ChangedLayer> changed_layers;
@@ -749,6 +766,7 @@ void HwcDisplay::Deinit() {
     flatcon_.reset();
     hdcpcon_.reset();
     backlight_controller_.reset();
+    last_presented_composition_.Reset();
   }
 
   if (vsync_worker_) {
@@ -1121,6 +1139,8 @@ bool HwcDisplay::TestComposition(
   if (IsInHeadlessMode()) {
     return true;
   }
+
+  PrepareCompositionForCommit(composition);
   auto a_args = CreateFrameUpdateCommit(composition);
   if (!a_args) {
     return false;
@@ -1133,6 +1153,11 @@ bool HwcDisplay::TestComposition(
     return true;
   }
   return false;
+}
+
+void HwcDisplay::PrepareCompositionForCommit(
+    CompositionPlanner::ValidatedComposition &composition) const {
+  UpdateClientTargetIfNeeded(client_layer_, composition.composition_plan.get());
 }
 
 std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
@@ -1176,29 +1201,16 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.hdcp_content_type = HdcpContentType::kType0;
   }
 
-  // Use the cached plan, and update the client target buffer if needed.
-  if (composition.composition_plan != nullptr) {
-    const auto &client_z_order = composition.composition_plan->client_z_order;
-    // Client target buffer may be updated since the composition was validated,
-    // so get the latest LayerData.
-    if (client_z_order.has_value()) {
-      composition.composition_plan->plan[client_z_order.value()]
-          .layer = client_layer_.GetLayerData();
-    }
-    a_args.composition = composition.composition_plan;
-  } else {
-    // Construct a new composition plan.
-    a_args.composition = CreateLayerToPlaneJoiningPlan(
-        composition.composition_types);
-  }
-
+  a_args.composition = composition.composition_plan
+                           ? composition.composition_plan
+                           : CreateLayerToPlaneJoiningPlan(
+                                 composition.composition_types);
   if (!a_args.composition) {
     return std::nullopt;
   }
 
   // CTM will be applied by the client, don't apply DRM CTM
-  const bool all_client_layers = a_args.composition->client_z_order
-                                     .has_value() &&
+  const bool all_client_layers = a_args.composition->client_z_order &&
                                  a_args.composition->plan.size() == 1;
   if (all_client_layers &&
       hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
@@ -1291,7 +1303,7 @@ HwcDisplay::CreateLayerToPlaneJoiningPlan(
   }
   auto composition = LayerToPlaneJoiningPlan::
       CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers),
-                                    cursor_layer);
+                                    std::move(cursor_layer));
   if (composition) {
     composition->client_z_order = client_z_order;
   }
@@ -1311,7 +1323,12 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     return false;
   }
 
+  PrepareCompositionForCommit(validated_composition_.value());
   auto a_args = CreateFrameUpdateCommit(validated_composition_.value());
+  if (a_args) {
+    last_presented_composition_.SetValidatedComposition(
+        *validated_composition_);
+  }
   // |validated_composition_| can safely be reset now. |a_args| holds its own
   // pointer to the plan which will remain in scope until the commit is finished
   // (successfully or not).
@@ -1319,12 +1336,14 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
 
   if (!a_args) {
     ALOGE("Failed to create AtomicCommitArgs for frame composition.");
+    last_presented_composition_.Reset();
     return false;
   }
 
   auto result = ExecuteAtomicCommit(*a_args);
   if (!result) {
     ALOGE("Failed to commit the frame composition.");
+    last_presented_composition_.Reset();
     return false;
   }
 

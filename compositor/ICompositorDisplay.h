@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"
+#include "compositor/DisplayInfo.h"
+#include "compositor/PresentedCompositionCache.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "hwc/HwcLayer.h"
 
@@ -49,6 +51,10 @@ class ICompositorDisplay {
   virtual bool TestComposition(
       CompositionPlanner::ValidatedComposition &composition) const = 0;
 
+  // For validation short-circuiting logic.
+  virtual const PresentedCompositionCache &GetLastPresentedComposition()
+      const = 0;
+
   virtual bool CtmByGpu() const = 0;
   virtual bool ForcedScalingWithGpu() const = 0;
 
@@ -56,6 +62,9 @@ class ICompositorDisplay {
   virtual std::pair<uint32_t, uint32_t> GetSize() const = 0;
 
   virtual const HwcLayer &GetClientLayer() const = 0;
+
+  virtual std::shared_ptr<const HalColorTransforMatrix>
+  GetColorTransformMatrix() const = 0;
 
   virtual bool CursorPlaneNeedsColorPipeline(
       const HwcLayer &cursor_layer) const = 0;

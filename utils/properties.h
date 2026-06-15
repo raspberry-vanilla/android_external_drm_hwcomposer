@@ -36,11 +36,14 @@ class Properties {
   static auto GetCtmHandling() -> CtmHandling;
   static auto GetBackendOverride() -> std::string;
   static auto GetDevicePath() -> std::string;
+  static auto GetForceMode() -> std::string;
   static auto UseColorPipeline() -> bool;
   static auto ForcedHolePunchingEnabled() -> bool;
   static auto ForceColorMode() -> int;
   static auto PersistentHdrEnabled() -> bool;
-  static auto GetForceMode() -> std::string;
+  static auto ValidationShortCircuiting() -> bool;
+  static auto ShortCircuitIgnoreGeometry() -> bool;
+  static auto ShortCircuitIgnoreCtm() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

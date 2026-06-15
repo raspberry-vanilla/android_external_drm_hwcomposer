@@ -15,10 +15,21 @@
  */
 #pragma once
 
+#include "compositor/LayerData.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
 
 // Returns true if |layer| is considered cached by SurfaceFlinger.
-bool IsLayerCached(const HwcLayer& layer);
+[[nodiscard]] bool IsLayerCached(const HwcLayer& layer);
+
+[[nodiscard]] bool HardwareSupportsLayerType(CompositionType comp_type);
+
+[[nodiscard]] bool MustBeClientComposited(const ICompositorDisplay* display,
+                                          const HwcLayer* layer);
+
+// Heuristically checks if the display can use the cursor plane,
+// without issuing a test in kernel.
+[[nodiscard]] bool DisplayCanUseCursorPlane(const ICompositorDisplay* display,
+                                            const HwcLayer* cursor_layer);
 }  // namespace android::drm_hwcomposer
