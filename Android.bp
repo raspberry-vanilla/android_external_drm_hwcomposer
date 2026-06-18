@@ -58,8 +58,6 @@ cc_defaults {
         "-DLOG_TAG=\"drmhwc\"",
     ],
 
-    cpp_std: "gnu++17",
-
     relative_install_path: "hw",
     vendor: true,
 }

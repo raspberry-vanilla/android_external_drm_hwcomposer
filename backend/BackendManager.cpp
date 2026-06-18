@@ -196,7 +196,7 @@ std::optional<std::string> BackendManager::DumpBackends() {
   }
 
   auto result = output.str();
-  return result.empty() ? std::make_optional(result) : std::nullopt;
+  return result.empty() ? std::nullopt : std::make_optional(result);
 }
 
 }  // namespace android::drm_hwcomposer
