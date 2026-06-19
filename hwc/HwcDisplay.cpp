@@ -82,7 +82,7 @@ namespace {
 
 // NOLINTBEGIN(misc-include-cleaner)
 constexpr auto kFlatteningTimeout = 1s;
-constexpr auto kHdcpRetryTimeout = 1s;
+constexpr auto kHdcpRetryTimeout = 30s;
 // NOLINTEND(misc-include-cleaner)
 
 bool float_equals(float a, float b) {
@@ -1191,12 +1191,10 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
                              : HdcpController::HdcpState::kUndesired;
   if (hdcp_state == HdcpController::HdcpState::kDesired) {
-    ALOGI("Requesting HDCP to be enabled with Content Type 1");
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType1;
   }
   if (hdcp_state == HdcpController::HdcpState::kRetry) {
-    ALOGI("Retrying HDCP to be enabled with Content Type 0");
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType0;
   }
@@ -1379,6 +1377,11 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
 
   if (a_args.hdcp_content_type.has_value() ||
       a_args.content_protection.has_value()) {
+    if (a_args.hdcp_content_type.has_value()) {
+      ALOGI("HDCP commit requested with Content Type %d for display %d",
+            static_cast<int>(a_args.hdcp_content_type.value()),
+            static_cast<int>(handle_));
+    }
     hdcpcon_->Requested();
   }
 }

@@ -18,6 +18,7 @@
 
 #include <android-base/thread_annotations.h>
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <optional>
@@ -141,9 +142,11 @@ void HdcpController::Terminate() {
   cv_.notify_all();
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 void HdcpController::ThreadFn() {
   for (;;) {
     bool fire_callback = false;
+    bool early_check = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       base::ScopedLockAssertion lock_assertion(mutex_);
@@ -152,21 +155,42 @@ void HdcpController::ThreadFn() {
         break;
       }
 
-      if (sleep_until_ <= std::chrono::system_clock::now() &&
-          (hdcp_state_ == HdcpState::kRequested)) {
-        fire_callback = true;
-      } else {
-        if (hdcp_state_ != HdcpState::kRequested) {
-          ALOGV("Wait");
-          cv_.wait(lock);
+      auto now = std::chrono::system_clock::now();
+      if (hdcp_state_ == HdcpState::kRequested) {
+        if (sleep_until_ <= now) {
+          // If the timeout has expired, we will fire the callback to check the
+          // HDCP status.
+          fire_callback = true;
         } else {
           ALOGV("Wait_until");
-          cv_.wait_until(lock, sleep_until_);
+          // Wait for 1 second or until sleep_until_, whichever is earlier,
+          // to re-check the HDCP status.
+          // This is to handle the case where HDCP status change times are
+          // variable and can sometimes take a long time, so we want to re-check
+          // the status periodically until the timeout expires.
+          cv_.wait_until(lock,
+                         std::min(sleep_until_, now + std::chrono::seconds(1)));
+          // hdcp_state_ could have been changed while waiting, so check the
+          // hdcp_state_ again.
+          if (hdcp_state_ == HdcpState::kRequested) {
+            early_check = true;
+          }
         }
+      } else {
+        ALOGV("Wait");
+        cv_.wait(lock);
       }
     }
 
-    if (fire_callback) {
+    // If it's time to check the HDCP status, query the connector and call
+    // appropriate callbacks based on the current state and connector status.
+    // This needs to happen outside of the lock to avoid blocking other
+    // operations while potentially performing I/O or other long-running tasks.
+    if (early_check) {
+      if (pipeline_->connector->Get()->IsContentProtectionEnabled()) {
+        SetContentProtectionStatus();
+      }
+    } else if (fire_callback) {
       // Call the function that checks the CP prop value and call appropriate
       // onHdcPlevelsChanged
       ALOGV("Timeout. Sending an event to compositor");
@@ -174,5 +198,6 @@ void HdcpController::ThreadFn() {
     }
   }
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 }  // namespace android::drm_hwcomposer
