@@ -23,13 +23,19 @@
 
 namespace android::drm_hwcomposer {
 
+struct CommitStatus;
+
+template <typename T>
+class CommitStatusOr;
+
 class AtomicCommitSink {
  public:
   virtual ~AtomicCommitSink() = default;
-  virtual bool TestAtomicCommit(
+  virtual CommitStatus TestAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
       const = 0;
-  virtual std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>
+  virtual CommitStatusOr<
+      std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
           args) = 0;

@@ -33,7 +33,7 @@ FrameTimeHistory CreateFrameTimeHistory(bool is_active) {
   FrameTimeHistory history;
   if (is_active) {
     const auto now = std::chrono::steady_clock::now();
-    // 10 samples for 1000fps, shoud be active enough.
+    // 10 samples for 1000fps, should be active enough.
     for (int i = 10; i > 0; i--) {
       history.AddFrameTime(now - std::chrono::milliseconds(i));
     }

@@ -51,6 +51,8 @@ using aidl::android::hardware::graphics::common::Hdr;
 namespace android::drm_hwcomposer {
 
 class ChangedLayer;
+template <typename T>
+class CommitStatusOr;
 class DisplayConfigurationResultReporter;
 class DisplayHotplugConnectModeDetectedAtomReporter;
 class DrmHwc;
@@ -60,6 +62,7 @@ class VSyncWorker;
 
 struct AtomicCommitArgs;
 struct AtomicCommitResult;
+struct CommitStatus;
 struct CompositionAttributes;
 struct CompositionStats;
 struct DrmDisplayPipeline;
@@ -121,7 +124,7 @@ class HwcDisplay : public ICompositorDisplay {
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
   void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
-  bool TestComposition(
+  CommitStatus TestComposition(
       CompositionPlanner::ValidatedComposition &composition) const override;
 
   auto GetLastPresentedComposition() const
@@ -347,7 +350,7 @@ class HwcDisplay : public ICompositorDisplay {
   std::unique_ptr<LayerToPlaneJoiningPlan> CreateLayerToPlaneJoiningPlan(
       const CompositionPlanner::CompositionTypeMap &composition_types) const;
 
-  bool CommitStagedComposition(SharedFd &out_present_fence);
+  CommitStatus CommitStagedComposition(SharedFd &out_present_fence);
 
   // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
   // This should be called after a successful commit.
@@ -358,7 +361,7 @@ class HwcDisplay : public ICompositorDisplay {
       const HwcDisplayConfig *config,
       const std::optional<LayerData> &modeset_layer);
 
-  std::optional<AtomicCommitResult> ExecuteAtomicCommit(
+  CommitStatusOr<AtomicCommitResult> ExecuteAtomicCommit(
       AtomicCommitArgs &a_args) const;
 
   // Sleep the current thread until |present_time| is closest to the next

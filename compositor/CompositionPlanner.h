@@ -65,13 +65,18 @@ class CompositionPlanner {
     // Whether the cursor plane was successfully validated, or |nullopt| if it
     // wasn't attempted.
     std::optional<bool> cursor_plane_validated = std::nullopt;
+    // The error code in the event of validation failure. Indicates internal
+    // failure iff |flatten_reason| is |kValidateFailed| and the error code is
+    // 0.
+    int error_code = 0;
 
     bool operator==(const ValidatedComposition& other) const {
       return composition_types == other.composition_types &&
              punch_out_layers == other.punch_out_layers &&
              composition_plan == other.composition_plan &&
              flatten_reason == other.flatten_reason &&
-             cursor_plane_validated == other.cursor_plane_validated;
+             cursor_plane_validated == other.cursor_plane_validated &&
+             error_code == other.error_code;
     }
   };
 

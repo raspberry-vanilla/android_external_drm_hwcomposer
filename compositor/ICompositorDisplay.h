@@ -33,6 +33,8 @@ namespace android::drm_hwcomposer {
 class DrmPlane;
 class FlatteningController;
 
+struct CommitStatus;
+
 // ICompositorDisplay exists purely to isolate methods in HwcDisplay used inside
 // the compositor/ directory. HwcDisplay has many Android-specific dependencies
 // that prevent host-side unit tests from building, so this interface
@@ -48,7 +50,7 @@ class ICompositorDisplay {
   virtual size_t GetNumAvailablePlanes() const = 0;
   virtual std::shared_ptr<BindingOwner<DrmPlane>> GetCursorPlane() const = 0;
 
-  virtual bool TestComposition(
+  virtual CommitStatus TestComposition(
       CompositionPlanner::ValidatedComposition &composition) const = 0;
 
   // For validation short-circuiting logic.

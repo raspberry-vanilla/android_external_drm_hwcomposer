@@ -22,9 +22,11 @@ namespace android::drm_hwcomposer {
 
 bool operator<(const CompositionAttributes& a, const CompositionAttributes& b) {
   return std::make_tuple(a.display_handle, a.present_failed,
-                         a.validation_result, a.flatten_reason) <
+                         a.present_error_code, a.validation_result,
+                         a.validation_error_code, a.flatten_reason) <
          std::make_tuple(b.display_handle, b.present_failed,
-                         b.validation_result, b.flatten_reason);
+                         b.present_error_code, b.validation_result,
+                         b.validation_error_code, b.flatten_reason);
 }
 
 CompositionStats& CompositionStats::operator+=(const CompositionStats& other) {

@@ -27,6 +27,7 @@
 #include "compositor/ShortCircuitor.h"
 #include "compositor/mapper/LayerMapper.h"
 #include "compositor/mapper/MapperUtils.h"
+#include "drm/CommitStatus.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
@@ -128,32 +129,40 @@ bool NoOpValidator(const std::vector<LayerMapping>& /*unused*/) {
 
 // Tests |proposed_layers| and updates |layers_to_update| and
 // |composition_to_update| if the proposed layer composition is valid.
-void TestLayerMappings(std::vector<LayerMapping>&& proposed_layers,
-                       const ICompositorDisplay* display,
-                       std::vector<LayerMapping>& layers_to_update,
-                       std::optional<CompositionPlanner::ValidatedComposition>&
-                           composition_to_update) {
+CommitStatus TestLayerMappings(
+    std::vector<LayerMapping>&& proposed_layers,
+    const ICompositorDisplay* display,
+    std::vector<LayerMapping>& layers_to_update,
+    std::optional<CompositionPlanner::ValidatedComposition>&
+        composition_to_update) {
   CompositionPlanner::ValidatedComposition
       new_composition = CreateValidatedComposition(proposed_layers);
 
-  if (display->TestComposition(new_composition)) {
+  const auto result = display->TestComposition(new_composition);
+  if (result.success) {
     layers_to_update = std::move(proposed_layers);
     composition_to_update = std::move(new_composition);
   }
+
+  return result;
 }
 
 // Updates |composition_to_update| if the proposed composition is valid.
-void TestLayerMappings(const std::vector<LayerMapping>& layers,
-                       const ICompositorDisplay* display,
-                       std::optional<CompositionPlanner::ValidatedComposition>&
-                           composition_to_update) {
+CommitStatus TestLayerMappings(
+    const std::vector<LayerMapping>& layers, const ICompositorDisplay* display,
+    std::optional<CompositionPlanner::ValidatedComposition>&
+        composition_to_update) {
   CompositionPlanner::ValidatedComposition
       new_composition = CreateValidatedComposition(layers);
 
-  if (display->TestComposition(new_composition)) {
+  const auto result = display->TestComposition(new_composition);
+  if (result.success) {
     composition_to_update = std::move(new_composition);
   }
+
+  return result;
 }
+
 }  // namespace
 
 GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner()
@@ -212,23 +221,24 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   layers = layer_caching_mapper_.AssignLayers(layers, validator);
 
   std::optional<ValidatedComposition> validated_composition = std::nullopt;
+  CommitStatus commit_status;
 
   {
     auto new_layers = underlay_mapper_.AssignLayers(layers, validator);
-    TestLayerMappings(std::move(new_layers), display, layers,
-                      validated_composition);
+    commit_status = TestLayerMappings(std::move(new_layers), display, layers,
+                                      validated_composition);
   }
 
   if (auto new_layers = leftover_mapper_.AssignLayers(layers, validator);
       new_layers != layers) {
-    TestLayerMappings(std::move(new_layers), display, layers,
-                      validated_composition);
+    commit_status = TestLayerMappings(std::move(new_layers), display, layers,
+                                      validated_composition);
   }
 
   // If UnderlayMapper and LeftoverMapper didn't produce a valid composition,
   // convert all unmapped layers into client composited layers and try.
   if (!validated_composition) {
-    TestLayerMappings(layers, display, validated_composition);
+    commit_status = TestLayerMappings(layers, display, validated_composition);
   }
 
   // Cursor fallback: convert all non-cursor layers to client composition and
@@ -243,7 +253,8 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
 
       ValidatedComposition new_composition = ValidatedComposition{
           .composition_types = ToCompositionTypes(layers)};
-      if (display->TestComposition(new_composition)) {
+      commit_status = display->TestComposition(new_composition);
+      if (commit_status.success) {
         validated_composition = std::move(new_composition);
       }
     }
@@ -255,6 +266,7 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   if (!success_before_flattening) {
     constexpr auto kFlattenReason = FlattenReason::kValidateFailed;
     validated_composition = CreateFlattenedComposition(layers, kFlattenReason);
+    validated_composition->error_code = commit_status.error_code;
   }
 
   if (use_cursor_plane) {
@@ -288,7 +300,7 @@ bool GenericLayerMapperCompositionPlanner::ShouldUseCursorPlane(
 
     ValidatedComposition cursor_composition{
         .composition_types = ToCompositionTypes(test_mappings)};
-    return display->TestComposition(cursor_composition);
+    return display->TestComposition(cursor_composition).success;
   }
 
   return false;

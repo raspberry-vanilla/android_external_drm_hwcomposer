@@ -24,10 +24,11 @@
 
 namespace android::drm_hwcomposer {
 class DrmAtomicCommitSink : public AtomicCommitSink {
-  bool TestAtomicCommit(
+  CommitStatus TestAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
       const override;
-  std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>
+  CommitStatusOr<
+      std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
       override;

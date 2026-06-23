@@ -113,19 +113,20 @@ std::string FlattenReasonToString(FlattenReason reason) {
 class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
  public:
   void PushAtom(int64_t display_handle, bool present_failed,
-                ValidationResult validation_result,
-                FlattenReason flatten_reason, int64_t frame_count,
-                int64_t layer_count, int64_t used_plane_count,
-                uint64_t total_pixops, uint64_t gpu_pixops) override {
+                int32_t present_error_code, ValidationResult validation_result,
+                int32_t validation_error_code, FlattenReason flatten_reason,
+                int64_t frame_count, int64_t layer_count,
+                int64_t used_plane_count, uint64_t total_pixops,
+                uint64_t gpu_pixops) override {
     ALOGV("Sending stats: display_handle=%" PRId64
-          ", present_failed=%d, validation_result=%s, flatten_reason=%s, "
-          "frame_count=%" PRId64 ", layer_count=%" PRId64
-          ", used_plane_count=%" PRId64 ", total_pixops=%" PRIu64
-          ", gpu_pixops=%" PRIu64,
-          display_handle, present_failed,
+          ", present_failed=%d, present_error_code=%d, validation_result=%s, "
+          "validation_error_code=%d, flatten_reason=%s, frame_count=%" PRId64
+          ", layer_count=%" PRId64 ", used_plane_count=%" PRId64
+          ", total_pixops=%" PRIu64 ", gpu_pixops=%" PRIu64,
+          display_handle, present_failed, present_error_code,
           ValidationResultToString(validation_result).c_str(),
-          FlattenReasonToString(flatten_reason).c_str(), frame_count,
-          layer_count, used_plane_count, total_pixops, gpu_pixops);
+          validation_error_code, FlattenReasonToString(flatten_reason).c_str(),
+          frame_count, layer_count, used_plane_count, total_pixops, gpu_pixops);
 
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
@@ -133,14 +134,15 @@ class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
     const VendorAtom atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::HWC_COMPOSITION_STATS,
                          kDeprecatedReverseDomainName, display_handle,
-                         /*presented_frame_count=*/0,
-                         /*present_failed_count=*/0,
-                         /*validate_failed_count=*/0, present_failed,
+                         /*presented_frame_count=*/0L,
+                         /*present_failed_count=*/0L,
+                         /*validate_failed_count=*/0L, present_failed,
                          ValidationResultToAtomType(validation_result),
                          FlattenReasonToAtomType(flatten_reason), frame_count,
                          layer_count, used_plane_count,
                          static_cast<int64_t>(total_pixops),
-                         static_cast<int64_t>(gpu_pixops));
+                         static_cast<int64_t>(gpu_pixops), present_error_code,
+                         validation_error_code);
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));

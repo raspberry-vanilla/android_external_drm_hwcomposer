@@ -54,6 +54,7 @@
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "compositor/PresentedCompositionCache.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
@@ -292,8 +293,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   AtomicCommitArgs commit_args = CreateModesetCommit(new_config,
                                                      modeset_layer_data);
   commit_args.blocking = true;
-  if (!ExecuteAtomicCommit(commit_args)) {
-    ALOGE("Blocking config failed.");
+  if (const auto result = ExecuteAtomicCommit(commit_args);
+      !result.IsSuccess()) {
+    ALOGE("Blocking config failed with err=%d.", result.GetStatus().error_code);
     return HwcDisplay::ConfigError::kConfigFailed;
   }
 
@@ -482,6 +484,7 @@ auto HwcDisplay::PresentStagedComposition(
                                            FlattenReason::kValidateFailed
                                        ? ValidationResult::kFailure
                                        : ValidationResult::kSuccess;
+    attributes.validation_error_code = validated_composition_->error_code;
     attributes.flatten_reason = validated_composition_->flatten_reason;
     if (validated_composition_->flatten_reason ==
         FlattenReason::kValidateFailed) {
@@ -534,14 +537,17 @@ auto HwcDisplay::PresentStagedComposition(
     ++stats.used_plane_count;
   }
 
-  if (!CommitStagedComposition(out_present_fence)) {
+  const auto commit_status = CommitStagedComposition(out_present_fence);
+  if (!commit_status.success) {
     attributes.present_failed = true;
+    attributes.present_error_code = commit_status.error_code;
     ++stats.failed_kms_present;
     comp_stats_[attributes] += stats;
     return false;
   }
 
   attributes.present_failed = false;
+  attributes.present_error_code = 0;
   comp_stats_[attributes] += stats;
 
   // Reset the hdr output metadata blobs so we don't apply it repeatedly.
@@ -716,12 +722,12 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     a_args.teardown = true;
   }
 
-  const bool commit_success = ExecuteAtomicCommit(a_args).has_value();
-  ALOGE_IF(!commit_success, "Failed to set display active: %s.",
-           enabled ? "enabled" : "disabled");
+  const auto result = ExecuteAtomicCommit(a_args);
+  ALOGE_IF(!result.IsSuccess(), "Failed to set display active: %s. err=%d",
+           enabled ? "enabled" : "disabled", result.GetStatus().error_code);
   // If setting to |enabled|, log the error and return true. The next frame
   // update will try to set it to active again.
-  if (!commit_success && !enabled) {
+  if (!result.IsSuccess() && !enabled) {
     return HwcDisplay::Error::kBadParameter;
   }
   return HwcDisplay::Error::kNone;
@@ -1047,31 +1053,39 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   return args;
 }
 
-std::optional<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
+CommitStatusOr<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
     AtomicCommitArgs &a_args) const {
   const int64_t commit_start_time = ResourceManager::GetTimeMonotonicNs();
-  auto res = GetPipe().device->GetAtomicCommitSink().ExecuteAtomicCommit(
-      {{GetPipe().atomic_state_manager.get(), a_args}});
+  const auto status_or_result = GetPipe()
+                                    .device->GetAtomicCommitSink()
+                                    .ExecuteAtomicCommit(
+                                        {{GetPipe().atomic_state_manager.get(),
+                                          a_args}});
   const int64_t commit_end_time = ResourceManager::GetTimeMonotonicNs();
 
   // Log successful modesets (seamless and full), including teardowns.
   const bool is_config_change = a_args.display_mode || a_args.power_mode ||
                                 a_args.teardown;
   if (is_config_change) {
-    LogConfigResult(a_args, res.size() == 1,
+    LogConfigResult(a_args, status_or_result.IsSuccess(),
                     commit_end_time - commit_start_time);
   }
 
-  ALOGE_IF(res.size() > 1,
+  const auto &res = status_or_result.GetValue();
+  if (!res.has_value()) {
+    return CommitStatusOr<AtomicCommitResult>(status_or_result.GetStatus());
+  }
+
+  ALOGE_IF(res->size() > 1,
            "More than one result returned for a singular display");
-  if (res.empty()) {
-    return std::nullopt;
+  if (res->empty()) {
+    return CommitStatusOr<AtomicCommitResult>(CommitStatus::InternalFailure());
   }
-  if (res.front().first != GetPipe().atomic_state_manager.get()) {
+  if (res->front().first != GetPipe().atomic_state_manager.get()) {
     ALOGE("Results are for a different state manager.");
-    return std::nullopt;
+    return CommitStatusOr<AtomicCommitResult>(CommitStatus::InternalFailure());
   }
-  return res.front().second;
+  return CommitStatusOr<AtomicCommitResult>(res->front().second);
 }
 
 void HwcDisplay::WaitForPresentTime(int64_t present_time,
@@ -1132,27 +1146,29 @@ uint32_t HwcDisplay::GetCurrentVsyncPeriodNs() const {
   return config->mode.GetVSyncPeriodNs();
 }
 
-bool HwcDisplay::TestComposition(
+CommitStatus HwcDisplay::TestComposition(
     CompositionPlanner::ValidatedComposition &composition) const {
   ATRACE_CALL();
 
   if (IsInHeadlessMode()) {
-    return true;
+    return CommitStatus::Success();
   }
 
   PrepareCompositionForCommit(composition);
   auto a_args = CreateFrameUpdateCommit(composition);
   if (!a_args) {
-    return false;
+    return CommitStatus::InternalFailure();
   }
-  if (GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
-          {{GetPipe().atomic_state_manager.get(), *a_args}})) {
+
+  const auto result = GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
+      {{GetPipe().atomic_state_manager.get(), *a_args}});
+  if (result.success) {
     // Put the composition plan into the newly-validated composition. Its owner
     // is responsible for keeping it alive until commit.
     composition.composition_plan = a_args->composition;
-    return true;
   }
-  return false;
+
+  return result;
 }
 
 void HwcDisplay::PrepareCompositionForCommit(
@@ -1308,17 +1324,17 @@ HwcDisplay::CreateLayerToPlaneJoiningPlan(
   return composition;
 }
 
-bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
+CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
   ATRACE_CALL();
 
   if (IsInHeadlessMode()) {
     ALOGE("%s: Display is in headless mode, should never reach here", __func__);
-    return true;
+    return CommitStatus::Success();
   }
 
   if (!validated_composition_.has_value()) {
     ALOGE("%s: No composition is staged. Cannot commit.", __func__);
-    return false;
+    return CommitStatus::InternalFailure();
   }
 
   PrepareCompositionForCommit(validated_composition_.value());
@@ -1335,19 +1351,21 @@ bool HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
   if (!a_args) {
     ALOGE("Failed to create AtomicCommitArgs for frame composition.");
     last_presented_composition_.Reset();
-    return false;
+    return CommitStatus::InternalFailure();
   }
 
-  auto result = ExecuteAtomicCommit(*a_args);
-  if (!result) {
-    ALOGE("Failed to commit the frame composition.");
+  const auto status_or_result = ExecuteAtomicCommit(*a_args);
+  const auto &result = status_or_result.GetValue();
+  if (!result.has_value()) {
+    ALOGE("Failed to commit the frame composition with err=%d",
+          status_or_result.GetStatus().error_code);
     last_presented_composition_.Reset();
-    return false;
+    return status_or_result.GetStatus();
   }
 
   out_present_fence = result->present_fence;
-  ApplyCommitChanges(*a_args, *result);
-  return true;
+  ApplyCommitChanges(*a_args, result.value());
+  return CommitStatus::Success();
 }
 
 void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
@@ -1605,8 +1623,11 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
     AtomicCommitArgs commit_args = CreateModesetCommit(&config,
                                                        modeset_layer_data);
     commit_args.seamless = true;
-    if (GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
-            {{GetPipe().atomic_state_manager.get(), commit_args}})) {
+    if (GetPipe()
+            .device->GetAtomicCommitSink()
+            .TestAtomicCommit(
+                {{GetPipe().atomic_state_manager.get(), commit_args}})
+            .success) {
       config.group_id = active_config->group_id;
     }
   }

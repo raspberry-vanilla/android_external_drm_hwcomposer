@@ -33,7 +33,9 @@ enum class ValidationResult {
 struct CompositionAttributes {
   int64_t display_handle = 0;
   bool present_failed = false;
+  int32_t present_error_code = 0;
   ValidationResult validation_result = ValidationResult::kSkip;
+  int32_t validation_error_code = 0;
   CompositionPlanner::FlattenReason
       flatten_reason = CompositionPlanner::FlattenReason::kNone;
 

@@ -35,6 +35,7 @@
 
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -45,12 +46,12 @@ namespace android::drm_hwcomposer {
 namespace {
 
 // NOLINTBEGIN(readability-function-cognitive-complexity)
-bool CommitFrame(
+CommitStatus CommitFrame(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args,
     bool test_only,
     std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> &results) {
   if (args.empty()) {
-    return false;
+    return CommitStatus::InternalFailure();
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -66,11 +67,11 @@ bool CommitFrame(
     if (static_cast<DrmAtomicStateManager *>(atomic_state_manager)
             ->GetDevice() != drm) {
       ALOGE("Commit for different device");
-      return false;
+      return CommitStatus::InternalFailure();
     }
     if (seamless != arg.seamless) {
       ALOGE("Commit for different seamless level");
-      return false;
+      return CommitStatus::InternalFailure();
     }
     auto request = atomic_state_manager->GetAtomicModeReqForArgs(arg);
     if (!arg.HasInputs()) {
@@ -78,7 +79,7 @@ bool CommitFrame(
     }
     if (!request) {
       ALOGE("Failed to create request.");
-      return false;
+      return CommitStatus::InternalFailure();
     }
 
     err = drmModeAtomicMerge(
@@ -89,14 +90,14 @@ bool CommitFrame(
     nonblock &= !arg.blocking && !arg.power_mode;
     if (err != 0) {
       ALOGE("Failed to append request");
-      return false;
+      return CommitStatus::InternalFailure();
     }
     requests[atomic_state_manager] = std::move(request);
   }
 
   if (requests.empty()) {
-    ALOGD("Commiting no input, success.");
-    return true;
+    ALOGD("Committing no input, success.");
+    return CommitStatus::Success();
   }
 
   if (!test_only) {
@@ -116,7 +117,7 @@ bool CommitFrame(
   }
 
   if (test_only) {
-    return err == 0;
+    return err == 0 ? CommitStatus::Success() : CommitStatus::Failure(err);
   }
 
   // Retry non-blocking commits that fail with EBUSY. The kernel returns EBUSY
@@ -172,7 +173,7 @@ bool CommitFrame(
           // NOLINTNEXTLINE(misc-include-cleaner)
           strerror_r(errno, err_buf, error_buf_max_size));
 
-    return false;
+    return CommitStatus::Failure(errno);
   }
   for (const auto &[atomic_state_manager, arg] : args) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -182,7 +183,7 @@ bool CommitFrame(
                                               requests[atomic_state_manager]));
     results.emplace_back(atomic_state_manager, res);
   }
-  return true;
+  return CommitStatus::Success();
 }
 // NOLINTEND(readability-function-cognitive-complexity)
 
@@ -199,14 +200,14 @@ void CleanUpFailedRequest(
   }
   std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
       unused_result;
-  if (!CommitFrame(cl_args, false, unused_result)) {
+  if (!CommitFrame(cl_args, false, unused_result).success) {
     ALOGE("Failed to clean-up active composition");
   }
 }
 
 }  // namespace
 
-bool DrmAtomicCommitSink::TestAtomicCommit(
+CommitStatus DrmAtomicCommitSink::TestAtomicCommit(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args)
     const {
   std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
@@ -214,18 +215,25 @@ bool DrmAtomicCommitSink::TestAtomicCommit(
   return CommitFrame(args, /*test_only =*/true, unused_result);
 }
 
-std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
+CommitStatusOr<std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>>
 DrmAtomicCommitSink::ExecuteAtomicCommit(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>
         &args) {
   std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> results;
-  if (!CommitFrame(args, /*test_only =*/false, results)) {
+  auto commit_status = CommitFrame(args, /*test_only =*/false, results);
+  if (!commit_status.success) {
     CleanUpFailedRequest(args);
-  } else if (results.empty()) {
+    return CommitStatusOr<
+        std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>>(
+        commit_status);
+  }
+  if (results.empty()) {
     for (const auto &[atomic_state_manager, _] : args) {
       results.emplace_back(atomic_state_manager, AtomicCommitResult{});
     }
   }
-  return results;
+  return CommitStatusOr<
+      std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>>(
+      results);
 }
 }  // namespace android::drm_hwcomposer

@@ -27,6 +27,7 @@
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/GenericLayerMapperCompositionPlanner.h"
 #include "compositor/LayerData.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
@@ -80,7 +81,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -265,7 +267,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, SingleLayerAndCursor) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -321,7 +324,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(true));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -376,7 +380,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillByDefault(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -432,7 +437,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillByDefault(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   // Any test compositions mapping the cursor to the cursor plane should fail.
   EXPECT_CALL(mock_display,
@@ -440,7 +446,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                   Field(&CompositionPlanner::ValidatedComposition::
                             composition_types,
                         Contains(Pair(&cursor, CompositionType::kCursor)))))
-      .WillRepeatedly(Return(false));
+      .WillRepeatedly(Return(CommitStatus::InternalFailure()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -497,10 +503,12 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   ON_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillByDefault(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   // All test compositions should fail.
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::InternalFailure()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -582,7 +590,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, LayerCachingDeviceOcclusion) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -672,7 +681,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -750,7 +760,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, Underlay) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -827,7 +838,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, AttemptUnderlayButIneligible) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -919,7 +931,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, UnderlayAndLayerCached) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -1015,7 +1028,8 @@ TEST(GenericLayerMapperCompositionPlannerTest, HotspotUnderlayAndLayerCached) {
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -1102,7 +1116,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 
@@ -1177,7 +1192,8 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
       .WillOnce(Return(false));
 
-  EXPECT_CALL(mock_display, TestComposition(_)).WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
 
   auto [composition, _] = planner.ValidateDisplay(&mock_display);
 

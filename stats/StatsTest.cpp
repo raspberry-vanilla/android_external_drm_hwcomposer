@@ -35,7 +35,9 @@ static bool operator==(const CompositionAttributes& lhs,
                        const CompositionAttributes& rhs) {
   return lhs.display_handle == rhs.display_handle &&
          lhs.present_failed == rhs.present_failed &&
+         lhs.present_error_code == rhs.present_error_code &&
          lhs.validation_result == rhs.validation_result &&
+         lhs.validation_error_code == rhs.validation_error_code &&
          lhs.flatten_reason == rhs.flatten_reason;
 }
 

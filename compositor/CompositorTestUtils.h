@@ -29,6 +29,7 @@
 #include "compositor/FlatteningController.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
 #include "hwc/HwcLayer.h"
@@ -47,7 +48,7 @@ class MockCompositorDisplay : public ICompositorDisplay {
   MOCK_METHOD(size_t, GetNumAvailablePlanes, (), (const));
   MOCK_METHOD(std::shared_ptr<BindingOwner<DrmPlane>>, GetCursorPlane, (),
               (const));
-  MOCK_METHOD(bool, TestComposition,
+  MOCK_METHOD(CommitStatus, TestComposition,
               (CompositionPlanner::ValidatedComposition&), (const));
   MOCK_METHOD((const PresentedCompositionCache&), GetLastPresentedComposition,
               (), (const));

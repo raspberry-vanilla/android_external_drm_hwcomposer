@@ -61,7 +61,9 @@ void StatsPoller::PollFunc() {
           }
           stats_reporter_->PushAtom(attributes.display_handle,
                                     attributes.present_failed,
+                                    attributes.present_error_code,
                                     attributes.validation_result,
+                                    attributes.validation_error_code,
                                     attributes.flatten_reason,
                                     delta.total_frames, delta.layer_count,
                                     delta.used_plane_count, delta.total_pixops,

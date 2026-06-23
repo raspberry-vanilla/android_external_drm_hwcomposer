@@ -34,7 +34,9 @@ class CompositionStatsAtomReporter {
 
   // Pushes a Vendor Atom to IStats::reportVendorAtom.
   virtual void PushAtom(int64_t display_handle, bool present_failed,
+                        int32_t present_error_code,
                         ValidationResult validation_result,
+                        int32_t validation_error_code,
                         CompositionPlanner::FlattenReason flatten_reason,
                         int64_t frame_count, int64_t layer_count,
                         int64_t used_plane_count, uint64_t total_pixops,
