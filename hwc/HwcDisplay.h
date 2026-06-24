@@ -352,6 +352,13 @@ class HwcDisplay : public ICompositorDisplay {
   // Enable or disable the display.
   HwcDisplay::Error SetPowerMode(PowerMode mode);
 
+  std::optional<AtomicCommitArgs> CreateModesetCommit(ConfigId config);
+
+  // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
+  // This should be called after a successful commit.
+  void ApplyCommitChanges(const AtomicCommitArgs &a_args,
+                          const AtomicCommitResult &result);
+
   void SetBootAnimationState(BootAnimationState state) {
     boot_animation_state_ = state;
   }
@@ -387,11 +394,6 @@ class HwcDisplay : public ICompositorDisplay {
       const CompositionPlanner::CompositionTypeMap &composition_types) const;
 
   CommitStatus CommitStagedComposition(SharedFd &out_present_fence);
-
-  // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
-  // This should be called after a successful commit.
-  void ApplyCommitChanges(const AtomicCommitArgs &a_args,
-                          const AtomicCommitResult &result);
 
   // Sleep the current thread until |present_time| is closest to the next
   // expected vsync time.

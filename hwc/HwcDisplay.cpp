@@ -1236,6 +1236,19 @@ auto HwcDisplay::StopHdcp() -> bool {
   return true;
 }
 
+std::optional<AtomicCommitArgs> HwcDisplay::CreateModesetCommit(
+    ConfigId configId) {
+  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
+  staged_mode_config_id_ = configId;
+  const auto *config = GetConfig(configId);
+  if (config == nullptr) {
+    ALOGE("Could not find active mode for %u", configId);
+    return std::nullopt;
+  }
+  std::optional<LayerData> modeset_layer_data = GetModesetLayerData(config);
+  return CreateModesetCommit(config, modeset_layer_data);
+}
+
 AtomicCommitArgs HwcDisplay::CreateModesetCommit(
     const HwcDisplayConfig *config,
     const std::optional<LayerData> &modeset_layer) {

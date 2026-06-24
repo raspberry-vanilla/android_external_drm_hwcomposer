@@ -58,6 +58,7 @@
 #include <string>
 #include <vector>
 
+#include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
 
 using AidlPixelFormat = aidl::android::hardware::graphics::common::PixelFormat;
@@ -206,6 +207,15 @@ class ComposerClient : public BnComposerClient {
   hwc3::Error ImportLayerBuffer(
       int64_t display_handle, int64_t layer_id, const Buffer& buffer,
       ::android::drm_hwcomposer::HwcLayer::Buffer* out_buffer);
+
+  struct DesiredConfig {
+    int64_t display_id;
+    int32_t config_id;
+    bool seamless;
+  };
+
+  hwc3::Error SetActiveConfigs(
+      const std::vector<DesiredConfig>& desired_configs);
 
   ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
 
