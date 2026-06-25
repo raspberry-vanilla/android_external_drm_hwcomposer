@@ -25,6 +25,7 @@
 #include "compositor/mapper/LayerMapper.h"
 #include "compositor/mapper/LeftoverLayerMapper.h"
 #include "compositor/mapper/UnderlayMapper.h"
+#include "mapper/LayerMapper.h"
 
 namespace android::drm_hwcomposer {
 
@@ -36,7 +37,8 @@ class HwcLayer;
 // series of LayerMappers.
 class GenericLayerMapperCompositionPlanner : public CompositionPlanner {
  public:
-  GenericLayerMapperCompositionPlanner();
+  explicit GenericLayerMapperCompositionPlanner(
+      LayerMapper::MappingValidator backend_validator = nullptr);
   ~GenericLayerMapperCompositionPlanner() override = default;
 
   ValidationResult ValidateDisplay(const ICompositorDisplay* display) override;
@@ -63,6 +65,7 @@ class GenericLayerMapperCompositionPlanner : public CompositionPlanner {
   LayerCachingMapper layer_caching_mapper_;
   LeftoverLayerMapper leftover_mapper_;
   UnderlayMapper underlay_mapper_;
+  LayerMapper::MappingValidator backend_validator_;
 };
 
 }  // namespace android::drm_hwcomposer

@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <utility>
@@ -153,9 +154,11 @@ CommitStatus CommitFrame(
     }
 
     if (err != 0 && errno == EBUSY && retry >= kMaxBusyRetries) {
-      LOG_ALWAYS_FATAL(
+      ALOGE(
           "Could not recover from kernel EBUSY after %d attempts. Shutting "
-          "down.", retry);
+          "down.",
+          retry);
+      std::exit(EXIT_FAILURE); // NOLINT(concurrency-mt-unsafe)
     }
   }
 

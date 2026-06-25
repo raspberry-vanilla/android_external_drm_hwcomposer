@@ -111,6 +111,7 @@ SKIP_FILES := \
     compositor/FlatteningEventAtomReporterDesktop.cpp \
     compositor/FrameTimeHistoryTest.cpp \
     compositor/GenericLayerMapperCompositionPlannerTest.cpp \
+    compositor/IntelMappingValidatorTest.cpp \
     compositor/ShortCircuitorTest.cpp \
     drm/DrmDisplayPipelineTest.cpp \
     drm/DrmTestUtils.h \

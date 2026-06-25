@@ -165,11 +165,14 @@ CommitStatus TestLayerMappings(
 
 }  // namespace
 
-GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner()
+GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner(
+    LayerMapper::MappingValidator backend_validator)
     : cursor_mapper_(CompositionType::kCursor),
-      device_cursor_mapper_(CompositionType::kDevice) {
+      device_cursor_mapper_(CompositionType::kDevice),
+      backend_validator_(std::move(backend_validator)) {
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 CompositionPlanner::ValidationResult
 GenericLayerMapperCompositionPlanner::ValidateDisplay(
     const ICompositorDisplay* display) {
@@ -209,8 +212,9 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   layers = MapAllClientCompositionRequiredLayers(display, layers);
 
   const LayerMapper::MappingValidator validator =
-      [display](const std::vector<LayerMapping>& layers) {
-        return CountRemainingPlanes(display, layers) >= 0;
+      [display, this](const std::vector<LayerMapping>& layers) {
+        return CountRemainingPlanes(display, layers) >= 0 &&
+               (backend_validator_ ? backend_validator_(layers) : true);
       };
 
   const bool use_cursor_plane = ShouldUseCursorPlane(display, layers);
@@ -276,6 +280,7 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   return {.composition = std::move(*validated_composition),
           .short_circuited = false};
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 CompositionPlanner::ValidatedComposition
 GenericLayerMapperCompositionPlanner::CreateFlattenedComposition(
