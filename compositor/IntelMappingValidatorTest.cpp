@@ -17,7 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "compositor/CompositionType.h"
+#include "compositor/CompositorTestUtils.h"
 #include "compositor/IntelMappingValidator.h"
 #include "compositor/LayerData.h"
 #include "compositor/mapper/LayerMapper.h"
@@ -49,10 +49,9 @@ static void SetLayerProps(HwcLayer& layer, const FRect& src, const IRect& dst,
   HwcLayer::LayerProperties props{
       .display_frame = DstRectInfo{.i_rect = dst},
       .source_crop = SrcRectInfo{.f_rect = src},
+      .transform = LayerTransform{.rotate90 = rotate90},
   };
   layer.SetLayerProperties(props);
-  // Directly inject the rotate property to PresentInfo
-  layer.layer_data_.pi.transform.rotate90 = rotate90;
 }
 
 // This test suite validates the behavior of IntelValidateMapping() function,

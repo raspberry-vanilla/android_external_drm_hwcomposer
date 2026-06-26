@@ -221,6 +221,11 @@ void HwcDisplay::SetHdrHeadroom() {
 }
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
+  if (IsInHeadlessMode() ||
+      !GetPipe().connector->Get()->GetHdrOutputMetadataProperty()) {
+    return;
+  }
+
   switch (hdr_output_type) {
     case OutputType::kHdr10: {
       SetHdrHeadroom();
@@ -930,9 +935,14 @@ auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
     }
   }
 
-  if (modes.empty()) {
-    modes.emplace_back(ColorMode::kNative);
+  if (!GetPipe().connector->Get()->GetColorspaceProperty()) {
+    return {ColorMode::kNative};
   }
+
+  if (modes.empty()) {
+    return {ColorMode::kNative};
+  }
+
   return modes;
 }
 
@@ -944,7 +954,7 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *max_luminance,
                                     float *max_average_luminance,
                                     float *min_luminance) {
-  if (IsInHeadlessMode() && !hwc_->GetResMan().UseColorPipeline()) {
+  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline()) {
     return;
   }
 
