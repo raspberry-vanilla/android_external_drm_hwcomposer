@@ -131,6 +131,118 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 }
 
 TEST(GenericLayerMapperCompositionPlannerTest,
+     DifferentColorspacesForcesClientComposition) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/0,
+                                                     CompositionType::kDevice,
+                                                     /*alpha=*/kOpaque,
+                                                     DRM_FORMAT_NV12);
+  HwcLayer::LayerProperties props1;
+  props1.colorspace = Colorspace::kBt709Ycc;
+  layer1.SetLayerProperties(props1);
+
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/1,
+                                                     CompositionType::kDevice,
+                                                     /*alpha=*/kOpaque);
+  // Assign a different colorspace to layer2. When per-plane color pipelines
+  // are unsupported (UseColorPipeline == false), mixed colorspaces across
+  // layers force the planner to flatten the scene to client composition.
+  HwcLayer::LayerProperties props2;
+  props2.colorspace = Colorspace::kBt2020Rgb;
+  layer2.SetLayerProperties(props2);
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &layer2}));
+
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, UseColorPipeline()).WillRepeatedly(Return(false));
+
+  auto result = planner.ValidateDisplay(&mock_display);
+
+  EXPECT_EQ(result.composition.composition_types,
+            (CompositionPlanner::CompositionTypeMap{
+                {&layer1, CompositionType::kClient},
+                {&layer2, CompositionType::kClient}}));
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNoPerPlaneColorspaceSupport);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest,
+     DifferentColorspacesSupportedWithColorPipeline) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/0,
+                                                     CompositionType::kDevice,
+                                                     /*alpha=*/kOpaque,
+                                                     DRM_FORMAT_NV12);
+  HwcLayer::LayerProperties props1;
+  props1.colorspace = Colorspace::kBt709Ycc;
+  layer1.SetLayerProperties(props1);
+
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/1,
+                                                     CompositionType::kDevice,
+                                                     /*alpha=*/kOpaque);
+  HwcLayer::LayerProperties props2;
+  props2.colorspace = Colorspace::kBt2020Rgb;
+  layer2.SetLayerProperties(props2);
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &layer2}));
+
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, UseColorPipeline()).WillRepeatedly(Return(true));
+
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
+
+  auto result = planner.ValidateDisplay(&mock_display);
+
+  EXPECT_EQ(result.composition.composition_types,
+            (CompositionPlanner::CompositionTypeMap{
+                {&layer1, CompositionType::kDevice},
+                {&layer2, CompositionType::kDevice}}));
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNone);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest,
      CtmByGpuForcesClientComposition) {
   GenericLayerMapperCompositionPlanner planner;
 

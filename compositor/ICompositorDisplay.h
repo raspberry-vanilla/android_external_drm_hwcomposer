@@ -59,6 +59,7 @@ class ICompositorDisplay {
 
   virtual bool CtmByGpu() const = 0;
   virtual bool ForcedScalingWithGpu() const = 0;
+  virtual bool UseColorPipeline() const = 0;
 
   // Returns the currently configured display resolution as {width, height}.
   virtual std::pair<uint32_t, uint32_t> GetSize() const = 0;

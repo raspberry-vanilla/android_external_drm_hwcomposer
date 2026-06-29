@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 namespace android::drm_hwcomposer {
@@ -29,6 +31,8 @@ class ICompositorDisplay;
 struct DstRectInfo;
 struct LayerToPlaneJoiningPlan;
 struct SrcRectInfo;
+
+struct LayerMapping;
 
 // CompositionPlanner is responsible for determining the mapping between
 // HwcLayer and drm planes. This includes deciding which HwcLayers should be
@@ -45,6 +49,7 @@ class CompositionPlanner {
     kStaticScene,
     kValidateFailed,
     kCtmWithOffset,
+    kNoPerPlaneColorspaceSupport,
   };
   struct ValidatedComposition {
     // The resulting composition type for each layer.
@@ -96,6 +101,28 @@ class CompositionPlanner {
   // composition.
   static ValidatedComposition GetFlattenedComposition(
       const std::vector<const HwcLayer*>& layers, FlattenReason flatten_reason);
+
+  // Returns whether any two layers in |layers| have different colorspaces.
+  template <typename Container>
+  static bool LayersUseDifferentColorspaces(const Container& layers) {
+    if (layers.empty()) {
+      return false;
+    }
+
+    auto get_colorspace = [](const auto& item) {
+      if constexpr (std::is_pointer_v<std::decay_t<decltype(item)>>) {
+        return item->GetLayerData().colorspace;
+      } else {
+        return item.layer->GetLayerData().colorspace;
+      }
+    };
+
+    const auto colorspace = get_colorspace(layers.front());
+    return std::any_of(layers.begin() + 1, layers.end(),
+                       [&](const auto& item) {
+                         return get_colorspace(item) != colorspace;
+                       });
+  }
 };
 
 }  // namespace android::drm_hwcomposer

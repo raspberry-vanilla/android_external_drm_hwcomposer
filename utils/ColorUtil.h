@@ -130,7 +130,8 @@ class ColorUtil {
   }
 
   // If required, adjust color transform matrix to handle gamut mapping
-  static std::shared_ptr<drm_color_ctm_3x4> GamutAdjustIfNeeded(
+  template <typename T>
+  static std::shared_ptr<T> GamutAdjustIfNeeded(
       Colorspace src_colorspace, Colorspace dest_colorspace,
       const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
       CscCache &color_transform_cache);

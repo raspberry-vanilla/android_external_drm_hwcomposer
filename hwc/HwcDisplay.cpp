@@ -494,8 +494,7 @@ auto HwcDisplay::PresentStagedComposition(
     if (validated_composition_->flatten_reason ==
         FlattenReason::kValidateFailed) {
       ++stats.failed_kms_validate;
-    } else if (validated_composition_->flatten_reason ==
-               FlattenReason::kStaticScene) {
+    } else if (validated_composition_->flatten_reason != FlattenReason::kNone) {
       ++stats.frames_flattened;
     }
     if (validated_composition_->cursor_plane_validated.has_value()) {
@@ -908,10 +907,6 @@ auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
       ALOGI("Using backend ColorMode overrides");
       return color_mode_overrides.value();
     }
-  }
-
-  if (!hwc_->GetResMan().UseColorPipeline()) {
-    return {ColorMode::kNative};
   }
 
   std::vector<ColorMode> modes;
@@ -1442,6 +1437,10 @@ bool HwcDisplay::ForcedScalingWithGpu() const {
   return hwc_->GetResMan().ForcedScalingWithGpu();
 }
 
+bool HwcDisplay::UseColorPipeline() const {
+  return hwc_->GetResMan().UseColorPipeline();
+}
+
 bool HwcDisplay::IsWritebackSupported() {
   if (IsInHeadlessMode()) {
     return false;
@@ -1804,10 +1803,9 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
 
   const Colorspace cursor_colorspace = cursor_layer.GetLayerData().colorspace;
   CscCache cursor_color_map;
-  std::shared_ptr<drm_color_ctm_3x4>
-      cursor_matrix = ColorUtil::GamutAdjustIfNeeded(cursor_colorspace,
-                                                     colorspace_, color_matrix_,
-                                                     cursor_color_map);
+  auto cursor_matrix = ColorUtil::GamutAdjustIfNeeded<
+      drm_color_ctm_3x4>(cursor_colorspace, colorspace_, color_matrix_,
+                         cursor_color_map);
 
   if (!cursor_matrix) {
     return false;

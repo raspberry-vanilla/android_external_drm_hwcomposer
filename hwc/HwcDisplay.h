@@ -275,6 +275,8 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool ForcedScalingWithGpu() const override;
 
+  bool UseColorPipeline() const override;
+
   const std::map<CompositionAttributes, CompositionStats> &comp_stats() const {
     return comp_stats_;
   }

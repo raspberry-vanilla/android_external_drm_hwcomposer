@@ -75,6 +75,9 @@ DesktopAtoms::HwcCompositionStats::FlattenReason FlattenReasonToAtomType(
     case FlattenReason::kCtmWithOffset:
       return DesktopAtoms::HwcCompositionStats::FlattenReason::
           FLATTEN_REASON_CTM_WITH_OFFSET;
+    case FlattenReason::kNoPerPlaneColorspaceSupport:
+      return DesktopAtoms::HwcCompositionStats::FlattenReason::
+          FLATTEN_REASON_NO_PER_PLANE_COLORSPACE_SUPPORT;
   }
   LOG_ALWAYS_FATAL("Unknown FlattenReason value=%d", static_cast<int>(reason));
 }
@@ -103,6 +106,8 @@ std::string FlattenReasonToString(FlattenReason reason) {
       return "ValidateFailed";
     case FlattenReason::kCtmWithOffset:
       return "CtmWithOffset";
+    case FlattenReason::kNoPerPlaneColorspaceSupport:
+      return "NoPerPlaneColorspaceSupport";
   }
   LOG_ALWAYS_FATAL("Unknown FlattenReason value=%d", static_cast<int>(reason));
   return "Unknown";

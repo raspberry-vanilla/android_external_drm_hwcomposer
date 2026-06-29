@@ -29,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
@@ -72,6 +73,19 @@ std::shared_ptr<T> ToColorTransform(
     for (int j = 0; j < rows; j++) {
       color_matrix->matrix[(i * rows) + j] = To3132FixPt(
           (*color_transform_matrix)[(j * kHalRows) + i]);
+    }
+  }
+  return color_matrix;
+}
+
+std::shared_ptr<drm_color_ctm> ToColorTransform3x3(
+    const android::mat3d &color_transform_matrix) {
+  auto color_matrix = std::make_shared<drm_color_ctm>();
+  constexpr int kDim = 3;
+  for (int i = 0; i < kDim; i++) {
+    for (int j = 0; j < kDim; j++) {
+      color_matrix->matrix[(i * kDim) + j] = To3132FixPt(
+          color_transform_matrix[j][i]);
     }
   }
   return color_matrix;
@@ -293,12 +307,17 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
   return color_matrix;
 }
 
-std::shared_ptr<drm_color_ctm_3x4> ColorUtil::GamutAdjustIfNeeded(
+template <typename T>
+std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     Colorspace src_colorspace, Colorspace dest_colorspace,
     const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
     CscCache &color_transform_cache) {
   if (src_colorspace == dest_colorspace) {
-    return ColorUtil::ToColorTransform3x4(color_transform_matrix);
+    if constexpr (std::is_same_v<T, drm_color_ctm>) {
+      return ColorUtil::ToColorTransform3x3(color_transform_matrix);
+    } else if constexpr (std::is_same_v<T, drm_color_ctm_3x4>) {
+      return ColorUtil::ToColorTransform3x4(color_transform_matrix);
+    }
   }
 
   const HalColorTransforMatrix &ctm_in = color_transform_matrix
@@ -325,20 +344,33 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::GamutAdjustIfNeeded(
   }
   ctm3 = color_transform_cache.at(cache_key) * ctm3;
 
-  // Insert the new 3x3 matrix back into the 4x4 CTM
-  // NOLINTBEGIN(readability-magic-numbers)
-  // clang-format off
-  mat4d ctm4 = mat4d(
-    ctm3[0][0], ctm3[0][1], ctm3[0][2], ctm_in[3],
-    ctm3[1][0], ctm3[1][1], ctm3[1][2], ctm_in[7],
-    ctm3[2][0], ctm3[2][1], ctm3[2][2], ctm_in[11],
-    ctm_in[12], ctm_in[13], ctm_in[14], ctm_in[15]
-  );
-  // clang-format on
-  // NOLINTEND(readability-magic-numbers)
+  if constexpr (std::is_same_v<T, drm_color_ctm>) {
+    return android::drm_hwcomposer::ToColorTransform3x3(ctm3);
+  } else if constexpr (std::is_same_v<T, drm_color_ctm_3x4>) {
+    // Insert the new 3x3 matrix back into the 4x4 CTM
+    // NOLINTBEGIN(readability-magic-numbers)
+    // clang-format off
+    mat4d ctm4 = mat4d(
+      ctm3[0][0], ctm3[0][1], ctm3[0][2], ctm_in[3],
+      ctm3[1][0], ctm3[1][1], ctm3[1][2], ctm_in[7],
+      ctm3[2][0], ctm3[2][1], ctm3[2][2], ctm_in[11],
+      ctm_in[12], ctm_in[13], ctm_in[14], ctm_in[15]
+    );
+    // clang-format on
+    // NOLINTEND(readability-magic-numbers)
 
-  return ToColorTransform3x4(ctm4);
+    return ToColorTransform3x4(ctm4);
+  }
 }
+
+// Tell the compiler explicitly to build these versions
+template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<
+    drm_color_ctm>(Colorspace, Colorspace,
+                   const std::shared_ptr<HalColorTransforMatrix> &, CscCache &);
+template std::shared_ptr<drm_color_ctm_3x4>
+ColorUtil::GamutAdjustIfNeeded<drm_color_ctm_3x4>(
+    Colorspace, Colorspace, const std::shared_ptr<HalColorTransforMatrix> &,
+    CscCache &);
 
 std::tuple<const Lut1D &, const Lut1D &> ColorUtil::Get1DLutsIfNeeded(
     TransferFunction src_tf, TransferFunction dest_tf,

@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "compositor/CompositionPlanner.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/LayerData.h"
 #include "drm/CommitStatus.h"
@@ -62,6 +63,13 @@ auto GenericCompositionPlanner::ValidateDisplay(
   if (display->CtmByGpu()) {
     return {.composition = GetFlattenedComposition(layers, FlattenReason::
                                                                kCtmWithOffset),
+            .short_circuited = false};
+  }
+
+  if (CompositionPlanner::LayersUseDifferentColorspaces(layers) &&
+      !display->UseColorPipeline()) {
+    return {.composition = GetFlattenedComposition(
+                layers, FlattenReason::kNoPerPlaneColorspaceSupport),
             .short_circuited = false};
   }
 

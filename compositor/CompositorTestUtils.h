@@ -54,6 +54,7 @@ class MockCompositorDisplay : public ICompositorDisplay {
               (), (const));
   MOCK_METHOD(bool, CtmByGpu, (), (const));
   MOCK_METHOD(bool, ForcedScalingWithGpu, (), (const));
+  MOCK_METHOD(bool, UseColorPipeline, (), (const));
   MOCK_METHOD((std::pair<uint32_t, uint32_t>), GetSize, (), (const));
   MOCK_METHOD(const HwcLayer&, GetClientLayer, (), (const));
   MOCK_METHOD((std::shared_ptr<const HalColorTransforMatrix>),

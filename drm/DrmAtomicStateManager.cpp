@@ -225,9 +225,28 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
   if (drm->GetResMan().UseColorPipeline()) {
     return crtc->GetCtmProperty().AtomicSet(*request.property_set, 0);
   }
-  auto drm_color_matrix = ColorUtil::ToColorTransform3x3(args.color_matrix);
-  auto ctm_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
-                                                sizeof(drm_color_ctm));
+
+  Colorspace colorspace = Colorspace::kDefault;
+  if (!args.composition || args.composition->plan.empty()) {
+    ALOGW(
+        "Composition plan is empty; using default colorspace as src for gamut "
+        "adjustment.");
+  } else {
+    // At this point, all planes should have the same colorspace, or the
+    // composition plan was flattened. It's therefore safe to use the first
+    // layer's colorspace for the entire CRTC.
+    colorspace = args.composition->plan.front().layer.colorspace;
+  }
+  auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
+      drm_color_ctm>(colorspace, args.colorspace.value_or(Colorspace::kDefault),
+                     args.color_matrix, color_transform_map_);
+
+  DrmModeUserPropertyBlobUnique ctm_blob;
+  if (drm_color_matrix) {
+    ctm_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
+                                             sizeof(drm_color_ctm));
+  }
+
   if (!ctm_blob) {
     ALOGE("Failed to create CTM blob");
     return false;
@@ -377,10 +396,10 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
 
     auto *drm = pipe_->device;
     if (drm->GetResMan().UseColorPipeline() && plane->HasColorPipeline()) {
-      std::shared_ptr<drm_color_ctm_3x4> drm_color_matrix = ColorUtil::
-          GamutAdjustIfNeeded(layer.colorspace,
-                              args.colorspace.value_or(Colorspace::kDefault),
-                              args.color_matrix, color_transform_map_);
+      auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
+          drm_color_ctm_3x4>(layer.colorspace,
+                             args.colorspace.value_or(Colorspace::kDefault),
+                             args.color_matrix, color_transform_map_);
       DrmModeUserPropertyBlobUnique ctm_3x4_blob;
       if (drm_color_matrix) {
         ctm_3x4_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
