@@ -275,7 +275,9 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool ForcedScalingWithGpu() const override;
 
-  bool UseColorPipeline() const override;
+  bool UseColorPipeline() const override {
+    return use_color_pipeline_;
+  };
 
   const std::map<CompositionAttributes, CompositionStats> &comp_stats() const {
     return comp_stats_;
@@ -434,6 +436,10 @@ class HwcDisplay : public ICompositorDisplay {
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
   float brightness_ = kBrightnessUnset;
   float hdr_headroom_{};
+
+  bool has_wcg_support_ = false;
+  bool has_hdr_support_ = false;
+  bool use_color_pipeline_ = false;
 
   // Most recent result of ValidateStagedComposition. Must be kept alive until
   // the composition is committed.

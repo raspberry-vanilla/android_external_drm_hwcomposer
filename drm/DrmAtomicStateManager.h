@@ -165,6 +165,10 @@ class DrmAtomicStateManager : public AtomicStateManager {
   // Cached 1D LUTs
   Lut1DCache degamma_lut_1d_map_;
   Lut1DCache gamma_lut_1d_map_;
+
+  // Cached color pipeline property
+  // TODO: Remove after investigating resource manager initialization bug.
+  bool use_color_pipeline_{};
 };
 
 }  // namespace android::drm_hwcomposer

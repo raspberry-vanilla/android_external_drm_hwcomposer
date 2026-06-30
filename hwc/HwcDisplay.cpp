@@ -62,6 +62,7 @@
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmHwc.h"
+#include "drm/DrmPlane.h"
 #include "drm/VSyncWorker.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
@@ -221,8 +222,11 @@ void HwcDisplay::SetHdrHeadroom() {
 }
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
-  if (IsInHeadlessMode() ||
-      !GetPipe().connector->Get()->GetHdrOutputMetadataProperty()) {
+  if (!has_hdr_support_) {
+    hdr_headroom_ = {};
+    hdr_metadata_ = std::make_shared<hdr_output_metadata>();
+    min_bpc_ = 6;
+    transfer_func_ = TransferFunction::kUnknown;
     return;
   }
 
@@ -241,7 +245,9 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         auto type = hdr_types.front();
         switch (type) {
           case ui::Hdr::HDR10:
-            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
+            // TODO: Remove once black crush issue is resolved in kernel API
+            SetHdrOutputMetadata(ColorGamut::BT2020(),
+                                 TransferFunction::kSmpte170M);
             break;
           case ui::Hdr::HLG:
             SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kHlg);
@@ -289,8 +295,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
 
   ALOGV("Create modeset commit.");
-  if (hwc_->GetResMan().UseColorPipeline())
-    SetOutputType(new_config->output_type);
+  SetOutputType(new_config->output_type);
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
   // separate test commit, since the commit does a test anyways.
@@ -340,8 +345,7 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
   staged_mode_change_time_ = out_timing->refresh_time_ns;
   staged_mode_config_id_ = config;
 
-  if (current_config && !IsInHeadlessMode() &&
-      hwc_->GetResMan().UseColorPipeline()) {
+  if (current_config) {
     SetOutputType(current_config->output_type);
   }
 
@@ -852,6 +856,33 @@ bool HwcDisplay::Init() {
     return false;
   }
 
+  // Determine WCG and HDR support
+  if (IsInHeadlessMode()) {
+    use_color_pipeline_ = has_wcg_support_ = has_hdr_support_ = false;
+  } else {
+    use_color_pipeline_ = hwc_->GetResMan().UseColorPipeline() &&
+                          GetPipe().primary_plane &&
+                          GetPipe().primary_plane->Get() &&
+                          GetPipe().primary_plane->Get()->HasColorPipeline();
+    std::vector<ColorMode> color_modes;
+    GetEdid()->GetColorModes(color_modes);
+    has_wcg_support_ = (use_color_pipeline_ ||
+                        (GetPipe().crtc && GetPipe().crtc->Get() &&
+                         GetPipe().crtc->Get()->GetCtmProperty())) &&
+                       !color_modes.empty();
+    std::vector<ui::Hdr> hdr_types;
+    GetEdid()->GetSupportedHdrTypes(hdr_types);
+    has_hdr_support_ = use_color_pipeline_ && has_wcg_support_ &&
+                       GetPipe().connector && GetPipe().connector->Get() &&
+                       (GetPipe().connector->Get()->IsExternal() ||
+                        hwc_->GetResMan().PersistentHdrEnabled()) &&
+                       GetPipe()
+                           .connector->Get()
+                           ->GetHdrOutputMetadataProperty() &&
+                       GetPipe().connector->Get()->GetColorspaceProperty() &&
+                       !hdr_types.empty();
+  }
+
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
     return false;
@@ -860,6 +891,7 @@ bool HwcDisplay::Init() {
   if (!IsInHeadlessMode() && GetPipe().connector->Get()->IsInternal()) {
     SetConfigGroupsForActiveConfig();
   }
+
   return true;
 }
 
@@ -949,12 +981,7 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *max_luminance,
                                     float *max_average_luminance,
                                     float *min_luminance) {
-  if (IsInHeadlessMode() || !hwc_->GetResMan().UseColorPipeline()) {
-    return;
-  }
-
-  if (GetPipe().connector->Get()->IsInternal() &&
-      !hwc_->GetResMan().PersistentHdrEnabled()) {
+  if (IsInHeadlessMode() || !has_hdr_support_) {
     return;
   }
 
@@ -1237,7 +1264,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   }
 
   // CTM with offset cannot be processed by CTM prop
-  if (ctm_has_offset_ && !hwc_->GetResMan().UseColorPipeline()) {
+  if (ctm_has_offset_ && !UseColorPipeline()) {
     a_args.color_matrix = identity_color_matrix_;
   }
 
@@ -1421,7 +1448,7 @@ bool HwcDisplay::CtmByGpu() const {
   if (color_transform_is_identity_)
     return false;
 
-  if (hwc_->GetResMan().UseColorPipeline())
+  if (UseColorPipeline())
     return false;
 
   if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
@@ -1435,10 +1462,6 @@ bool HwcDisplay::CtmByGpu() const {
 
 bool HwcDisplay::ForcedScalingWithGpu() const {
   return hwc_->GetResMan().ForcedScalingWithGpu();
-}
-
-bool HwcDisplay::UseColorPipeline() const {
-  return hwc_->GetResMan().UseColorPipeline();
 }
 
 bool HwcDisplay::IsWritebackSupported() {
@@ -1797,7 +1820,7 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
     return false;
   }
 
-  if (!hwc_->GetResMan().UseColorPipeline()) {
+  if (!UseColorPipeline()) {
     return false;
   }
 

@@ -45,10 +45,10 @@
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmUnique.h"
-#include "drm/ResourceManager.h"
 #include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 
@@ -59,6 +59,7 @@ auto DrmAtomicStateManager::CreateInstance(DrmDisplayPipeline *pipe)
 
   dasm->pipe_ = pipe;
   dasm->thread_ = std::thread(&DrmAtomicStateManager::ThreadFn, dasm.get());
+  dasm->use_color_pipeline_ = Properties::UseColorPipeline();
 
   return dasm;
 }
@@ -217,13 +218,17 @@ bool DrmAtomicStateManager::SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
                                            DrmAtomicRequest &request) {
   auto *crtc = pipe_->crtc->Get();
-  if (!args.color_matrix || !crtc->GetCtmProperty()) {
+  if (!crtc->GetCtmProperty()) {
     return true;
   }
 
   auto *drm = pipe_->device;
-  if (drm->GetResMan().UseColorPipeline()) {
+  if (use_color_pipeline_) {
     return crtc->GetCtmProperty().AtomicSet(*request.property_set, 0);
+  }
+
+  if (!args.color_matrix || !args.colorspace) {
+    return true;
   }
 
   Colorspace colorspace = Colorspace::kDefault;
@@ -395,7 +400,7 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
     request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
 
     auto *drm = pipe_->device;
-    if (drm->GetResMan().UseColorPipeline() && plane->HasColorPipeline()) {
+    if (use_color_pipeline_ && plane->HasColorPipeline()) {
       auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
           drm_color_ctm_3x4>(layer.colorspace,
                              args.colorspace.value_or(Colorspace::kDefault),

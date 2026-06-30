@@ -39,8 +39,8 @@
 #include "drm/DrmDevice.h"
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmUnique.h"
-#include "drm/ResourceManager.h"
 #include "utils/log.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 
@@ -192,7 +192,7 @@ int DrmPlane::Init() {
 
   GetPlaneProperty("IN_FENCE_FD", in_fence_fd_property_, Presence::kOptional);
 
-  if (!drm_->GetResMan().UseColorPipeline() && HasNonRgbFormat()) {
+  if (HasNonRgbFormat()) {
     if (GetPlaneProperty("COLOR_ENCODING", color_encoding_property_,
                          Presence::kOptional)) {
       color_encoding_property_.AddEnumToMap("ITU-R BT.709 YCbCr",
@@ -217,7 +217,7 @@ int DrmPlane::Init() {
     }
   }
 
-  if (drm_->GetResMan().UseColorPipeline() && type_ != DRM_PLANE_TYPE_CURSOR) {
+  if (Properties::UseColorPipeline() && type_ != DRM_PLANE_TYPE_CURSOR) {
     // Reject planes without color pipeline API
     if (!GetPlaneProperty("COLOR_PIPELINE", color_pipeline_property_,
                           Presence::kOptional)) {
@@ -476,19 +476,17 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
     return -EINVAL;
   }
 
-  if (!drm_->GetResMan().UseColorPipeline()) {
-    if (color_encoding_enum_map_.count(layer.bi->color_encoding) != 0 &&
-        !color_encoding_property_.AtomicSet(pset,
-                                            color_encoding_enum_map_.at(
-                                                layer.bi->color_encoding))) {
-      return -EINVAL;
-    }
+  if (color_encoding_enum_map_.count(layer.bi->color_encoding) != 0 &&
+      !color_encoding_property_.AtomicSet(pset,
+                                          color_encoding_enum_map_.at(
+                                              layer.bi->color_encoding))) {
+    return -EINVAL;
+  }
 
-    if (color_range_enum_map_.count(layer.bi->sample_range) != 0 &&
-        !color_range_property_.AtomicSet(pset, color_range_enum_map_.at(
-                                                   layer.bi->sample_range))) {
-      return -EINVAL;
-    }
+  if (color_range_enum_map_.count(layer.bi->sample_range) != 0 &&
+      !color_range_property_.AtomicSet(pset, color_range_enum_map_.at(
+                                                 layer.bi->sample_range))) {
+    return -EINVAL;
   }
 
   if (fb_damage_clips_property_) {
@@ -544,10 +542,6 @@ auto DrmPlane::AtomicSetColorPipeline(
     drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
     DrmModeUserPropertyBlobUnique &degamma_lut_blob,
     DrmModeUserPropertyBlobUnique &gamma_lut_blob) const -> int {
-  if (!drm_->GetResMan().UseColorPipeline()) {
-    return 0;
-  }
-
   // Clear incompatible properties
   if (color_encoding_property_ &&
       !color_encoding_property_.AtomicSet(pset, 0)) {
