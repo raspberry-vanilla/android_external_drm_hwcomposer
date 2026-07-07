@@ -839,6 +839,34 @@ hwc3::Error ComposerClient::SetActiveConfigs(
 
   HwcDisplay* first_display = nullptr;
 
+  // Queue a config change to the next present if possible for one display.
+  // In a future world seamless modeset will come alongside the composition, but
+  // for now to avoid janking and "stealing" the non-blocking commit, if we can
+  // do a seamless modeset we only queue it.
+  if (desired_configs.size() == 1) {
+    first_display = GetDisplay(desired_configs[0].display_id);
+    if (first_display == nullptr) {
+      return hwc3::Error::kBadDisplay;
+    }
+
+    ::android::drm_hwcomposer::QueuedConfigTiming unused_timing{};
+    HwcDisplay::ConfigError
+        error = first_display
+                    ->QueueConfig(desired_configs[0].config_id,
+                                  ::android::drm_hwcomposer::ResourceManager::
+                                      GetTimeMonotonicNs(),
+                                  &unused_timing);
+
+    if (error == HwcDisplay::ConfigError::kNone) {
+      return hwc3::Error::kNone;
+    }
+    // Fall back to non-QueueConfig path if seamless wasn't allowed.
+    if (error != HwcDisplay::ConfigError::kSeamlessNotAllowed) {
+      // The only other failure possible for queue config is bad config.
+      return hwc3::Error::kBadConfig;
+    }
+  }
+
   for (const auto& desired_config : desired_configs) {
     int64_t display_id = desired_config.display_id;
     int32_t config = desired_config.config_id;
