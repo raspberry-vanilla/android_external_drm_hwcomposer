@@ -265,6 +265,47 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
   return true;
 }
 
+bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
+                                             DrmAtomicRequest &request) {
+  auto *crtc = pipe_->crtc->Get();
+  auto lut_size = crtc->GetGammaLutSizeProperty().GetValue();
+  if (!crtc->GetGammaLutProperty() || !lut_size.has_value()) {
+    ALOGV("Missing optional GAMMA_LUT property");
+    return true;
+  }
+
+  if (!args.transfer_func) {
+    return true;
+  }
+
+  constexpr float kDefaultSignal = 1.F;
+  const auto &gamma_lut = ColorUtil::GetGammaLut(args.transfer_func.value(),
+                                                 lut_size.value(),
+                                                 gamma_lut_1d_map_,
+                                                 args.brightness.value_or(
+                                                     kDefaultSignal),
+                                                 args.hdr_headroom.value_or(
+                                                     kDefaultSignal));
+
+  auto *drm = pipe_->device;
+  DrmModeUserPropertyBlobUnique gamma_lut_blob;
+
+  if (!gamma_lut.empty()) {
+    gamma_lut_blob = drm->RegisterUserPropertyBlob(gamma_lut.data(),
+                                                   sizeof(drm_color_lut) *
+                                                       lut_size.value());
+  }
+  if (gamma_lut_blob) {
+    if (!crtc->GetGammaLutProperty().AtomicSet(*request.property_set,
+                                               *gamma_lut_blob)) {
+      return false;
+    }
+    request.used_kms_objects.blobs.emplace_back(std::move(gamma_lut_blob));
+  }
+
+  return true;
+}
+
 bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
                                                   DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
@@ -412,16 +453,12 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
       }
 
       constexpr float kDefaultSignal = 1.F;
-      const auto &[degamma_lut, gamma_lut] = ColorUtil::
-          Get1DLutsIfNeeded(layer.transfer_func,
-                            args.transfer_func.value_or(
-                                TransferFunction::kUnknown),
-                            plane->GetDegamma1DLutSize(),
-                            plane->GetGamma1DLutSize(), degamma_lut_1d_map_,
-                            gamma_lut_1d_map_,
-                            layer.brightness.value_or(kDefaultSignal),
-                            args.brightness.value_or(kDefaultSignal),
-                            args.hdr_headroom.value_or(kDefaultSignal));
+      const auto
+          &degamma_lut = ColorUtil::GetDegammaLut(layer.transfer_func,
+                                                  plane->GetDegamma1DLutSize(),
+                                                  degamma_lut_1d_map_,
+                                                  layer.brightness.value_or(
+                                                      kDefaultSignal));
       DrmModeUserPropertyBlobUnique degamma_lut_blob;
       DrmModeUserPropertyBlobUnique gamma_lut_blob;
       if (!degamma_lut.empty()) {
@@ -429,18 +466,12 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
             degamma_lut.data(),
             sizeof(drm_color_lut32) * plane->GetDegamma1DLutSize());
       }
-      if (!gamma_lut.empty()) {
-        gamma_lut_blob = drm->RegisterUserPropertyBlob(
-            gamma_lut.data(),
-            sizeof(drm_color_lut32) * plane->GetGamma1DLutSize());
-      }
       if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob,
                                         degamma_lut_blob,
                                         gamma_lut_blob) != 0) {
         return false;
       }
       request.used_kms_objects.blobs.emplace_back(std::move(ctm_3x4_blob));
-      request.used_kms_objects.blobs.emplace_back(std::move(gamma_lut_blob));
       request.used_kms_objects.blobs.emplace_back(std::move(degamma_lut_blob));
     }
   }
@@ -514,6 +545,11 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
 
   if (!SetCtmIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set CTM blob");
+    return nullptr;
+  }
+
+  if (!SetGammaIfNeeded(args, *atomic_request)) {
+    ALOGE("Failed to set CRTC gamma lut");
     return nullptr;
   }
 

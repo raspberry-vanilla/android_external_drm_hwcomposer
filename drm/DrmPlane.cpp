@@ -132,7 +132,6 @@ auto DrmPlane::CreateInstance(DrmDevice &dev, uint32_t plane_id)
   return plane;
 }
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 int DrmPlane::Init() {
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   formats_ = {plane_->formats, plane_->formats + plane_->count_formats};
@@ -279,7 +278,6 @@ int DrmPlane::Init() {
 
   return 0;
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 bool DrmPlane::IsCrtcSupported(const DrmCrtc &crtc) const {
   auto crtc_prop_optval = crtc_property_.GetValue();
@@ -375,7 +373,6 @@ static int To1616FixPt(float in) {
   return int(in * (1 << kBitShift));
 }
 
-// NOLINTNEXTLINE (readability-function-cognitive-complexity)
 auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
                               uint32_t zpos, uint32_t crtc_id,
                               DstRectInfo &whole_display_rect,
@@ -537,7 +534,6 @@ auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
   return 0;
 }
 
-// NOLINTNEXTLINE (readability-function-cognitive-complexity)
 auto DrmPlane::AtomicSetColorPipeline(
     drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
     DrmModeUserPropertyBlobUnique &degamma_lut_blob,

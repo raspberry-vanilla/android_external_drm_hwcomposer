@@ -71,8 +71,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool SupportsEncoder(DrmEncoder &enc) const;
 
-  bool IsInternal() const;
-  bool IsExternal() const;
+  virtual bool IsInternal() const;
+  virtual bool IsExternal() const;
   bool IsWriteback() const;
   bool IsValid() const;
 
@@ -158,13 +158,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->connection == DRM_MODE_CONNECTED;
   }
 
-  auto GetMmWidth() const {
-    return connector_->mmWidth;
-  }
-
-  auto GetMmHeight() const {
-    return connector_->mmHeight;
-  };
+  virtual uint32_t GetMmWidth() const;
+  virtual uint32_t GetMmHeight() const;
 
   auto GetPanelOrientation() -> std::optional<PanelOrientation>;
 

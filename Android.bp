@@ -330,6 +330,8 @@ cc_test_host {
         "drm/DrmProperty.cpp",
         "hwc/HwcBufferCache.cpp",
         "hwc/HwcBufferCacheTest.cpp",
+        "hwc/HwcDisplayConfigs.cpp",
+        "hwc/HwcDisplayConfigsGeneratorTest.cpp",
         "hwc/HwcLayer.cpp",
         "stats/Stats.cpp",
         "stats/StatsTest.cpp",

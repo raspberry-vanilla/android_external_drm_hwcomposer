@@ -142,7 +142,6 @@ void HdcpController::Terminate() {
   cv_.notify_all();
 }
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 void HdcpController::ThreadFn() {
   for (;;) {
     bool fire_callback = false;
@@ -198,6 +197,5 @@ void HdcpController::ThreadFn() {
     }
   }
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 }  // namespace android::drm_hwcomposer

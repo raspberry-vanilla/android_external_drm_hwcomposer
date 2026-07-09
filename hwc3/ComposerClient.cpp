@@ -750,7 +750,6 @@ void ComposerClient::DispatchLayerCommand(int64_t display_handle,
   // TODO: Layer color.
 }
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
   ATRACE_CALL();
 
@@ -867,7 +866,6 @@ void ComposerClient::ExecuteDisplayCommand(const DisplayCommand& command) {
     cmd_result_writer_->AddReleaseFence(display_handle, hal_release_fences);
   }
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 ndk::ScopedAStatus ComposerClient::executeCommands(
     const std::vector<DisplayCommand>& commands,

@@ -86,7 +86,6 @@ DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
   drm_fb_importer_ = std::make_unique<DrmFbCachedImporter>(*this);
 }
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 auto DrmDevice::Init(const char *path) -> int {
   /* TODO: Use drmOpenControl here instead */
   // NOLINTNEXTLINE(misc-include-cleaner)
@@ -209,7 +208,6 @@ auto DrmDevice::Init(const char *path) -> int {
 
   return 0;
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 auto DrmDevice::IsConnectorAllowed(DrmConnector &conn) const -> bool {
   return !conn.IsExternal() || external_displays_enabled_;

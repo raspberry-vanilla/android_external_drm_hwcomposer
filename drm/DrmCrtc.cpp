@@ -69,6 +69,28 @@ auto DrmCrtc::CreateInstance(DrmDevice &dev, uint32_t crtc_id, uint32_t index)
     ALOGV("Missing optional CTM property");
   }
 
+  ret = GetCrtcProperty(dev, *c, "DEGAMMA_LUT", &c->degamma_lut_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional DEGAMMA_LUT property");
+  }
+
+  ret = GetCrtcProperty(dev, *c, "DEGAMMA_LUT_SIZE",
+                        &c->degamma_lut_size_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional DEGAMMA_LUT_SIZE property");
+  }
+
+  ret = GetCrtcProperty(dev, *c, "GAMMA_LUT", &c->gamma_lut_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional GAMMA_LUT property");
+  }
+
+  ret = GetCrtcProperty(dev, *c, "GAMMA_LUT_SIZE",
+                        &c->gamma_lut_size_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional GAMMA_LUT_SIZE property");
+  }
+
   return c;
 }
 

@@ -22,8 +22,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <optional>
+#include <unordered_set>
 #include <vector>
 
+#include "backend/BackendDisplayCapabilities.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmMode.h"
 #include "utils/log.h"
@@ -36,7 +39,8 @@ constexpr uint32_t kHzInKHz = 1000;
 
 namespace android::drm_hwcomposer {
 
-void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
+HwcDisplayConfigs HwcDisplayConfigsGenerator::GetFakeMode(uint16_t width,
+                                                          uint16_t height) {
   std::string force_mode = Properties::GetForceMode();
   uint32_t xres = 0, yres = 0, rate = 0;
   // Parse <xres>x<yres>[@<refreshrate>]
@@ -55,9 +59,9 @@ void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
   const uint32_t kHeadlessModeDisplayHeightPx = yres ? yres : 1080;
   const uint32_t kHeadlessModeDisplayVRefresh = rate ? rate : 60;
 
-  hwc_configs.clear();
+  HwcDisplayConfigs configs;
 
-  preferred_config_id = active_config_id = next_config_id++;
+  configs.preferred_config_id = next_config_id_++;
   auto headless_drm_mode_info = (drmModeModeInfo){
       .hdisplay = width,
       .vdisplay = height,
@@ -90,46 +94,38 @@ void HwcDisplayConfigs::GenFakeMode(uint16_t width, uint16_t height) {
                                   headless_drm_mode_info.vrefresh) /
                                  kHzInKHz;
 
-  hwc_configs[active_config_id] = (HwcDisplayConfig){
-      .id = active_config_id,
+  configs.hwc_configs[configs.preferred_config_id] = (HwcDisplayConfig){
+      .id = configs.preferred_config_id,
       .group_id = 1,
       .mode = DrmMode(&headless_drm_mode_info),
       .output_type = OutputType::kSystem,
   };
 
-  mm_width = kHeadlessModeDisplayWidthMm;
-  mm_height = kHeadlessModeDisplayHeightMm;
+  configs.mm_width = kHeadlessModeDisplayWidthMm;
+  configs.mm_height = kHeadlessModeDisplayHeightMm;
 
   ALOGI("Add mode %dx%d@%dHz for %s",
       headless_drm_mode_info.hdisplay, headless_drm_mode_info.vdisplay,
       headless_drm_mode_info.vrefresh, headless_drm_mode_info.name);
+
+  return configs;
 }
 
-bool HwcDisplayConfigs::Init(DrmConnector &connector) {
-  // Ensure one config is available for headless mode in case we end up with no
-  // real modes from the connector.
-  GenFakeMode(0, 0);
-
-  // Probe the connector for modes (IOCTL).
-  auto ret = connector.UpdateModes();
-  if (ret != 0) {
-    ALOGE("Failed to update display modes %d", ret);
-    return false;
-  }
-
+std::optional<HwcDisplayConfigs>
+HwcDisplayConfigsGenerator::GenerateDisplayConfigs(
+    const DrmConnector &connector, const HwcConfigParameters &params) {
   if (connector.GetModes().empty()) {
     ALOGE("No modes reported by KMS");
-    return false;
+    return std::nullopt;
   }
 
-  hwc_configs.clear();
-  preferred_config_id = 0;
-  mm_width = connector.GetMmWidth();
-  mm_height = connector.GetMmHeight();
+  HwcDisplayConfigs configs;
+  configs.preferred_config_id = 0;
+  configs.mm_width = connector.GetMmWidth();
+  configs.mm_height = connector.GetMmHeight();
 
-  bool enable_hdr = Properties::UseColorPipeline() &&
-                    (connector.IsExternal() ||
-                     Properties::PersistentHdrEnabled());
+  bool enable_hdr = params.use_color_pipeline &&
+                    (connector.IsExternal() || params.persistent_hdr_enabled);
   // Order determines preferred output type
   const std::vector<OutputType>
       hwc_supported_output_types = enable_hdr
@@ -139,42 +135,56 @@ bool HwcDisplayConfigs::Init(DrmConnector &connector) {
                                        : std::vector<OutputType>{
                                              OutputType::kSdr};
 
-  ConfigId first_config_id = next_config_id;
   uint32_t next_group_id = 1;
 
-  for (const auto &output_type : hwc_supported_output_types) {
-    for (const auto &mode : connector.GetModes()) {
-      bool disabled = false;
-      if ((mode.GetRawMode().flags & DRM_MODE_FLAG_3D_MASK) != 0) {
-        ALOGI("Disabling display mode %s (Modes with 3D flag aren't supported)",
-              mode.GetName().c_str());
-        disabled = true;
-      }
+  std::vector<DrmMode> modes;
+  modes.reserve(connector.GetModes().size());
+  for (const auto &mode : connector.GetModes()) {
+    if ((mode.GetRawMode().flags & DRM_MODE_FLAG_3D_MASK) != 0) {
+      ALOGI("Skipping display mode %s (Modes with 3D flag aren't supported)",
+            mode.GetName().c_str());
+      continue;
+    }
+    modes.push_back(mode);
+  }
 
-      const ConfigId new_config_id = next_config_id++;
+  if (params.capabilities != nullptr) {
+    modes = params.capabilities->FilterModes(modes);
+  }
+
+  for (const auto &output_type : hwc_supported_output_types) {
+    for (const auto &mode : modes) {
+      const ConfigId new_config_id = next_config_id_++;
       const uint32_t new_group_id = next_group_id++;
-      hwc_configs[new_config_id] = {
+      configs.hwc_configs[new_config_id] = {
           .id = new_config_id,
           .group_id = new_group_id,
           .mode = mode,
-          .disabled = disabled,
           .output_type = output_type,
       };
 
       if ((mode.GetRawMode().type & DRM_MODE_TYPE_PREFERRED) != 0 &&
-          preferred_config_id == 0) {
-        preferred_config_id = new_config_id;
+          configs.preferred_config_id == 0) {
+        configs.preferred_config_id = new_config_id;
       }
     }
   }
 
-  /* We must have preferred mode. Set first mode as preferred
-   * in case KMS haven't reported anything. */
-  if (preferred_config_id == 0 && !hwc_configs.empty()) {
-    preferred_config_id = first_config_id;
+  if (configs.hwc_configs.empty()) {
+    ALOGE("No valid modes left after filtering");
+    return std::nullopt;
   }
 
-  return true;
+  /* We must have preferred mode. Set first mode as preferred
+   * in case KMS haven't reported anything. */
+  if (configs.preferred_config_id == 0) {
+    ALOGW(
+        "No preferred config reported by KMS. Falling back to the first "
+        "config.");
+    configs.preferred_config_id = configs.hwc_configs.begin()->first;
+  }
+
+  return configs;
 }
 
 bool HwcDisplayConfigs::SanitizeGroups() {
@@ -182,8 +192,14 @@ bool HwcDisplayConfigs::SanitizeGroups() {
    * otherwise android.graphics.cts.SetFrameRateTest CTS will fail
    */
   constexpr float kMinFpsDelta = 1.0;
+  std::unordered_set<ConfigId> configs_to_erase;
+
   for (const auto &[id1, config1] : hwc_configs) {
-    for (auto &[id2, config2] : hwc_configs) {
+    if (configs_to_erase.count(id1) > 0) {
+      continue;
+    }
+
+    for (const auto &[id2, config2] : hwc_configs) {
       if (id1 == id2) {
         continue;
       }
@@ -192,7 +208,7 @@ bool HwcDisplayConfigs::SanitizeGroups() {
         continue;
       }
 
-      if (config1.disabled || config2.disabled) {
+      if (configs_to_erase.count(id2) > 0) {
         continue;
       }
 
@@ -202,13 +218,17 @@ bool HwcDisplayConfigs::SanitizeGroups() {
       }
 
       ALOGI(
-          "Group %i: Disabling display mode %s (Refresh rate value is "
+          "Group %i: Skipping display mode %s (Refresh rate value is "
           "too close to existing mode %s)",
           config2.group_id, config2.mode.GetName().c_str(),
           config1.mode.GetName().c_str());
 
-      config2.disabled = true;
+      configs_to_erase.insert(id2);
     }
+  }
+
+  for (const auto &id : configs_to_erase) {
+    hwc_configs.erase(id);
   }
 
   return true;

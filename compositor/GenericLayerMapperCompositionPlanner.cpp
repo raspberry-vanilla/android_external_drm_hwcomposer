@@ -172,7 +172,6 @@ GenericLayerMapperCompositionPlanner::GenericLayerMapperCompositionPlanner(
       backend_validator_(std::move(backend_validator)) {
 }
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 CompositionPlanner::ValidationResult
 GenericLayerMapperCompositionPlanner::ValidateDisplay(
     const ICompositorDisplay* display) {
@@ -286,7 +285,6 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
   return {.composition = std::move(*validated_composition),
           .short_circuited = false};
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 CompositionPlanner::ValidatedComposition
 GenericLayerMapperCompositionPlanner::CreateFlattenedComposition(

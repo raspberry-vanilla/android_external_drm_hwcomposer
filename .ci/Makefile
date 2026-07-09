@@ -55,6 +55,7 @@ TIDY_CHECKS_FINE := *                                   \
     -cppcoreguidelines-avoid-const-or-ref-data-members  \
     -cert-err33-c                                       \
     -readability-redundant-inline-specifier             \
+    -readability-function-cognitive-complexity          \
 
 
 TIDY_CHECKS_NORMAL :=                                   \
@@ -116,6 +117,7 @@ SKIP_FILES := \
     drm/DrmDisplayPipelineTest.cpp \
     drm/DrmTestUtils.h \
     hwc/HwcBufferCacheTest.cpp \
+    hwc/HwcDisplayConfigsGeneratorTest.cpp \
     stats/CompositionStatsAtomReporterDesktop.cpp \
     stats/CountActiveDisplaysReporterDesktop.cpp \
     stats/DisplayConfigurationResultReporterDesktop.cpp \

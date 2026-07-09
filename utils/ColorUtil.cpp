@@ -30,7 +30,6 @@
 #include <memory>
 #include <tuple>
 #include <type_traits>
-#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
@@ -41,9 +40,6 @@ using ColorGamut = android::ColorSpace;
 namespace android::drm_hwcomposer {
 
 namespace {
-
-const double kSignalMin = 0.0;
-const double kSignalMax = 1.0;
 
 // Normalize to the range [0, 12] rather than [0, 1]
 const double kHlgScale = 12.0;
@@ -204,16 +200,23 @@ double EvaluateHlgEotf(double e) {
   return (exp((e - kHlg.c) / kHlg.a) + kHlg.b) / kHlgScale;
 }
 
-uint32_t SignalToInt(double signal) {
+uint32_t SignalToUint32(double signal) {
   signal = std::clamp(signal, kSignalMin, kSignalMax);
   signal = std::round(signal * static_cast<double>(UINT32_MAX));
   return static_cast<uint32_t>(signal);
 }
 
-Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
-                bool is_degamma) {
+uint16_t SignalToUint16(double signal) {
+  signal = std::clamp(signal, kSignalMin, kSignalMax);
+  signal = std::round(signal * static_cast<double>(UINT16_MAX));
+  return static_cast<uint16_t>(signal);
+}
+
+template <typename T>
+Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
+                   const double lut_scale, bool is_degamma) {
   const double scaled_step = 1.0 / (static_cast<double>(lut_size) - 1.0);
-  std::vector<drm_color_lut32> lut(lut_size);
+  Lut1D<T> lut(lut_size);
   for (size_t i = 0; i < lut_size; ++i) {
     double signal = static_cast<double>(i) * scaled_step;
     if (!is_degamma && NeedsTonemapping(tf)) {
@@ -246,7 +249,11 @@ Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
     if (is_degamma && NeedsTonemapping(tf)) {
       signal /= std::clamp(lut_scale, kSignalMin, kSignalMax);
     }
-    lut[i].red = lut[i].green = lut[i].blue = SignalToInt(signal);
+    if constexpr (std::is_same_v<T, drm_color_lut32>) {
+      lut[i].red = lut[i].green = lut[i].blue = SignalToUint32(signal);
+    } else {
+      lut[i].red = lut[i].green = lut[i].blue = SignalToUint16(signal);
+    }
     lut[i].reserved = 0;
   }
 
@@ -254,17 +261,18 @@ Lut1D CreateLut(TransferFunction tf, uint32_t lut_size, const double lut_scale,
 }
 // NOLINTEND(readability-magic-numbers)
 
-const Lut1D &Get1DLut(TransferFunction tf, const size_t lut_size,
-                      Lut1DCache &lut_1d_map, const float lut_scale,
-                      bool is_degamma) {
+template <typename T>
+const Lut1D<T> &Get1DLut(TransferFunction tf, const size_t lut_size,
+                         Lut1DCache<T> &lut_1d_map, const float lut_scale,
+                         bool is_degamma) {
   if (lut_size < 2) {
     ALOGE("Bad LUT size requested: %zu", lut_size);
-    return kEmptyLut;
+    return kEmptyLut<T>;
   }
 
   auto key = std::tie(tf, lut_size, lut_scale);
   if (lut_1d_map.count(key) == 0) {
-    lut_1d_map.emplace(key, CreateLut(tf, lut_size, lut_scale, is_degamma));
+    lut_1d_map.emplace(key, CreateLut<T>(tf, lut_size, lut_scale, is_degamma));
   }
   return lut_1d_map.at(key);
 }
@@ -363,6 +371,35 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
   }
 }
 
+const Lut1D<drm_color_lut32> &ColorUtil::GetDegammaLut(
+    TransferFunction tf, const size_t lut_size,
+    Lut1DCache<drm_color_lut32> &lut_1d_map, const float layer_brightness) {
+  // Validate layer brightness
+  auto lut_scale = (float)kSignalMax;
+  if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
+    lut_scale = layer_brightness;
+  }
+  return Get1DLut<drm_color_lut32>(tf, lut_size, lut_1d_map, lut_scale,
+                                   /*is_degamma=*/true);
+}
+
+const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
+    TransferFunction tf, const size_t lut_size,
+    Lut1DCache<drm_color_lut> &lut_1d_map, const float display_brightness,
+    const float hdr_headroom) {
+  // Validate display brightness
+  auto lut_scale = (float)kSignalMax;
+  if (display_brightness >= kSignalMin && display_brightness < kSignalMax) {
+    lut_scale = display_brightness;
+  }
+  // Validate HDR headroom
+  if (hdr_headroom > kSignalMin && hdr_headroom < kSignalMax) {
+    lut_scale *= hdr_headroom;
+  }
+  return Get1DLut<drm_color_lut>(tf, lut_size, lut_1d_map, lut_scale,
+                                 /*is_degamma=*/false);
+}
+
 // Tell the compiler explicitly to build these versions
 template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<
     drm_color_ctm>(Colorspace, Colorspace,
@@ -371,47 +408,5 @@ template std::shared_ptr<drm_color_ctm_3x4>
 ColorUtil::GamutAdjustIfNeeded<drm_color_ctm_3x4>(
     Colorspace, Colorspace, const std::shared_ptr<HalColorTransforMatrix> &,
     CscCache &);
-
-std::tuple<const Lut1D &, const Lut1D &> ColorUtil::Get1DLutsIfNeeded(
-    TransferFunction src_tf, TransferFunction dest_tf,
-    const size_t degamma_lut_size, const size_t gamma_lut_size,
-    Lut1DCache &degamma_lut_map, Lut1DCache &gamma_lut_map,
-    const float layer_brightness, const float display_brightness,
-    const float hdr_headroom) {
-  if (!NeedsTonemapping(src_tf) && !NeedsTonemapping(dest_tf)) {
-    return std::tie(kEmptyLut, kEmptyLut);
-  }
-
-  bool needs_lut = src_tf != dest_tf;
-
-  // Validate display brightness
-  auto lut_scale = (float)kSignalMax;
-  if (display_brightness >= kSignalMin && display_brightness < kSignalMax) {
-    needs_lut = true;
-    lut_scale = display_brightness;
-  }
-
-  // Validate HDR headroom
-  if (hdr_headroom > kSignalMin && hdr_headroom < kSignalMax) {
-    needs_lut = true;
-    lut_scale *= hdr_headroom;
-  }
-
-  // Validate layer brightness
-  if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
-    needs_lut = true;
-    lut_scale *= layer_brightness;
-  }
-
-  if (needs_lut) {
-    return {Get1DLut(src_tf, degamma_lut_size, degamma_lut_map,
-                     /*lut_scale=*/(float)kSignalMax,
-                     /*is_degamma=*/true),
-            Get1DLut(dest_tf, gamma_lut_size, gamma_lut_map, lut_scale,
-                     /*is_degamma=*/false)};
-  }
-
-  return std::tie(kEmptyLut, kEmptyLut);
-}
 
 }  // namespace android::drm_hwcomposer

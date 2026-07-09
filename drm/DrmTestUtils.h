@@ -34,16 +34,45 @@ class NoOpBindable : public PipelineBindable<NoOpBindable> {};
 
 class FakeDrmConnector : public DrmConnector {
  public:
-  FakeDrmConnector(DrmDevice* dev, uint32_t encoder_id)
-      : DrmConnector(nullptr, dev, 0), encoder_id_(encoder_id) {
+  FakeDrmConnector(DrmDevice* dev, uint32_t encoder_id,
+                   bool is_external = false, uint32_t width = 0,
+                   uint32_t height = 0)
+      : DrmConnector(nullptr, dev, 0),
+        encoder_id_(encoder_id),
+        is_external_(is_external),
+        width_(width),
+        height_(height) {
   }
 
   uint32_t GetCurrentEncoderId() const override {
     return encoder_id_;
   }
 
+  bool IsExternal() const override {
+    return is_external_;
+  }
+
+  bool IsInternal() const override {
+    return !is_external_;
+  }
+
+  uint32_t GetMmWidth() const override {
+    return width_;
+  }
+
+  uint32_t GetMmHeight() const override {
+    return height_;
+  }
+
+  void SetModes(std::vector<DrmMode> modes) {
+    modes_ = std::move(modes);
+  }
+
  private:
   const uint32_t encoder_id_;
+  const bool is_external_;
+  const uint32_t width_;
+  const uint32_t height_;
 };
 
 class FakeDrmEncoder : public DrmEncoder {

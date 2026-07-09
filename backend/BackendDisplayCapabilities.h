@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "drm/DrmMode.h"
 
 namespace android::drm_hwcomposer {
 
@@ -29,6 +30,15 @@ class BackendDisplayCapabilities {
   virtual std::optional<std::vector<ColorMode>> GetColorModeOverrides() const {
     return std::nullopt;
   }
+
+  // Filters the list of DRM modes. Returns only the modes supported by the
+  // backend. Only the returned DrmModes will be passed to the backend through
+  // AtomicCommitArgs.
+  virtual std::vector<DrmMode> FilterModes(
+      const std::vector<DrmMode> &modes) const {
+    return modes;
+  }
+
   virtual ~BackendDisplayCapabilities() = 0;
 };
 

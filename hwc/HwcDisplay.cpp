@@ -124,16 +124,13 @@ auto HwcDisplay::GetDisplayName() const -> std::string {
 }
 
 auto HwcDisplay::GetDisplayConfigs() const -> std::vector<HwcDisplayConfig> {
-  std::vector<HwcDisplayConfig> filtered_configs;
+  std::vector<HwcDisplayConfig> display_configs;
+  display_configs.reserve(configs_.hwc_configs.size());
   for (const auto &[_, config] : configs_.hwc_configs) {
-    if (config.disabled) {
-      continue;
-    }
-
-    filtered_configs.emplace_back(config);
+    display_configs.emplace_back(config);
   }
 
-  return filtered_configs;
+  return display_configs;
 }
 
 HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
@@ -188,19 +185,15 @@ auto HwcDisplay::GetConfig(ConfigId config_id) const
     return nullptr;
   }
 
-  if (config_iter->second.disabled) {
-    return nullptr;
-  }
-
   return &config_iter->second;
 }
 
 auto HwcDisplay::GetCurrentConfig() const -> const HwcDisplayConfig * {
-  return GetConfig(configs_.active_config_id);
+  return GetConfig(active_config_id_);
 }
 
 auto HwcDisplay::GetLastRequestedConfig() const -> const HwcDisplayConfig * {
-  return GetConfig(staged_mode_config_id_.value_or(configs_.active_config_id));
+  return GetConfig(staged_mode_config_id_.value_or(active_config_id_));
 }
 
 const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
@@ -245,9 +238,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         auto type = hdr_types.front();
         switch (type) {
           case ui::Hdr::HDR10:
-            // TODO: Remove once black crush issue is resolved in kernel API
-            SetHdrOutputMetadata(ColorGamut::BT2020(),
-                                 TransferFunction::kSmpte170M);
+            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
             break;
           case ui::Hdr::HLG:
             SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kHlg);
@@ -289,7 +280,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     return ConfigError::kBadConfig;
   }
   if (IsInHeadlessMode()) {
-    configs_.active_config_id = config;
+    active_config_id_ = config;
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -310,7 +301,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
 
   ALOGV("Blocking config succeeded.");
-  configs_.active_config_id = config;
+  active_config_id_ = config;
   staged_mode_config_id_.reset();
   // set new vsync period
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
@@ -450,7 +441,6 @@ auto HwcDisplay::AcceptValidatedComposition() -> void {
   }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto HwcDisplay::PresentStagedComposition(
     std::optional<int64_t> desired_present_time, SharedFd &out_present_fence,
     std::vector<ReleaseFence> &out_release_fences) -> bool {
@@ -789,6 +779,53 @@ void HwcDisplay::Deinit() {
   }
 }
 
+void HwcDisplay::InitUseColorPipeline() {
+  if (IsInHeadlessMode()) {
+    use_color_pipeline_ = false;
+    return;
+  }
+
+  use_color_pipeline_ = hwc_->GetResMan().UseColorPipeline() &&
+                        GetPipe().primary_plane &&
+                        GetPipe().primary_plane->Get() &&
+                        GetPipe().primary_plane->Get()->HasColorPipeline();
+}
+
+void HwcDisplay::InitWcgSupported() {
+  if (IsInHeadlessMode()) {
+    has_wcg_support_ = false;
+    return;
+  }
+
+  bool crtc_ctm = GetPipe().crtc && GetPipe().crtc->Get() &&
+                  GetPipe().crtc->Get()->GetCtmProperty();
+  std::vector<ColorMode> color_modes;
+  GetEdid()->GetColorModes(color_modes);
+  has_wcg_support_ = (use_color_pipeline_ || crtc_ctm) && !color_modes.empty();
+}
+
+void HwcDisplay::InitHdrSupported() {
+  if (IsInHeadlessMode()) {
+    has_hdr_support_ = false;
+    return;
+  }
+
+  bool crtc_gamma = GetPipe().crtc && GetPipe().crtc->Get() &&
+                    GetPipe().crtc->Get()->GetGammaLutProperty() &&
+                    GetPipe().crtc->Get()->GetGammaLutSizeProperty();
+  std::vector<ui::Hdr> hdr_types;
+  GetEdid()->GetSupportedHdrTypes(hdr_types);
+  has_hdr_support_ = use_color_pipeline_ && crtc_gamma && has_wcg_support_ &&
+                     GetPipe().connector && GetPipe().connector->Get() &&
+                     (GetPipe().connector->Get()->IsExternal() ||
+                      hwc_->GetResMan().PersistentHdrEnabled()) &&
+                     GetPipe()
+                         .connector->Get()
+                         ->GetHdrOutputMetadataProperty() &&
+                     GetPipe().connector->Get()->GetColorspaceProperty() &&
+                     !hdr_types.empty();
+}
+
 bool HwcDisplay::Init() {
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
@@ -848,40 +885,40 @@ bool HwcDisplay::Init() {
   SetColorMatrixToIdentity();
 
   if (is_virtual_) {
-    configs_.GenFakeMode(virtual_disp_width_, virtual_disp_height_);
+    configs_ = configs_generator_.GetFakeMode(virtual_disp_width_,
+                                              virtual_disp_height_);
     pipeline_->writeback_connector = pipeline_->connector;
   } else if (IsInHeadlessMode()) {
-    configs_.GenFakeMode(0, 0);
-  } else if (!configs_.Init(*pipeline_->connector->Get())) {
-    return false;
+    configs_ = configs_generator_.GetFakeMode(0, 0);
+  } else {
+    // Ensure one config is available for headless mode in case we end up with
+    // no real modes from the connector or if initialization fails.
+    configs_ = configs_generator_.GetFakeMode(0, 0);
+    active_config_id_ = configs_.preferred_config_id;
+
+    auto *connector = pipeline_->connector->Get();
+    auto ret = connector->UpdateModes();
+    if (ret != 0) {
+      ALOGE("Failed to update display modes with error: %d", ret);
+      return false;
+    }
+
+    const HwcConfigParameters params = {
+        .use_color_pipeline = Properties::UseColorPipeline(),
+        .persistent_hdr_enabled = Properties::PersistentHdrEnabled(),
+        .capabilities = pipeline_->capabilities.get(),
+    };
+    auto configs = configs_generator_.GenerateDisplayConfigs(*connector,
+                                                             params);
+    if (!configs) {
+      return false;
+    }
+    configs_ = std::move(*configs);
   }
 
-  // Determine WCG and HDR support
-  if (IsInHeadlessMode()) {
-    use_color_pipeline_ = has_wcg_support_ = has_hdr_support_ = false;
-  } else {
-    use_color_pipeline_ = hwc_->GetResMan().UseColorPipeline() &&
-                          GetPipe().primary_plane &&
-                          GetPipe().primary_plane->Get() &&
-                          GetPipe().primary_plane->Get()->HasColorPipeline();
-    std::vector<ColorMode> color_modes;
-    GetEdid()->GetColorModes(color_modes);
-    has_wcg_support_ = (use_color_pipeline_ ||
-                        (GetPipe().crtc && GetPipe().crtc->Get() &&
-                         GetPipe().crtc->Get()->GetCtmProperty())) &&
-                       !color_modes.empty();
-    std::vector<ui::Hdr> hdr_types;
-    GetEdid()->GetSupportedHdrTypes(hdr_types);
-    has_hdr_support_ = use_color_pipeline_ && has_wcg_support_ &&
-                       GetPipe().connector && GetPipe().connector->Get() &&
-                       (GetPipe().connector->Get()->IsExternal() ||
-                        hwc_->GetResMan().PersistentHdrEnabled()) &&
-                       GetPipe()
-                           .connector->Get()
-                           ->GetHdrOutputMetadataProperty() &&
-                       GetPipe().connector->Get()->GetColorspaceProperty() &&
-                       !hdr_types.empty();
-  }
+  InitUseColorPipeline();
+  InitWcgSupported();
+  InitHdrSupported();
 
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
@@ -1419,8 +1456,7 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
              "a_args.display_mode is set but staged_mode_config_id_ is not.");
     // Update the active_config_id and update the vsync period for the
     // VsyncWorker.
-    configs_.active_config_id = staged_mode_config_id_.value_or(
-        configs_.active_config_id);
+    active_config_id_ = staged_mode_config_id_.value_or(active_config_id_);
     staged_mode_config_id_.reset();
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
   }

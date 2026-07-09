@@ -46,7 +46,6 @@
 namespace android::drm_hwcomposer {
 namespace {
 
-// NOLINTBEGIN(readability-function-cognitive-complexity)
 CommitStatus CommitFrame(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args,
     bool test_only,
@@ -188,7 +187,6 @@ CommitStatus CommitFrame(
   }
   return CommitStatus::Success();
 }
-// NOLINTEND(readability-function-cognitive-complexity)
 
 void CleanUpFailedRequest(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>

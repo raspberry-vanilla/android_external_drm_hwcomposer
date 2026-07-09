@@ -16,10 +16,9 @@
 
 #pragma once
 
-#include <drm/drm_mode.h>
-
 #include <cstdint>
 #include <map>
+#include <optional>
 
 #include "drm/DrmMode.h"
 
@@ -43,33 +42,42 @@ struct HwcDisplayConfig {
   ConfigId id{};
   uint32_t group_id{};
   DrmMode mode{};
-  bool disabled{};
   OutputType output_type{};
-
-  bool IsInterlaced() const {
-    return (mode.GetRawMode().flags & DRM_MODE_FLAG_INTERLACE) != 0;
-  }
 };
 
 struct HwcDisplayConfigs {
-  bool Init(DrmConnector &connector);
-  void GenFakeMode(uint16_t width, uint16_t height);
-
   // Removes problematic configs from groups after they were set.
   bool SanitizeGroups();
 
   std::map<ConfigId, struct HwcDisplayConfig> hwc_configs;
 
-  ConfigId active_config_id = 0;
   ConfigId preferred_config_id = 0;
-
-  // Use sequential config IDs throughout the lifetime of the owner display to
-  // prevent race conditions around hotplugs (mode updates). See:
-  // https://source.android.com/docs/core/graphics/hotplug#prevent-race-conditions
-  ConfigId next_config_id = 1;
 
   uint32_t mm_width = 0;
   uint32_t mm_height = 0;
+};
+
+class BackendDisplayCapabilities;
+
+struct HwcConfigParameters {
+  bool use_color_pipeline = false;
+  bool persistent_hdr_enabled = false;
+  const BackendDisplayCapabilities *capabilities = nullptr;
+};
+
+class HwcDisplayConfigsGenerator {
+ public:
+  HwcDisplayConfigsGenerator() = default;
+
+  std::optional<HwcDisplayConfigs> GenerateDisplayConfigs(
+      const DrmConnector &connector, const HwcConfigParameters &params);
+  HwcDisplayConfigs GetFakeMode(uint16_t width, uint16_t height);
+
+ private:
+  // Use sequential config IDs throughout the lifetime of the owner display to
+  // prevent race conditions around hotplugs (mode updates). See:
+  // https://source.android.com/docs/core/graphics/hotplug#prevent-race-conditions
+  ConfigId next_config_id_ = 1;
 };
 
 }  // namespace android::drm_hwcomposer
