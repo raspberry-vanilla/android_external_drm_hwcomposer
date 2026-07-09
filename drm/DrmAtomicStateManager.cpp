@@ -270,7 +270,6 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
   auto *crtc = pipe_->crtc->Get();
   auto lut_size = crtc->GetGammaLutSizeProperty().GetValue();
   if (!crtc->GetGammaLutProperty() || !lut_size.has_value()) {
-    ALOGV("Missing optional GAMMA_LUT property");
     return true;
   }
 
