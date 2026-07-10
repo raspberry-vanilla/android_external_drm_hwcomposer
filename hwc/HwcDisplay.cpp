@@ -303,6 +303,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
 
   ALOGV("Create modeset commit.");
+
+  // TODO(b/533481169) - updating the state via SetOutputType should happen
+  // after the successful commit via ApplyCommitChanges().
   SetOutputType(new_config->output_type);
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
@@ -1245,6 +1248,10 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateModesetCommit(
     ALOGE("Could not find active mode for %u", configId);
     return std::nullopt;
   }
+
+  // TODO(b/533481169) - this function should be const and the state of
+  // HwcDisplay should only be change after a successful commit.
+  SetOutputType(config->output_type);
   std::optional<LayerData> modeset_layer_data = GetModesetLayerData(config);
   return CreateModesetCommit(config, modeset_layer_data);
 }
