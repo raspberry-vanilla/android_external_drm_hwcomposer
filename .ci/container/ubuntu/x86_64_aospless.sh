@@ -4,6 +4,8 @@
 
 set -e
 
+source "$(dirname "$0")/../shared.sh"
+
 source "${FDO_CI_BASH_HELPERS}"
 
 DEPS=(
@@ -67,7 +69,7 @@ yes n | repo init \
   -u https://android.googlesource.com/platform/manifest \
   -b "${ANDROID_BRANCH}" \
   --depth=1
-time repo sync --fail-fast --no-tags -j2
+time safe_repo_sync
 fdo_log_section_end repo_init
 
 fdo_log_section_start_collapsed customize_repo "customize_repo"

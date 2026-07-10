@@ -9,6 +9,7 @@ set -e
 
 function my_atexit()
 {
+  local exit_status=$?
   set +e
   apt-get purge -y "${DEPS_FOR_AOSP[@]}"
   apt-get autoremove -y
@@ -19,10 +20,13 @@ function my_atexit()
   rm --preserve-root /tmp/* -rf
   rm --preserve-root /usr/local/bin/repo
   rm --preserve-root "${TOP}" -rf
+  exit $exit_status
 }
 
 trap my_atexit EXIT
 trap 'exit 2' HUP INT PIPE TERM
+
+source "$(dirname "$0")/../shared.sh"
 
 source "${FDO_CI_BASH_HELPERS}"
 
@@ -71,8 +75,8 @@ yes n | repo init \
   -b "${ANDROID_BRANCH}" \
   --depth=1
 
- # Don't increase parallel jobs or they will be denied
-time repo sync --fail-fast --no-tags -j2
+# Don't increase parallel jobs or they will be denied
+time safe_repo_sync
 fdo_log_section_end repo_init
 
 source "${TOP}/build/envsetup.sh"

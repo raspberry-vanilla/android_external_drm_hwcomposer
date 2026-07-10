@@ -8,10 +8,12 @@ set -e
 
 function my_atexit()
 {
+  local exit_status=$?
   set +e
   apt-get purge -y "${EPHEMERAL_DEPS[@]}"
   apt-get autoremove -y
   apt-get clean
+  exit $exit_status
 }
 
 trap my_atexit EXIT

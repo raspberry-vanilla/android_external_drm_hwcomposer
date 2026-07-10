@@ -55,7 +55,7 @@ VSOCK_BASE=10000 # greater than all the default vsock ports
 VSOCK_CID=$((VSOCK_BASE + (CI_JOB_ID & 0xfff)))
 
 ulimit -S unlimited
-HOME=/cuttlefish launch_cvd \
+HOME=/cuttlefish timeout -k 30s 15m launch_cvd \
   -daemon \
   -verbosity=VERBOSE \
   -file_verbosity=VERBOSE \
@@ -87,7 +87,8 @@ fdo_log_section_end launch_cvd
 fdo_log_section_start_collapsed push_new_apex "push_new_apex"
 
 mkdir /old_apex
-adb wait-for-device root
+adb wait-for-device root || true
+adb wait-for-device
 adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex /old_apex
 
 # Unzip it to get apex_build_info.pb which has all the build parameters normally passed to apexer
@@ -149,25 +150,31 @@ adb reboot
 adb wait-for-device devices
 fdo_log_section_end push_new_apex
 
-# If this service is missing, cts-tradefed will fail device pretests
-while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
-echo "window ok"
+# Define helper to wait for critical services with a timeout
+function wait_for_services() {
+  # If this service is missing, cts-tradefed will fail device pretests
+  while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
+  echo "window ok"
 
-while [ "$(adb shell dumpsys -l | grep lock_settings)" = "" ] ; do sleep 1; done
-echo "lock_settings ok"
+  while [ "$(adb shell dumpsys -l | grep lock_settings)" = "" ] ; do sleep 1; done
+  echo "lock_settings ok"
 
-while [ "$(adb shell dumpsys -l | grep display)" = "" ] ; do sleep 1; done
-echo "display ok"
+  while [ "$(adb shell dumpsys -l | grep display)" = "" ] ; do sleep 1; done
+  echo "display ok"
 
-while [ "$(adb shell dumpsys -l | grep input)" = "" ] ; do sleep 1; done
-echo "input ok"
+  while [ "$(adb shell dumpsys -l | grep input)" = "" ] ; do sleep 1; done
+  echo "input ok"
 
-while [ "$(adb shell dumpsys -l | grep logcat)" = "" ] ; do sleep 1; done
-echo "logcat ok"
+  while [ "$(adb shell dumpsys -l | grep logcat)" = "" ] ; do sleep 1; done
+  echo "logcat ok"
 
-# package manager is needed before CTS can install APKs
-while [ "$(adb shell dumpsys -l | grep package)" = "" ]; do sleep 1; done
-echo "package ok"
+  # package manager is needed before CTS can install APKs
+  while [ "$(adb shell dumpsys -l | grep package)" = "" ]; do sleep 1; done
+  echo "package ok"
+}
+
+export -f wait_for_services
+timeout -k 30s 15m bash -c wait_for_services
 
 # Look for other missing services
 adb shell dumpsys > /dev/null

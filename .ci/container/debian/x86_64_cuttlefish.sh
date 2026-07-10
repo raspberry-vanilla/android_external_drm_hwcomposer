@@ -31,9 +31,12 @@ function get_repo() {
   popd
 }
 
+source "$(dirname "$0")/../shared.sh"
+
 
 function my_atexit()
 {
+  local exit_status=$?
   set +e
   # This directory survives outside of the container, so use it for job artifacts
   mkdir -p "/cache/${CI_PROJECT_PATH}"
@@ -51,6 +54,7 @@ function my_atexit()
   rm --preserve-root "${CUTTLEFISH_DIR}" -rf
   rm --preserve-root /root/\.* -rf
   rm --preserve-root /tmp/* -rf
+  exit $exit_status
 }
 
 trap my_atexit EXIT
@@ -129,7 +133,7 @@ yes n | repo init \
   --depth=1
 
  # Don't increase parallel jobs or they will be denied
-time repo sync --fail-fast --no-tags -j4
+time safe_repo_sync
 fdo_log_section_end repo_init
 
 fdo_log_section_start_collapsed customize_repo "customize_repo"
@@ -214,7 +218,12 @@ export TRUSTY_SYSTEM_VM=disabled
 
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 
-time make -j"${FDO_CI_CONCURRENT:-4}" > "/cuttlefish.log.txt" 2>&1 # Silent or job logs will exceed limit
+echo "NOTE: AOSP compilation output is being filtered to echo only errors, failures, and milestone progress lines (every 1000th step)."
+echo "This prevents the multi-million line build log from exceeding GitLab CI's job log size limit while keeping progress visible."
+echo "The complete, unfiltered build log is saved to /cuttlefish.log.txt and will be uploaded as an artifact on failure."
+time make -j"${FDO_CI_CONCURRENT:-4}" 2>&1 | tee "/cuttlefish.log.txt" | \
+  awk '/error:/ || /FAILED:/ || /ERROR:/ || /fatal:/ || (/\[/ && ++count % 1000 == 0) { print }'
+
 echo "Build of ${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT} complete."
 
 fdo_log_section_end build_cuttlefish
