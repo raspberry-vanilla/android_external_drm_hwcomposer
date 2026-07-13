@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "LayerData.h"
@@ -34,6 +35,14 @@ struct LayerToPlaneJoiningPlan {
     LayerData layer;
     std::shared_ptr<BindingOwner<DrmPlane>> plane;
     int z_pos;
+
+    // TODO: Before we allow C++20, we need this custom constructor to eliminate
+    // unnecessary memory copying (LayerData is big) with vector::emplace_back.
+    LayerToPlaneJoining(LayerData&& layer,
+                        std::shared_ptr<BindingOwner<DrmPlane>> plane,
+                        int z_pos)
+        : layer(std::move(layer)), plane(std::move(plane)), z_pos(z_pos) {
+    }
   };
 
   std::vector<LayerToPlaneJoining> plan;
