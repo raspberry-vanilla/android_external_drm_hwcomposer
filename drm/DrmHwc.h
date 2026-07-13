@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -83,7 +84,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
 
   void ScheduleHotplugEvent(DisplayHandle display_handle,
                             enum DisplayStatus display_status) {
-    deferred_hotplug_events_[display_handle] = display_status;
+    hotplug_event_queue_.Add(display_handle, display_status);
   }
 
   void DeinitDisplays();
@@ -92,6 +93,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   bool BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   void FinalizeDisplayBinding() override;
+  void FlushHotplugEvents() override;
 
   // Notify Display Link Status
   void NotifyDisplayLinkStatus(
@@ -110,11 +112,25 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   }
 
  private:
+  // An additional layer to isolate the critical region for invoking hotplug
+  // event callbacks from the main mutex.
+  class HotplugEventQueue {
+   public:
+    using Events = std::map<DisplayHandle, DisplayStatus>;
+
+    void Add(DisplayHandle display_handle, DisplayStatus display_status);
+    Events RetrieveAndFlush();
+
+   private:
+    Events events_;
+    std::mutex mutex_;
+  };
+
   ResourceManager resource_manager_;
   std::map<DisplayHandle, std::unique_ptr<HwcDisplay>> displays_;
   std::map<std::shared_ptr<DrmDisplayPipeline>, DisplayHandle> display_handles_;
 
-  std::map<DisplayHandle, enum DisplayStatus> deferred_hotplug_events_;
+  HotplugEventQueue hotplug_event_queue_;
   std::vector<DisplayHandle> displays_for_removal_list_;
 
   DisplayHandle last_display_handle_ = kPrimaryDisplay;

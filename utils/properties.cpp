@@ -207,19 +207,19 @@ auto Properties::GetForceMode() -> std::string {
 }
 
 auto Properties::ValidationShortCircuiting() -> bool {
-  constexpr int kDefault = 0;
+  constexpr int kDefault = 1;
   return (property_get_bool("vendor.hwc.drm.validation_short_circuiting",
                             kDefault) != 0);
 }
 
 auto Properties::ShortCircuitIgnoreGeometry() -> bool {
-  constexpr int kDefault = 1;
+  constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.short_circuit_ignore_geometry",
                             kDefault) != 0);
 }
 
 auto Properties::ShortCircuitIgnoreCtm() -> bool {
-  constexpr int kDefault = 1;
+  constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.short_circuit_ignore_ctm",
                             kDefault) != 0);
 }

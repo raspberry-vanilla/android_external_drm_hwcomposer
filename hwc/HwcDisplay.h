@@ -166,7 +166,7 @@ class HwcDisplay : public ICompositorDisplay {
   // Get the HwcDisplayConfig, or nullptr if none.
   auto GetConfig(ConfigId config_id) const -> const HwcDisplayConfig *;
 
-  auto GetDisplayBoundsMm() -> std::pair<int32_t, int32_t>;
+  auto GetDisplayBoundsMm() const -> std::pair<int32_t, int32_t>;
 
   // To be called after SetDisplayProperties. Returns an empty vector if the
   // requested layers have been validated, otherwise the vector describes
@@ -197,12 +197,12 @@ class HwcDisplay : public ICompositorDisplay {
       -> bool;
 
   // Get the edid bytes for this display. Return an empty vector on error.
-  auto GetRawEdid() -> std::vector<uint8_t>;
+  auto GetRawEdid() const -> std::vector<uint8_t>;
 
   // Get the port id that this display is plugged into.
   auto GetPort() const -> uint8_t;
 
-  auto HasBacklight() -> bool {
+  auto HasBacklight() const -> bool {
     return backlight_controller_ != nullptr;
   }
 
@@ -231,17 +231,18 @@ class HwcDisplay : public ICompositorDisplay {
   auto CreateLayer(ILayerId new_layer_id) -> bool;
   auto DestroyLayer(ILayerId layer_id) -> bool;
 
-  auto GetColorModes() -> std::vector<ColorMode>;
+  auto GetColorModes() const -> std::vector<ColorMode>;
   void SetColorMode(ColorMode color_mode);
 
   void GetHdrCapabilities(std::vector<ui::Hdr> *types, float *max_luminance,
-                          float *max_average_luminance, float *min_luminance);
+                          float *max_average_luminance,
+                          float *min_luminance) const;
 
   auto IsHdcpPropertyPresent() -> bool;
   auto StartHdcp() -> bool;
   auto StopHdcp() -> bool;
 
-  bool IsWritebackSupported();
+  bool IsWritebackSupported() const;
   bool SetWritebackEnabled(bool enabled);
   SharedFd GetWritebackBufferFence();
 

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -105,16 +106,17 @@ void DrmHwc::FinalizeDisplayBinding() {
     BindDisplay(pipe);
   }
 
-  // Finally, send hotplug events to the client
-  for (auto &dhe : deferred_hotplug_events_) {
-    SendHotplugEventToClient(dhe.first, dhe.second);
-  }
-  deferred_hotplug_events_.clear();
-
   for (auto handle : displays_for_removal_list_) {
     displays_.erase(handle);
   }
   displays_for_removal_list_.clear();
+}
+
+void DrmHwc::FlushHotplugEvents() {
+  auto events = hotplug_event_queue_.RetrieveAndFlush();
+  for (const auto &[handle, status] : events) {
+    SendHotplugEventToClient(handle, status);
+  }
 }
 
 bool DrmHwc::BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
@@ -341,6 +343,21 @@ void DrmHwc::LogRefreshRateChanges() {
 
   if (refresh_rates_reporter_)
     refresh_rates_reporter_->UpdateRefreshRates(refresh_rates);
+}
+
+void DrmHwc::HotplugEventQueue::Add(DisplayHandle display_handle,
+                                    DisplayStatus display_status) {
+  std::scoped_lock lock(mutex_);
+  events_[display_handle] = display_status;
+}
+
+DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() {
+  Events events;
+  {
+    std::scoped_lock lock(mutex_);
+    std::swap(events, events_);
+  }
+  return events;
 }
 
 }  // namespace android::drm_hwcomposer

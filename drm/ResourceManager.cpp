@@ -112,15 +112,19 @@ void ResourceManager::Init() {
   }
 
   uevent_listener_ = UEventListener::CreateInstance([this] {
-    const std::unique_lock lock(GetMainLock());
-    for (auto &drm : drms_) {
-      auto stale_connectors = drm->RefreshConnectors();
-      DetachStalePipelines(stale_connectors);
+    {
+      std::scoped_lock lock(GetMainLock());
+      for (auto &drm : drms_) {
+        auto stale_connectors = drm->RefreshConnectors();
+        DetachStalePipelines(stale_connectors);
+      }
+      UpdateFrontendDisplays();
     }
-    UpdateFrontendDisplays();
+    frontend_interface_->FlushHotplugEvents();
   });
 
   UpdateFrontendDisplays();
+  frontend_interface_->FlushHotplugEvents();
 
   initialized_ = true;
 }

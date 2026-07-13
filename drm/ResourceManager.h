@@ -43,6 +43,7 @@ class PipelineToFrontendBindingInterface {
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void NotifyHdcpTermination(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
+  virtual void FlushHotplugEvents() = 0;
 };
 
 class ResourceManager {
@@ -108,7 +109,7 @@ class ResourceManager {
 
   std::shared_ptr<UEventListener> uevent_listener_;
 
-  std::recursive_mutex main_lock_;
+  std::mutex main_lock_;
 
   std::map<DrmConnector *, std::shared_ptr<DrmDisplayPipeline>>
       attached_pipelines_;

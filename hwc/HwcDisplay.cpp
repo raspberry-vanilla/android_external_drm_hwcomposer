@@ -419,7 +419,7 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
   };
 }
 
-auto HwcDisplay::GetDisplayBoundsMm() -> std::pair<int32_t, int32_t> {
+auto HwcDisplay::GetDisplayBoundsMm() const -> std::pair<int32_t, int32_t> {
   if (IsInHeadlessMode()) {
     return {configs_.mm_width, -1};
   }
@@ -568,7 +568,7 @@ auto HwcDisplay::PresentStagedComposition(
   return true;
 }
 
-auto HwcDisplay::GetRawEdid() -> std::vector<uint8_t> {
+auto HwcDisplay::GetRawEdid() const -> std::vector<uint8_t> {
   if (IsInHeadlessMode()) {
     return {};
   }
@@ -964,7 +964,7 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
   return count != 0;
 }
 
-auto HwcDisplay::GetColorModes() -> std::vector<ColorMode> {
+auto HwcDisplay::GetColorModes() const -> std::vector<ColorMode> {
   if (IsInHeadlessMode()) {
     return {ColorMode::kNative};
   }
@@ -1017,13 +1017,13 @@ void HwcDisplay::SetColorMode(ColorMode mode) {
 void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *max_luminance,
                                     float *max_average_luminance,
-                                    float *min_luminance) {
+                                    float *min_luminance) const {
   if (IsInHeadlessMode() || !has_hdr_support_) {
     return;
   }
 
   // Return HDR caps only when we have the ability to set HDR
-  DrmDisplayPipeline &pipeline = GetPipe();
+  const DrmDisplayPipeline &pipeline = GetPipe();
   if (pipeline.connector == nullptr || pipeline.connector->Get() == nullptr ||
       !pipeline.connector->Get()->GetHdrOutputMetadataProperty()) {
     return;
@@ -1500,12 +1500,8 @@ bool HwcDisplay::ForcedScalingWithGpu() const {
   return hwc_->GetResMan().ForcedScalingWithGpu();
 }
 
-bool HwcDisplay::IsWritebackSupported() {
-  if (IsInHeadlessMode()) {
-    return false;
-  }
-
-  return !is_virtual_ &&
+bool HwcDisplay::IsWritebackSupported() const {
+  return !IsInHeadlessMode() && !is_virtual_ &&
          pipeline_->FindWritebackConnectorForPipeline() != nullptr;
 }
 
