@@ -16,12 +16,15 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <memory>
+#include <optional>
 
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/IntelMappingValidator.h"
 #include "compositor/LayerData.h"
 #include "compositor/mapper/LayerMapper.h"
 #include "drm/DrmTestUtils.h"
+#include "drm/drm_fourcc.h"
 #include "hwc/HwcLayer.h"
 
 namespace android::drm_hwcomposer {
@@ -45,12 +48,19 @@ constexpr int kMaxDstWidthExceededRight = 8194;
 constexpr int kMaxDstHeightExceededBottom = 8194;
 
 static void SetLayerProps(HwcLayer& layer, const FRect& src, const IRect& dst,
-                          bool rotate90 = false) {
+                          bool rotate90 = false,
+                          std::optional<uint32_t> format = std::nullopt) {
   HwcLayer::LayerProperties props{
       .display_frame = DstRectInfo{.i_rect = dst},
       .source_crop = SrcRectInfo{.f_rect = src},
       .transform = LayerTransform{.rotate90 = rotate90},
   };
+  if (format) {
+    props.buffer = HwcLayer::Buffer{
+        .bi = {.format = *format},
+        .fb = nullptr,
+    };
+  }
   layer.SetLayerProperties(props);
 }
 
@@ -131,14 +141,46 @@ TEST(IntelMappingValidatorTest, InvalidMapping_OddSourceWidth) {
 }
 
 // This test ensures that a mapping is rejected if the source width exceeds
-// the hardware scaler limit of 4096.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceeded) {
+// the hardware scaler limit of 4096 for a YUV format.
+TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededYuv) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
                 /*src=*/
                 {0.0F, 0.0F, kMaxSrcWidthExceededRight, kDefaultSrcBottom},
-                /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
+                /*dst=*/{0, 0, 2000, kScaledDstBottom},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_NV12);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that a mapping is accepted if the source width is between
+// 4096 and 6144 for an RGB format.
+TEST(IntelMappingValidatorTest, ValidMapping_SrcWidthForRgb) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/
+                {0.0F, 0.0F, kMaxSrcWidthExceededRight, kDefaultSrcBottom},
+                /*dst=*/{0, 0, 2000, kScaledDstBottom},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_TRUE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that a mapping is rejected if the source width exceeds
+// the hardware scaler limit of 6144 for an RGB format.
+TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededRgb) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  constexpr float kMaxRgbSrcWidthExceededRight = 6146.0F;
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/
+                {0.0F, 0.0F, kMaxRgbSrcWidthExceededRight, kDefaultSrcBottom},
+                /*dst=*/{0, 0, 3000, kScaledDstBottom},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
 
   std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
   EXPECT_FALSE(IntelValidateMapping(mappings));
@@ -152,7 +194,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcHeightExceeded) {
   SetLayerProps(/*layer=*/layer1,
                 /*src=*/
                 {0.0F, 0.0F, kDefaultSrcRight, kMaxSrcHeightExceededBottom},
-                /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
+                /*dst=*/{0, 0, kScaledDstRight, 4000});
 
   std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
   EXPECT_FALSE(IntelValidateMapping(mappings));
@@ -194,8 +236,9 @@ TEST(IntelMappingValidatorTest, ValidMapping_MaxScalersCount) {
                 /*src=*/{0.0F, 0.0F, kDefaultSrcRight, kDefaultSrcBottom},
                 /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
   SetLayerProps(/*layer=*/layer2,
-                /*src=*/{0.0F, 0.0F, kDefaultSrcRight, kDefaultSrcBottom},
-                /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
+                /*src=*/
+                {0.0F, 0.0F, kDefaultSrcRight / 2.0F, kDefaultSrcBottom / 2.0F},
+                /*dst=*/{0, 0, kDefaultDstRight, kDefaultDstBottom});
 
   std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice},
                                         {&layer2, CompositionType::kDevice}};
@@ -214,15 +257,173 @@ TEST(IntelMappingValidatorTest, InvalidMapping_TooManyScalers) {
                 /*src=*/{0.0F, 0.0F, kDefaultSrcRight, kDefaultSrcBottom},
                 /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
   SetLayerProps(/*layer=*/layer2,
-                /*src=*/{0.0F, 0.0F, kDefaultSrcRight, kDefaultSrcBottom},
-                /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
+                /*src=*/
+                {0.0F, 0.0F, kDefaultSrcRight / 2.0F, kDefaultSrcBottom / 2.0F},
+                /*dst=*/{0, 0, kDefaultDstRight, kDefaultDstBottom});
   SetLayerProps(/*layer=*/layer3,
-                /*src=*/{0.0F, 0.0F, kDefaultSrcRight, kDefaultSrcBottom},
-                /*dst=*/{0, 0, kScaledDstRight, kScaledDstBottom});
+                /*src=*/
+                {0.0F, 0.0F, kDefaultSrcRight / 2.0F, kDefaultSrcBottom / 2.0F},
+                /*dst=*/{0, 0, kDefaultDstRight, kDefaultDstBottom});
 
   std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice},
                                         {&layer2, CompositionType::kDevice},
                                         {&layer3, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that a mapping is rejected if the downscaling limit
+// of 3 is exceeded for scaler 0.
+TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleLimitExceededScaler0) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  // Downscale ratio > 3.0
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 301.0F, 301.0F},
+                /*dst=*/{0, 0, 100, 100});
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that a mapping is rejected if any downscaling is
+// attempted on scaler 1.
+TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleNotAllowedScaler1) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  HwcLayer layer2(&mock_display);
+  // Scaler 0 is valid (downscale ratio 2.0)
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 200.0F, 200.0F},
+                /*dst=*/{0, 0, 100, 100});
+  // Scaler 1 is invalid (downscaling attempted)
+  SetLayerProps(/*layer=*/layer2,
+                /*src=*/{0.0F, 0.0F, 101.0F, 101.0F},
+                /*dst=*/{0, 0, 100, 100});
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice},
+                                        {&layer2, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test checks that a mapping is rejected if the source height is less
+// than 1, enforcing the hardware plane minimum regardless of scaling.
+TEST(IntelMappingValidatorTest, InvalidMapping_SourceHeightLessThanOne) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, kDefaultSrcRight, 0.5F},
+                /*dst=*/{0, 0, kDefaultDstRight, kDefaultDstBottom});
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that an NV12 buffer is rejected if the source width
+// is less than the hardware plane minimum of 16, regardless of scaling.
+TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthNv12) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 14.0F, kDefaultSrcBottom},
+                /*dst=*/{0, 0, 14, kDefaultDstBottom},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_NV12);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that an XRGB8888 buffer is rejected if the source width
+// is less than the hardware plane minimum of 4, regardless of scaling.
+TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthXrgb) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 2.0F, kDefaultSrcBottom},
+                /*dst=*/{0, 0, 2, kDefaultDstBottom},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test checks that a non-YUV format buffer is rejected if scaling is
+// requested and the source width is below the hardware minimum of 8.
+TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinWidthNonYuv) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  // src_w = 6, dst_w = 12 (scaled). Format = XRGB8888.
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 6.0F, 20.0F},
+                /*dst=*/{0, 0, 12, 20},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test checks that a non-YUV format buffer is rejected if scaling is
+// requested and the source height is below the hardware minimum of 8.
+TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightNonYuv) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  // src_h = 6, dst_h = 12 (scaled). Format = XRGB8888.
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 20.0F, 6.0F},
+                /*dst=*/{0, 0, 20, 12},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test checks that a YUV format buffer is rejected if scaling is
+// requested and the source height is below the hardware minimum of 16.
+TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightYuv) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  // src_w = 16, src_h = 14, dst_h = 28 (scaled). Format = NV12.
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 16.0F, 14.0F},
+                /*dst=*/{0, 0, 16, 28},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_NV12);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test ensures that a mapping is rejected if the upscale factor exceeds
+// the hardware maximum of 32768.
+TEST(IntelMappingValidatorTest, InvalidMapping_MaxUpscaleExceeded) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  // dst_w = src_w * 32768 + 1
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 8.0F, 20.0F},
+                /*dst=*/{0, 0, 262145, 20},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice}};
+  EXPECT_FALSE(IntelValidateMapping(mappings));
+}
+
+// This test verifies that YUV formats are not allowed on the second scaler.
+TEST(IntelMappingValidatorTest, InvalidMapping_SecondScalerYuvNotAllowed) {
+  MockCompositorDisplay mock_display;
+  HwcLayer layer1(&mock_display);
+  HwcLayer layer2(&mock_display);
+  // Scaler 0 is valid (RGB)
+  SetLayerProps(/*layer=*/layer1,
+                /*src=*/{0.0F, 0.0F, 20.0F, 20.0F},
+                /*dst=*/{0, 0, 40, 40},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_XRGB8888);
+  // Scaler 1 is invalid (YUV formats are not permitted)
+  SetLayerProps(/*layer=*/layer2,
+                /*src=*/{0.0F, 0.0F, 20.0F, 20.0F},
+                /*dst=*/{0, 0, 40, 40},
+                /*rotate90=*/false, /*format=*/DRM_FORMAT_NV12);
+
+  std::vector<LayerMapping> mappings = {{&layer1, CompositionType::kDevice},
+                                        {&layer2, CompositionType::kDevice}};
   EXPECT_FALSE(IntelValidateMapping(mappings));
 }
 
