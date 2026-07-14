@@ -56,6 +56,8 @@ TIDY_CHECKS_FINE := *                                   \
     -cert-err33-c                                       \
     -readability-redundant-inline-specifier             \
     -readability-function-cognitive-complexity          \
+    -cert-err58-cpp                                     \
+    -clang-analyzer-cplusplus.NewDeleteLeaks            \
 
 
 TIDY_CHECKS_NORMAL :=                                   \

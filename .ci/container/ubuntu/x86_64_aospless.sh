@@ -32,6 +32,7 @@ DEPS_FOR_BUILD=(
   meson
   pkg-config
   rsync
+  zip
 )
 
 DEPS_FOR_TIDY=(
@@ -54,6 +55,12 @@ apt-get install -y --no-remove --no-install-recommends "${DEPS_FOR_BUILD[@]}"
 apt-get install -y --no-remove --no-install-recommends "${DEPS_FOR_TIDY[@]}"
 apt-get install -y --no-remove --no-install-recommends "${DEPS_FOR_CHECK[@]}"
 
+# Make Clang 19 the default
+ln -sf /usr/bin/clang-19 /usr/bin/clang
+ln -sf /usr/bin/clang++-19 /usr/bin/clang++
+ln -sf /usr/bin/clang-tidy-19 /usr/bin/clang-tidy
+ln -sf /usr/bin/clang-format-19 /usr/bin/clang-format
+
 curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
 chmod a+x /usr/local/bin/repo
 fdo_log_section_end install_packages
@@ -64,6 +71,7 @@ mkdir "${TOP}"
 cd "${TOP}"
 
 : "${ANDROID_BRANCH:?ANDROID_BRANCH is not set}"
+: "${ANDROID_TARGET_RELEASE:?ANDROID_TARGET_RELEASE is not set}"
 
 yes n | repo init \
   -u https://android.googlesource.com/platform/manifest \
@@ -86,19 +94,26 @@ fi
 git -C "${DRMHWC_DIR}" checkout FETCH_HEAD
 
 git clone https://github.com/GloDroid/aospext.git
+# drm_hwcomposer dropped HWC2 support, so we don't build hwcomposer.drm.so anymore.
+# Patch aospext to not expect it.
+sed -i '/hwcomposer.drm.so/d' aospext/meson_drmhwcomposer.mk
 
 cat >> "${TOP}/device/google/cuttlefish/shared/device.mk" <<EOF
 BOARD_BUILD_AOSPEXT_DRMHWCOMPOSER := true
 BOARD_DRMHWCOMPOSER_SRC_DIR := external/drm_hwcomposer
 EOF
 
-ALLOW_MK_x86_64="${TOP}/device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk"
-sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| aospext/Android.mk aospext/**/Android.mk|' \
-  "${ALLOW_MK_x86_64}"
+ALLOW_MK_x86_64="${TOP}/device/google/cuttlefish/vsoc_x86_64_only/slim/aosp_cf.mk"
+cat >> "${ALLOW_MK_x86_64}" <<EOF
+PRODUCT_ALLOWED_ANDROIDMK_FILES += aospext/Android.mk aospext/**/Android.mk
+PRODUCT_SOONG_ONLY := false
+EOF
 
-ALLOW_MK_arm64="${TOP}/device/google/cuttlefish/vsoc_arm64_only/phone/aosp_cf.mk"
-sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| aospext/Android.mk aospext/**/Android.mk|' \
-  "${ALLOW_MK_arm64}"
+ALLOW_MK_arm64="${TOP}/device/google/cuttlefish/vsoc_arm64_only/slim/aosp_cf.mk"
+cat >> "${ALLOW_MK_arm64}" <<EOF
+PRODUCT_ALLOWED_ANDROIDMK_FILES += aospext/Android.mk aospext/**/Android.mk
+PRODUCT_SOONG_ONLY := false
+EOF
 
 fdo_log_section_end customize_repo
 
@@ -107,7 +122,7 @@ source build/envsetup.sh
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_slim
-export TARGET_RELEASE=bp2a
+export TARGET_RELEASE=${ANDROID_TARGET_RELEASE}
 
 # Disable LLVM Link-Time-Optimization so that the aospless artifacts will
 # have full object files for linking rather than raw bitcode
@@ -129,7 +144,7 @@ fdo_log_section_start_collapsed build_aospless_arm64 "build_aospless_arm64"
 cd "${TOP}/aospext"
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_arm64_slim
-export TARGET_RELEASE=bp2a
+export TARGET_RELEASE=${ANDROID_TARGET_RELEASE}
 lunch "${TARGET_PRODUCT}-${TARGET_RELEASE}-${TARGET_BUILD_VARIANT}"
 mm
 cd "${TOP}/out/target/product/vsoc_arm64_only/obj/AOSPEXT/DRMHWCOMPOSER/"

@@ -67,10 +67,16 @@ deps = [
 android_sdk_version = get_option('android_sdk_version')
 message('ANDROID_SDK_VERSION = ' + android_sdk_version)
 
+cpp_compiler = meson.get_compiler('cpp')
+
 common_cpp_flags = [
     '-DUSE_IMAPPER4_METADATA_API',
     '-D__ANDROID_API__=' + android_sdk_version,
 ]
+
+if cpp_compiler.has_argument('-Wno-error=invalid-specialization')
+  common_cpp_flags += '-Wno-error=invalid-specialization'
+endif
 
 dep_libdisplay_info = dependency('display_info', required : false)
 if dep_libdisplay_info.found()

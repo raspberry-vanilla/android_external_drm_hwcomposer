@@ -67,7 +67,7 @@ mkdir "${TOOLS_DIR}"
 
 # Build debian packages for cuttlefish
 fdo_log_section_start_collapsed get_cuttlefish_packages "get_cuttlefish_packages"
-ANDROID_CUTTLEFISH_VERSION=v1.17.0
+: "${ANDROID_CUTTLEFISH_VERSION:?ANDROID_CUTTLEFISH_VERSION is not set}"
 CUT_DIR="/android-cuttlefish"
 mkdir "${CUT_DIR}"
 pushd "${CUT_DIR}"
@@ -86,7 +86,8 @@ fdo_log_section_end get_cuttlefish_packages
 fdo_log_section_start_collapsed get_android_cts "get_android_cts"
 CTS_DIR="/cts"
 mkdir "${CTS_DIR}"
-ANDROID_CTS_VERSION="${ANDROID_VERSION}_r2"
+: "${ANDROID_CTS_REVISION:?ANDROID_CTS_REVISION is not set}"
+ANDROID_CTS_VERSION="${ANDROID_VERSION}_${ANDROID_CTS_REVISION}"
 curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
   -o "${CTS_DIR}/cts.zip" \
   "https://dl.google.com/dl/android/cts/android-cts-${ANDROID_CTS_VERSION}-linux_x86-x86.zip"
@@ -109,7 +110,7 @@ curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
   "https://dl.google.com/android/repository/build-tools_r${ANDROID_SDK_VERSION}_linux.zip"
 unzip "${BUILD_TOOLS_DIR}/build-tools.zip" -d "${BUILD_TOOLS_DIR}"
 rm "${BUILD_TOOLS_DIR}/build-tools.zip"
-mv "${BUILD_TOOLS_DIR}/android-$ANDROID_VERSION" "${TOOLS_DIR}"/build-tools #rename the directory
+mv "${BUILD_TOOLS_DIR}"/android-* "${TOOLS_DIR}"/build-tools #rename the directory
 rm "${BUILD_TOOLS_DIR}" -rf
 fdo_log_section_end get_build-tools "get_build-tools"
 

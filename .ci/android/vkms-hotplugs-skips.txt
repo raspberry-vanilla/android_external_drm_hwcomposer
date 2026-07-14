@@ -1,1 +1,2 @@
+# Skipped temporarily until support for these are added to drmhwc
 VkmsHotplugTest.DetectSingleDisconnectHotplugs

@@ -130,7 +130,7 @@ apexer \
 java \
  -Djava.library.path=/cuttlefish/lib64 \
   -jar /cuttlefish/framework/signapk.jar \
-  -a 4096 \
+  -a 4096 --align-file-size \
   /cuttlefish/com.android.hardware.x509.pem \
   /cuttlefish/com.android.hardware.pk8 \
   /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \

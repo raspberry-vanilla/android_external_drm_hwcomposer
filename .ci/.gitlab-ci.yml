@@ -16,7 +16,7 @@ debian/x86_64_cuttlefish:
   extends:
     - .fdo.container-build@debian
     - .container
-  timeout: 6h
+  timeout: 8h
   variables:
     FDO_DISTRIBUTION_VERSION: "trixie-slim"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/debian/x86_64_cuttlefish.sh'
@@ -39,6 +39,7 @@ debian/x86_64_cuttlefish:
 ubuntu/x86_64_aospless:
   extends:
     - .ubuntu/x86_64_hwc
+  timeout: 2h
   variables:
     FDO_DISTRIBUTION_VERSION: "24.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_aospless.sh'
@@ -49,7 +50,7 @@ ubuntu/x86_64_android_binaries:
     - .ubuntu/x86_64_hwc
   timeout: 2h
   variables:
-    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_VERSION: "24.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android_binaries.sh'
     HWC_TAG: $UBUNTU_ANDROID_BINARIES_TAG
 
@@ -58,11 +59,11 @@ ubuntu/x86_64_android_tools:
     - .ubuntu/x86_64_hwc
   timeout: 2h
   variables:
-    ANDROID_VERSION: 16
+    ANDROID_VERSION: 17
     ANDROID_CTS_MODULES: >-
       CtsGraphicsTestCases
       CtsDisplayTestCases
-    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_VERSION: "24.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android_tools.sh'
     HWC_TAG: $UBUNTU_ANDROID_TOOLS_TAG
 
@@ -70,7 +71,7 @@ ubuntu/x86_64_android:
   extends:
     - .ubuntu/x86_64_hwc
   variables:
-    FDO_DISTRIBUTION_VERSION: "22.04"
+    FDO_DISTRIBUTION_VERSION: "24.04"
     FDO_DISTRIBUTION_EXEC: 'bash .ci/container/ubuntu/x86_64_android.sh'
     HWC_TAG: $UBUNTU_ANDROID_TAG
   needs:

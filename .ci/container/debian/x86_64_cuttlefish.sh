@@ -125,6 +125,7 @@ mkdir "${TOP}"
 cd "${TOP}"
 
 : "${ANDROID_BRANCH:?ANDROID_BRANCH is not set}"
+: "${ANDROID_TARGET_RELEASE:?ANDROID_TARGET_RELEASE is not set}"
 
 # prevent interactive colour diffs question
 yes n | repo init \
@@ -156,11 +157,6 @@ git fetch upstream
 # When this commit is included in the next mesa release, then just use the released version.
 MESA3D_LLVM_COMMIT="9029c8b1e37"
 git restore --source="$MESA3D_LLVM_COMMIT" android/
-
-# Revert the commit which removed the libglapi module since we still
-# need it for the Android 16 build
-MESA3D_LIBGLAPI_COMMIT="a1333d60e9f"
-git log -1 -p "${MESA3D_LIBGLAPI_COMMIT}" | patch -p1 -R
 popd
 
 # Remove references to AOSP's vulkan.lvp to avoid conflicts with Mesa make files
@@ -173,8 +169,10 @@ mkdir -p "${ALLOW_MESA_DIR}"
 echo 'external/mesa3d/android/Android.mk' > "${ALLOW_MESA_DIR}/allowlist.txt"
 
 ALLOW_MESA_PRODUCT="${TOP}/device/google/cuttlefish/vsoc_x86_64/phone/aosp_cf.mk"
-sed -i '/^PRODUCT_ALLOWED_ANDROIDMK_FILES := art\/Android.mk$/ s|$| external/mesa3d/android/Android.mk|' \
-  "${ALLOW_MESA_PRODUCT}"
+cat >> "${ALLOW_MESA_PRODUCT}" <<EOF
+PRODUCT_ALLOWED_ANDROIDMK_FILES += external/mesa3d/android/Android.mk
+PRODUCT_SOONG_ONLY := false
+EOF
 
 cat >> "${CUTTLEFISH_DEVICE_DIR}/shared/virgl/BoardConfig.mk" <<EOF
   BOARD_MESA3D_USES_MESON_BUILD := true
@@ -189,7 +187,6 @@ cat >> "${CUTTLEFISH_DEVICE_DIR}/shared/virgl/device_vendor.mk" <<EOF
     libGLESv1_CM_mesa \\
     libGLESv2_mesa \\
     libgallium_dri \\
-    libglapi \\
     vulkan.lvp
 EOF
 
@@ -208,7 +205,7 @@ fdo_log_section_start_collapsed build_cuttlefish "build_cuttlefish"
 source build/envsetup.sh
 export TARGET_BUILD_VARIANT=userdebug # needed for adb root and remount
 export TARGET_PRODUCT=aosp_cf_x86_64_phone
-export TARGET_RELEASE=bp2a
+export TARGET_RELEASE=${ANDROID_TARGET_RELEASE}
 
 # Trusty attempts to mount a fresh /proc to run nsjail,
 # but ci-templates uses buildah which already mounts /null on /proc
@@ -249,7 +246,7 @@ PHONE_FILES=(
 );
 
 for file in "${PHONE_FILES[@]}"; do cp -v "$file" "${CUTTLEFISH_DIR}/"; done;
-cp -r  "${TOP}/out/host/linux-x86/cvd-host_package/." "${CUTTLEFISH_DIR}"
+tar -xvf "${TOP}/out/host/linux-x86/cvd-host_package.tar.gz" -C "${CUTTLEFISH_DIR}"
 
 BOOTLOADER_DIR="${TOP}/out/soong/.intermediates/device/google/cuttlefish_prebuilts/bootloader"
 cp -r "${BOOTLOADER_DIR}/bootloader_crosvm_x86_64/linux_glibc_common/bootloader.crosvm" \

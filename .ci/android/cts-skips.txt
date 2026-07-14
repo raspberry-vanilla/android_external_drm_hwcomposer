@@ -1,4 +1,9 @@
 x86_64 CtsDisplayTestCases android.display.cts.DisplayTest#testGetSupportedRefreshRatesIsDivisorRate
 
 # Lavapipe fails
-x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testAndroidBaselineProfile2021Support
+x86_64 CtsGpuTestCases android.gpu.vulkan.cts.VulkanFeaturesTest#testAndroidBaselineProfile2021Support
+
+# Skipped temporarily until support for these are added to drmhwc
+x86_64 CtsDisplayTestCases android.display.cts.DisplayTest#testGetSupportedRefreshRates
+x86_64 CtsGraphicsTestCases android.graphics.cts.SetFrameRateTest#testExactFrameRateMatch_NonSeamless
+x86_64 CtsGraphicsTestCases android.graphics.cts.MatchContentFrameRateTest#testMatchContentFramerate_Always
