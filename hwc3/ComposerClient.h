@@ -33,7 +33,6 @@
 #include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
 #include <aidl/android/hardware/graphics/composer3/ContentType.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayAttribute.h>
-#include <aidl/android/hardware/graphics/composer3/DisplayBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCapability.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCommand.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayConfiguration.h>
@@ -210,22 +209,7 @@ class ComposerClient : public BnComposerClient {
       int64_t display_handle, int64_t layer_id, const Buffer& buffer,
       ::android::drm_hwcomposer::HwcLayer::Buffer* out_buffer);
 
-  // Layer commands
-  void DispatchLayerCommand(int64_t display_handle,
-                            const LayerCommand& command);
-
-  // Display commands
-  void ExecuteDisplayCommand(const DisplayCommand& command);
-  void ExecuteSetDisplayClientTarget(int64_t display_handle,
-                                     const ClientTarget& command);
-  void ExecuteSetDisplayOutputBuffer(int64_t display_handle,
-                                     const Buffer& buffer);
-  void ExecuteSetDisplayBrightness(int64_t display_handle,
-                                   const DisplayBrightness& brightness);
-
   ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
-
-  std::unique_ptr<CommandResultWriter> cmd_result_writer_;
 
   std::unique_ptr<DrmHwcThree> hwc_;
 

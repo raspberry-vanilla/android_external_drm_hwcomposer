@@ -1,6 +1,7 @@
 
 src_hwc3 = files(
     'ComposerClient.cpp',
+    'ComposerClientUtils.cpp',
     'Composer.cpp',
     'DrmHwcThree.cpp',
     'service.cpp',
