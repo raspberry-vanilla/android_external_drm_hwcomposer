@@ -326,6 +326,33 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   EXPECT_TRUE(has_90);
 }
 
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       SanitizeGroups_PreserveDifferentOutputTypes) {
+  HwcDisplayConfigs configs;
+
+  configs.hwc_configs[1] = HwcDisplayConfig{
+      .id = 1,
+      .group_id = 1,
+      .mode = CreateModeFloat(1920, 1080, 60.0F, 0, 0, "1080p60"),
+      .output_type = OutputType::kSdr,
+  };
+
+  configs.hwc_configs[2] = HwcDisplayConfig{
+      .id = 2,
+      .group_id = 1,
+      .mode = CreateModeFloat(1920, 1080, 60.0F, 0, 0, "1080p60"),
+      .output_type = OutputType::kSystem,
+  };
+
+  configs.SanitizeGroups();
+
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  ASSERT_TRUE(configs.hwc_configs.count(1));
+  EXPECT_EQ(configs.hwc_configs.at(1).output_type, OutputType::kSdr);
+  ASSERT_TRUE(configs.hwc_configs.count(2));
+  EXPECT_EQ(configs.hwc_configs.at(2).output_type, OutputType::kSystem);
+}
+
 TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_NoIdRecycling) {
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};

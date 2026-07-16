@@ -208,6 +208,10 @@ bool HwcDisplayConfigs::SanitizeGroups() {
         continue;
       }
 
+      if (config1.output_type != config2.output_type) {
+        continue;
+      }
+
       if (configs_to_erase.count(id2) > 0) {
         continue;
       }

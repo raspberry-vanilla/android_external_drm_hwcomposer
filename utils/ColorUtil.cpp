@@ -372,14 +372,18 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
 }
 
 const Lut1D<drm_color_lut32> &ColorUtil::GetDegammaLut(
-    TransferFunction tf, const size_t lut_size,
+    TransferFunction dest_tf, TransferFunction src_tf, const size_t lut_size,
     Lut1DCache<drm_color_lut32> &lut_1d_map, const float layer_brightness) {
+  if (!NeedsTonemapping(dest_tf)) {
+    return kEmptyLut<drm_color_lut32>;
+  }
+
   // Validate layer brightness
   auto lut_scale = (float)kSignalMax;
   if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
     lut_scale = layer_brightness;
   }
-  return Get1DLut<drm_color_lut32>(tf, lut_size, lut_1d_map, lut_scale,
+  return Get1DLut<drm_color_lut32>(src_tf, lut_size, lut_1d_map, lut_scale,
                                    /*is_degamma=*/true);
 }
 
@@ -387,6 +391,10 @@ const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
     TransferFunction tf, const size_t lut_size,
     Lut1DCache<drm_color_lut> &lut_1d_map, const float display_brightness,
     const float hdr_headroom) {
+  if (!NeedsTonemapping(tf)) {
+    return kEmptyLut<drm_color_lut>;
+  }
+
   // Validate display brightness
   auto lut_scale = (float)kSignalMax;
   if (display_brightness >= kSignalMin && display_brightness < kSignalMax) {

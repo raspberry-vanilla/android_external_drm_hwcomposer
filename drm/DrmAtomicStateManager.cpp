@@ -274,8 +274,8 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  if (!args.transfer_func) {
-    return true;
+  if (!args.transfer_func.has_value()) {
+    return crtc->GetGammaLutProperty().AtomicSet(*request.property_set, 0);
   }
 
   constexpr float kDefaultSignal = 1.F;
@@ -301,6 +301,8 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
       return false;
     }
     request.used_kms_objects.blobs.emplace_back(std::move(gamma_lut_blob));
+  } else {
+    return crtc->GetGammaLutProperty().AtomicSet(*request.property_set, 0);
   }
 
   return true;
@@ -442,33 +444,39 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
 
     auto *drm = pipe_->device;
     if (use_color_pipeline_ && plane->HasColorPipeline()) {
+      DrmModeUserPropertyBlobUnique ctm_3x4_blob;
+      DrmModeUserPropertyBlobUnique degamma_lut_blob;
+
+      // Set plane CTM if needed
       auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
           drm_color_ctm_3x4>(layer.colorspace,
                              args.colorspace.value_or(Colorspace::kDefault),
                              args.color_matrix, color_transform_map_);
-      DrmModeUserPropertyBlobUnique ctm_3x4_blob;
       if (drm_color_matrix) {
         ctm_3x4_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
                                                      sizeof(drm_color_ctm_3x4));
       }
 
-      constexpr float kDefaultSignal = 1.F;
-      const auto
-          &degamma_lut = ColorUtil::GetDegammaLut(layer.transfer_func,
-                                                  plane->GetDegamma1DLutSize(),
-                                                  degamma_lut_1d_map_,
-                                                  layer.brightness.value_or(
-                                                      kDefaultSignal));
-      DrmModeUserPropertyBlobUnique degamma_lut_blob;
-      DrmModeUserPropertyBlobUnique gamma_lut_blob;
-      if (!degamma_lut.empty()) {
-        degamma_lut_blob = drm->RegisterUserPropertyBlob(
-            degamma_lut.data(),
-            sizeof(drm_color_lut32) * plane->GetDegamma1DLutSize());
+      // Set degamma only when gamma is needed
+      if (args.transfer_func.has_value()) {
+        constexpr float kDefaultSignal = 1.F;
+        const auto &
+            degamma_lut = ColorUtil::GetDegammaLut(args.transfer_func.value(),
+                                                   layer.transfer_func,
+                                                   plane->GetDegamma1DLutSize(),
+                                                   degamma_lut_1d_map_,
+                                                   layer.brightness.value_or(
+                                                       kDefaultSignal));
+        if (!degamma_lut.empty()) {
+          degamma_lut_blob = drm->RegisterUserPropertyBlob(
+              degamma_lut.data(),
+              sizeof(drm_color_lut32) * plane->GetDegamma1DLutSize());
+        }
       }
+
+      // Commit CTM and Degamma LUT
       if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob,
-                                        degamma_lut_blob,
-                                        gamma_lut_blob) != 0) {
+                                        degamma_lut_blob) != 0) {
         return false;
       }
       request.used_kms_objects.blobs.emplace_back(std::move(ctm_3x4_blob));

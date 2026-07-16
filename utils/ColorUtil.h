@@ -150,7 +150,7 @@ class ColorUtil {
    * array reference.
    */
   static const Lut1D<drm_color_lut32> &GetDegammaLut(
-      TransferFunction tf, size_t lut_size,
+      TransferFunction dest_tf, TransferFunction src_tf, size_t lut_size,
       Lut1DCache<drm_color_lut32> &lut_1d_map, float layer_brightness);
   static const Lut1D<drm_color_lut> &GetGammaLut(
       TransferFunction tf, size_t lut_size,

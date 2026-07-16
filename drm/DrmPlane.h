@@ -84,6 +84,12 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
                       DrmModeUserPropertyBlobUnique &damage_out) const -> int;
   auto AtomicSetColorPipeline(
       drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
+      DrmModeUserPropertyBlobUnique &degamma_lut_blob) const -> int {
+    DrmModeUserPropertyBlobUnique dummy_blob;
+    return AtomicSetColorPipeline(pset, ctm_blob, degamma_lut_blob, dummy_blob);
+  }
+  auto AtomicSetColorPipeline(
+      drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
       DrmModeUserPropertyBlobUnique &degamma_lut_blob,
       DrmModeUserPropertyBlobUnique &gamma_lut_blob) const -> int;
   auto AtomicDisablePlane(drmModeAtomicReq &pset) -> int;
