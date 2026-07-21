@@ -865,15 +865,17 @@ bool HwcDisplay::Init() {
 #endif
 
     // Attempt to initialize backlight
-    auto backlights = SysfsBacklightController::EnumerateBacklights();
-    for (const auto &name : backlights) {
-      // TODO(seanpaul): logic to associate backlight with connector
-      backlight_controller_ = SysfsBacklightController::CreateInstanceFromName(
-          name);
-      if (backlight_controller_) {
-        ALOGI("Associated backlight %s with display %d", name.c_str(),
-              static_cast<int>(handle_));
-        break;
+    if (GetPipe().connector->Get()->IsInternal()) {
+      auto backlights = SysfsBacklightController::EnumerateBacklights();
+      for (const auto &name : backlights) {
+        // TODO(seanpaul): logic to associate backlight with connector
+        backlight_controller_ = SysfsBacklightController::CreateInstanceFromName(
+            name);
+        if (backlight_controller_) {
+          ALOGI("Associated backlight %s with display %d", name.c_str(),
+                static_cast<int>(handle_));
+          break;
+        }
       }
     }
   }
