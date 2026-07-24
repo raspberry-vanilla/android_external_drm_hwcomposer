@@ -186,6 +186,12 @@ auto Properties::GetCtmHandling() -> CtmHandling {
   return CtmHandling::kDrmOrGpu;
 }
 
+auto Properties::BugfixCursorCtmOffset() -> bool {
+  constexpr int kDefault = 1;
+  return (property_get_bool("vendor.hwc.drm.bugfix_cursor_ctm_offset",
+                            kDefault) != 0);
+}
+
 auto Properties::GetBackendOverride() -> std::string {
   char backend_override[PROPERTY_VALUE_MAX];
   property_get("vendor.hwc.backend_override", backend_override, "");

@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -87,6 +88,7 @@ class ResourceManager {
   auto GetVirtualDisplayPipeline() -> std::shared_ptr<DrmDisplayPipeline>;
   auto GetWritebackConnectorsCount() -> uint32_t;
   auto GetInternalDisplayNames() -> const std::set<std::string>&;
+  std::optional<std::string> DumpBackends();
 
   static auto GetTimeMonotonicNs() -> int64_t;
 

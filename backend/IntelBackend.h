@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
-#include <string>
 
+#include "backend/Backend.h"
 #include "backend/GenericBackend.h"
 
 namespace android::drm_hwcomposer {
@@ -11,7 +11,7 @@ class CompositionPlanner;
 
 class IntelBackend : public GenericBackend {
  public:
-  explicit IntelBackend(const std::string& name);
+  explicit IntelBackend(DrmDevice& drm_device);
   ~IntelBackend() override = default;
 
  protected:

@@ -80,7 +80,6 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-using ::android::drm_hwcomposer::BackendManager;
 using ::android::drm_hwcomposer::BufferBlendMode;
 using ::android::drm_hwcomposer::DisplayHandle;
 using ::android::drm_hwcomposer::GrallocBufferCache;
@@ -1081,7 +1080,7 @@ std::string ComposerClient::Dump() {
   std::stringstream output;
   output << hwc_->DumpState();
   output << "\n- Backends\n";
-  auto dump = BackendManager::GetInstance().DumpBackends();
+  auto dump = hwc_->GetResMan().DumpBackends();
   output << dump.value_or("N/A\n");
   return output.str();
 }

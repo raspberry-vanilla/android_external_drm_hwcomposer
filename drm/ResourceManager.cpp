@@ -24,6 +24,7 @@
 #include <ctime>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -32,6 +33,7 @@
 
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
+#include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -53,10 +55,6 @@ void ResourceManager::Init() {
     ALOGE("Already initialized");
     return;
   }
-
-  // Ensure that Backends have been initialized before the BackendManager is
-  // used.
-  BackendManager::GetInstance().InitializeBackends();
 
   color_pipeline_enabled_ = Properties::UseColorPipeline();
   force_color_mode_ = Properties::ForceColorMode();
@@ -89,6 +87,7 @@ void ResourceManager::Init() {
       }
     }
   }
+  ALOGE_IF(drms_.empty(), "No DRM devices available.");
 
   auto display_str = Properties::InternalDisplayNames();
   auto display_names = base::Tokenize(display_str, ",");
@@ -98,11 +97,15 @@ void ResourceManager::Init() {
   ctm_handling_ = Properties::GetCtmHandling();
 
   if (BufferInfoGetter::GetInstance() == nullptr) {
-    auto buffer_info_getter = BackendManager::GetInstance()
-                                  .CreateBufferInfoGetter();
+    std::unique_ptr<BufferInfoGetter> buffer_info_getter;
+    if (!drms_.empty()) {
+      buffer_info_getter = drms_[0]->GetBackend().CreateBufferInfoGetter();
+    }
     if (!buffer_info_getter) {
-      ALOGE("Failed to create BufferInfoGetter");
-      return;
+      ALOGE(
+          "Failed to create BufferInfoGetter from backend, falling back to "
+          "BufferInfoMapperMetadata.");
+      buffer_info_getter = BufferInfoMapperMetadata::CreateInstance();
     }
     BufferInfoGetter::Init(std::move(buffer_info_getter));
   }
@@ -169,8 +172,7 @@ void ResourceManager::UpdateFrontendDisplays() {
 
       if (connected) {
         std::shared_ptr<DrmDisplayPipeline>
-            pipeline = BackendManager::GetInstance().CreatePipelineForConnector(
-                *conn);
+            pipeline = conn->GetDev().GetBackend().CreatePipeline(*conn);
         ALOGE_IF(pipeline == nullptr,
                  "Failed to create pipeline for connector %s",
                  conn->GetName().c_str());
@@ -271,6 +273,20 @@ auto ResourceManager::GetWritebackConnectorsCount() -> uint32_t {
     count += drm->GetWritebackConnectors().size();
   }
   return count;
+}
+
+std::optional<std::string> ResourceManager::DumpBackends() {
+  std::stringstream output;
+  for (auto &drm : drms_) {
+    auto dump = drm->GetBackend().Dump();
+    if (dump.has_value()) {
+      output << "\n<start " << drm->GetName() << ">\n";
+      output << dump.value();
+      output << "\n<end " << drm->GetName() << ">\n";
+    }
+  }
+  auto result = output.str();
+  return result.empty() ? std::nullopt : std::make_optional(result);
 }
 
 }  // namespace android::drm_hwcomposer

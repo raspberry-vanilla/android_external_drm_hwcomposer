@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "backend/Backend.h"
 #include "drm/AtomicCommitSink.h"
 #include "drm/DrmUnique.h"
 #include "utils/fd.h"
@@ -65,6 +66,10 @@ class DrmDevice {
 
   auto &GetAtomicCommitSink() {
     return *atomic_commit_sink_;
+  }
+
+  Backend &GetBackend() const {
+    return *backend_;
   }
 
   auto GetConnectors() -> const std::vector<std::unique_ptr<DrmConnector>> &;
@@ -139,6 +144,7 @@ class DrmDevice {
   bool HasAddFb2ModifiersSupport_{};
 
   std::unique_ptr<DrmFbImporter> drm_fb_importer_;
+  std::unique_ptr<Backend> backend_;
   std::unique_ptr<AtomicCommitSink> atomic_commit_sink_;
 
   ResourceManager *const res_man_;

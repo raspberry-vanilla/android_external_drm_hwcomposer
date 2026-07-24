@@ -17,9 +17,8 @@
 #pragma once
 
 #include <memory>
-#include <string>
 
-#include "backend/BackendManager.h"
+#include "backend/Backend.h"
 #include "compositor/CompositionPlanner.h"
 
 namespace android::drm_hwcomposer {
@@ -29,8 +28,10 @@ class DrmConnector;
 struct DrmDisplayPipeline;
 
 // Implement the Backend interface on top of upstream drm uAPI.
-class GenericBackend : public BackendManager::Backend {
+class GenericBackend : public Backend {
  public:
+  explicit GenericBackend(DrmDevice& drm);
+
   // Create a DrmDisplayPipeline using generic heuristics on top of upstream drm
   // uAPI.
   std::unique_ptr<DrmDisplayPipeline> CreatePipeline(
@@ -44,16 +45,10 @@ class GenericBackend : public BackendManager::Backend {
   std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink() override;
 
  protected:
-  explicit GenericBackend(const std::string& name);
-
   // Create a new GenericCompositionPlanner. Subclasses can override
   // this to create different composition planners while using the default logic
   // to create a DrmDisplayPipeline.
   virtual std::unique_ptr<CompositionPlanner> CreateCompositionPlanner();
-
- private:
-  GenericBackend();
-  static GenericBackend instance;
 };
 
 }  // namespace android::drm_hwcomposer

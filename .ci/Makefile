@@ -128,6 +128,7 @@ SKIP_FILES := \
     stats/StatsTest.cpp \
     utils/BacklightControllerTest.cpp \
     utils/SysfsBacklightControllerTest.cpp \
+    tests/backend_test_stub.cpp \
 
 BUILD_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -path '*.cpp')
 SKIP_FILES_path := $(foreach file,$(SKIP_FILES),$(SRC_DIR)/$(file))

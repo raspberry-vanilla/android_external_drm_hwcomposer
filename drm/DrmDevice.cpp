@@ -95,8 +95,6 @@ auto DrmDevice::Init(const char *path) -> int {
     ALOGE("Failed to open dri %s: %s", path, strerror(errno));
     return -ENODEV;
   }
-  atomic_commit_sink_ = BackendManager::GetInstance().CreateAtomicCommitSink(
-      GetName());
 
   int ret = drmSetClientCap(*GetFd(), DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
   if (ret != 0) {
@@ -200,10 +198,21 @@ auto DrmDevice::Init(const char *path) -> int {
   for (uint32_t i = 0; i < plane_res->count_planes; ++i) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     auto plane = DrmPlane::CreateInstance(*this, plane_res->planes[i]);
-
     if (plane) {
       planes_.emplace_back(std::move(plane));
     }
+  }
+
+  backend_ = BackendManager::GetInstance().CreateBackendForDevice(*this);
+  if (!backend_) {
+    ALOGE("Failed to create backend for device %s", GetName().c_str());
+    return -ENODEV;
+  }
+  atomic_commit_sink_ = backend_->CreateAtomicCommitSink();
+  if (!atomic_commit_sink_) {
+    ALOGE("Failed to create atomic commit sink for device %s",
+          GetName().c_str());
+    return -ENODEV;
   }
 
   return 0;

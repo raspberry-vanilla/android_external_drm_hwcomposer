@@ -14,26 +14,15 @@
  * limitations under the License.
  */
 
-#include <memory>
-#include <string>
-
 #include "backend/Backend.h"
-#include "backend/BackendManager.h"
+
+#include "drm/DrmDevice.h"
 
 namespace android::drm_hwcomposer {
 
-BackendManager &BackendManager::GetInstance() {
-  static BackendManager backend_manager;
-  return backend_manager;
+// The DrmDevice passed into the constructor is the one that owns this Backend
+// instance.
+Backend::Backend(DrmDevice &drm) : drm_(&drm) {
 }
 
-void BackendManager::RegisterCreator(const std::string & /*name*/,
-                                     BackendCreator /*creator*/) {
-}
-
-std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
-    DrmDevice & /*drm*/) {
-  return nullptr;
-}
-
-}   // namespace android::drm_hwcomposer
+}  // namespace android::drm_hwcomposer

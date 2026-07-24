@@ -52,15 +52,13 @@ class GenericLayerMapperCompositionPlanner : public CompositionPlanner {
       const std::vector<LayerMapping>& layers,
       FlattenReason flatten_reason) const;
 
-  bool ShouldUseCursorPlane(const ICompositorDisplay* display,
-                            const std::vector<LayerMapping>& layers) const;
+  CompositionType GetCursorCompositionType(
+      const ICompositorDisplay* display,
+      const std::vector<LayerMapping>& layers) const;
 
   const CursorLayerMapper& GetCursorMapper(bool use_cursor_plane) const;
 
-  // Maps cursor layer to kCursor composition type.
   CursorLayerMapper cursor_mapper_;
-  // Maps cursor layer to kDevice composition type as a fallback.
-  CursorLayerMapper device_cursor_mapper_;
   ForceClientCompositionLayerMapper force_client_composition_mapper_;
   LayerCachingMapper layer_caching_mapper_;
   LeftoverLayerMapper leftover_mapper_;

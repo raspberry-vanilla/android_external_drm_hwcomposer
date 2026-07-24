@@ -16,9 +16,11 @@
 
 #include <memory>
 
+#include "backend/BackendManager.h"
 #include "backend/GenericBackend.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/ICompositorDisplay.h"
+#include "drm/DrmDevice.h"
 
 namespace android::drm_hwcomposer {
 namespace {
@@ -35,19 +37,16 @@ class ClientCompositionPlanner : public CompositionPlanner {
 
 class ClientBackend : public GenericBackend {
  public:
+  explicit ClientBackend(DrmDevice& drm) : GenericBackend(drm) {
+  }
+
   std::unique_ptr<CompositionPlanner> CreateCompositionPlanner() override {
     return std::make_unique<ClientCompositionPlanner>();
   }
-
- private:
-  ClientBackend() : GenericBackend("client") {
-  }
-
-  static ClientBackend instance;
 };
 
 // NOLINTNEXTLINE(cert-err58-cpp)
-ClientBackend ClientBackend::instance;
+const BackendManager::RegisterBackend<ClientBackend> kRegisterClient("client");
 
 }  // namespace
 }  // namespace android::drm_hwcomposer

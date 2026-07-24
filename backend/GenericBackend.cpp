@@ -18,6 +18,7 @@
 
 #include <memory>
 
+#include "backend/Backend.h"
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "compositor/CompositionPlanner.h"
@@ -36,11 +37,7 @@
 
 namespace android::drm_hwcomposer {
 
-GenericBackend::GenericBackend() : GenericBackend("generic") {
-}
-
-GenericBackend::GenericBackend(const std::string& name)
-    : BackendManager::Backend(name) {
+GenericBackend::GenericBackend(DrmDevice& drm) : Backend(drm) {
 }
 
 std::unique_ptr<DrmDisplayPipeline> GenericBackend::CreatePipeline(
@@ -81,6 +78,7 @@ std::unique_ptr<AtomicCommitSink> GenericBackend::CreateAtomicCommitSink() {
 }
 
 // NOLINTNEXTLINE(cert-err58-cpp)
-GenericBackend GenericBackend::instance;
+const BackendManager::RegisterBackend<GenericBackend> kRegisterGeneric(
+    "generic");
 
 }  // namespace android::drm_hwcomposer

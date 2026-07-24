@@ -34,7 +34,11 @@ class CursorLayerMapper : public LayerMapper {
       const std::vector<LayerMapping>& layers,
       const MappingValidator& validator) const override;
 
+  void SetCursorPlaneType(CompositionType cursor_plane_type) {
+    cursor_plane_type_ = cursor_plane_type;
+  }
+
  private:
-  const CompositionType cursor_plane_type_;
+  CompositionType cursor_plane_type_;
 };
 }  // namespace android::drm_hwcomposer

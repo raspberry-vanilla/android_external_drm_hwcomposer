@@ -109,6 +109,7 @@ filegroup {
         "drm/UEventListener.cpp",
         "drm/VSyncWorker.cpp",
 
+        "backend/Backend.cpp",
         "backend/BackendManager.cpp",
         "backend/ClientBackend.cpp",
         "backend/GenericBackend.cpp",

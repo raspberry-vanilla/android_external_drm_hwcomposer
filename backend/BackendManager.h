@@ -16,97 +16,47 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
+
+#include "backend/Backend.h"
 
 namespace android::drm_hwcomposer {
 
 class AtomicCommitSink;
 class BufferInfoGetter;
 class DrmConnector;
+class DrmDevice;
 struct DrmDisplayPipeline;
 
-// BackendManager is a singleton that manages the registration of Backends and
-// finding a Backend which can be used to create a DrmDisplayPipeline for a
-// DrmConnector.
+// BackendManager is a singleton that manages the registration of Backend
+// creators and instantiating them for DrmDevices.
 class BackendManager {
  public:
-  // Backend is the top-level interface for any driver-specific or custom logic
-  // for configuring a DrmDisplayPipeline for a DrmConnector, as well as
-  // driver-specific or custom composition rules in a CompositionPlanner
-  // implementation.
-  class Backend {
-   public:
-    // Backend base class will register a backend called |name| on construction,
-    // and deregister on destruction. The name must be unique across all
-    // Backends.
-    explicit Backend(const std::string &name);
-    virtual ~Backend();
-
-    // Backends with non-trivial initialization can override Init. If this
-    // returns false, then the backend will be removed from the BackendManager.
-    virtual bool Init() {
-      return true;
-    };
-
-    // Create a DrmDisplayPipeline for the given DrmConnector, including
-    // creating the CompositionPlanner for this DrmDisplayPipeline.
-    virtual std::unique_ptr<DrmDisplayPipeline> CreatePipeline(
-        DrmConnector &connector) = 0;
-
-    // Get the BufferInfoGetter for the Backend.
-    virtual std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter() = 0;
-
-    virtual bool SupportsDoze() const {
-      return false;
-    }
-
-    virtual bool SupportsDozeSuspend() const {
-      return false;
-    }
-
-    virtual bool SupportsSuspend() const {
-      return false;
-    }
-    // Get the atomiCommitSink for the Backend.
-    virtual std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink() = 0;
-
-    virtual std::optional<std::string> Dump() {
-      return std::nullopt;
-    }
-
-   private:
-    std::string name_;
-  };
+  using BackendCreator = std::function<std::unique_ptr<Backend>(DrmDevice &)>;
 
   static BackendManager &GetInstance();
-  void RegisterBackend(const std::string &name, Backend *backend);
-  void UnregisterBackend(const std::string &name);
 
-  void InitializeBackends();
+  void RegisterCreator(const std::string &name, BackendCreator creator);
+  std::unique_ptr<Backend> CreateBackendForDevice(DrmDevice &drm);
 
-  std::unique_ptr<DrmDisplayPipeline> CreatePipelineForConnector(
-      DrmConnector &connector);
-
-  // Get the BufferInfoGetter for the Backend.
-  std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter();
-
-  bool IsDozeSupported(const std::string &driver_name);
-  bool IsDozeSuspendSupported(const std::string &driver_name);
-  bool IsSuspendSupported(const std::string &driver_name);
-  std::unique_ptr<AtomicCommitSink> CreateAtomicCommitSink(
-      const std::string &driver_name);
-
-  std::optional<std::string> DumpBackends();
+  // Template helper for static registration of backends
+  template <typename T>
+  class RegisterBackend {
+   public:
+    explicit RegisterBackend(const std::string &name) {
+      BackendManager::GetInstance().RegisterCreator(name, [](DrmDevice &drm) {
+        return std::make_unique<T>(drm);
+      });
+    }
+  };
 
  private:
-  Backend *GetBackendByName(std::string &name);
-
   BackendManager() = default;
 
-  std::map<std::string, Backend *> available_backends_;
+  std::map<std::string, BackendCreator> creators_;
 };
 
 }  // namespace android::drm_hwcomposer

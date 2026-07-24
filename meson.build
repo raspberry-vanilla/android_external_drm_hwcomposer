@@ -10,6 +10,7 @@ project(
 inc_include = [include_directories('.')]
 
 src_common = files(
+    'backend/Backend.cpp',
     'backend/BackendManager.cpp',
     'backend/ClientBackend.cpp',
     'backend/GenericBackend.cpp',

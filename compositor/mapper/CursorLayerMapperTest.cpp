@@ -182,6 +182,45 @@ TEST_P(CursorLayerMapperTest, ValidatorRejectCursor) {
                                       CompositionType::kInvalid))));
 }
 
+TEST_P(CursorLayerMapperTest, SetCursorPlaneType) {
+  const CompositionType cursor_type = GetParam();
+  CursorLayerMapper mapper(cursor_type);
+
+  mapper.SetCursorPlaneType(CompositionType::kClient);
+
+  MockCompositorDisplay mock_display;
+  HwcLayer
+      non_cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                    IRect{.left = 0,
+                                                          .top = 0,
+                                                          .right = 1920,
+                                                          .bottom = 1080},
+                                                    /*z_order=*/1,
+                                                    CompositionType::kDevice);
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/4,
+                                                     CompositionType::kCursor);
+
+  std::vector<LayerMapping> mappings = {{&non_cursor,
+                                         CompositionType::kInvalid},
+                                        {&cursor, CompositionType::kInvalid}};
+
+  std::vector<LayerMapping> result = mapper.AssignLayers(mappings,
+                                                         TrueValidator);
+
+  EXPECT_THAT(result,
+              ElementsAre(AllOf(Field(&LayerMapping::layer, &non_cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kInvalid)),
+                          AllOf(Field(&LayerMapping::layer, &cursor),
+                                Field(&LayerMapping::composition_type,
+                                      CompositionType::kClient))));
+}
+
 INSTANTIATE_TEST_SUITE_P(CursorAndDeviceComposition, CursorLayerMapperTest,
                          testing::Values(CompositionType::kCursor,
                                          CompositionType::kDevice));

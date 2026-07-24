@@ -18,12 +18,11 @@
 
 #include <algorithm>
 #include <memory>
-#include <optional>
-#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "bufferinfo/BufferInfoGetter.h"
+#include "backend/Backend.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -42,161 +41,42 @@ const std::vector<std::string> kClientDevices = {
 };
 }  // namespace
 
-BackendManager::Backend::Backend(const std::string &name) : name_(name) {
-  BackendManager::GetInstance().RegisterBackend(name, this);
-}
-
-BackendManager::Backend::~Backend() {
-  BackendManager::GetInstance().UnregisterBackend(name_);
-}
-
 BackendManager &BackendManager::GetInstance() {
   static BackendManager backend_manager;
-
   return backend_manager;
 }
 
-void BackendManager::RegisterBackend(const std::string &name,
-                                     Backend *backend) {
-  if (available_backends_.count(name) != 0) {
-    ALOGE("Backend %s already registered.", name.c_str());
+void BackendManager::RegisterCreator(const std::string &name,
+                                     BackendCreator creator) {
+  if (creators_.count(name) != 0) {
+    ALOGE("Backend creator for %s already registered.", name.c_str());
     return;
   }
-  available_backends_[name] = backend;
+  creators_[name] = std::move(creator);
 }
 
-void BackendManager::UnregisterBackend(const std::string &name) {
-  available_backends_.erase(name);
-}
-
-void BackendManager::InitializeBackends() {
-  for (auto it = available_backends_.begin();
-       it != available_backends_.end();) {
-    bool success = it->second->Init();
-    if (!success) {
-      ALOGE("Failed to initialize backend %s", it->first.c_str());
-      it = available_backends_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-std::unique_ptr<DrmDisplayPipeline> BackendManager::CreatePipelineForConnector(
-    DrmConnector &connector) {
-  auto driver_name(connector.GetDev().GetName());
-  std::string backend_name = Properties::GetBackendOverride();
-  if (backend_name.empty()) {
-    backend_name = driver_name;
-  }
-
-  auto *backend = GetBackendByName(backend_name);
-  if (backend == nullptr) {
-    ALOGE("Failed to find backend '%s' for '%s' and driver '%s'",
-          backend_name.c_str(), connector.GetName().c_str(),
-          driver_name.c_str());
-    return nullptr;
-  }
-  ALOGI("Found Backend '%s' for '%s' and driver '%s'", backend_name.c_str(),
-        connector.GetName().c_str(), driver_name.c_str());
-
-  return backend->CreatePipeline(connector);
-}
-
-bool BackendManager::IsDozeSupported(const std::string &driver_name) {
-  std::string backend_name = Properties::GetBackendOverride();
-  if (backend_name.empty()) {
-    backend_name = driver_name;
-  }
-
-  auto *backend = GetBackendByName(backend_name);
-  if (backend != nullptr) {
-    return backend->SupportsDoze();
-  }
-  return false;
-}
-
-bool BackendManager::IsDozeSuspendSupported(const std::string &driver_name) {
-  std::string backend_name = Properties::GetBackendOverride();
-  if (backend_name.empty()) {
-    backend_name = driver_name;
-  }
-
-  auto *backend = GetBackendByName(backend_name);
-  if (backend != nullptr) {
-    return backend->SupportsDozeSuspend();
-  }
-  return false;
-}
-
-bool BackendManager::IsSuspendSupported(const std::string &driver_name) {
-  std::string backend_name = Properties::GetBackendOverride();
-  if (backend_name.empty()) {
-    backend_name = driver_name;
-  }
-
-  auto *backend = GetBackendByName(backend_name);
-  if (backend != nullptr) {
-    return backend->SupportsSuspend();
-  }
-  return false;
-}
-
-std::unique_ptr<BufferInfoGetter> BackendManager::CreateBufferInfoGetter() {
-  // If backend override is not specified, the generic backend will be used.
-  std::string backend_name = Properties::GetBackendOverride();
-  auto *backend = GetBackendByName(backend_name);
-  if (backend == nullptr) {
-    ALOGE("Failed to find backend");
-    return nullptr;
-  }
-  return backend->CreateBufferInfoGetter();
-}
-
-std::unique_ptr<AtomicCommitSink> BackendManager::CreateAtomicCommitSink(
-    const std::string &driver_name) {
-  // If backend override is not specified, the generic backend will be used.
-  std::string backend_name = Properties::GetBackendOverride();
-  if (backend_name.empty()) {
-    backend_name = driver_name;
-  }
-
-  auto *backend = GetBackendByName(backend_name);
-  if (backend == nullptr) {
-    ALOGE("Failed to find backend");
-    return nullptr;
-  }
-  return backend->CreateAtomicCommitSink();
-}
-
-BackendManager::Backend *BackendManager::GetBackendByName(std::string &name) {
-  if (available_backends_.empty()) {
-    ALOGE("No backends are specified");
+std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
+    DrmDevice &drm) {
+  if (creators_.empty()) {
+    ALOGE("No backends are registered");
     return nullptr;
   }
 
-  auto it = available_backends_.find(name);
-  if (it == available_backends_.end()) {
-    auto it = std::find(kClientDevices.begin(), kClientDevices.end(), name);
-    name = it == kClientDevices.end() ? "generic" : "client";
+  std::string name = Properties::GetBackendOverride();
+  if (name.empty()) {
+    name = drm.GetName();
   }
 
-  return available_backends_[name];
-}
-
-std::optional<std::string> BackendManager::DumpBackends() {
-  std::stringstream output;
-  for (auto &[name, backend] : available_backends_) {
-    auto dump = backend->Dump();
-    if (dump.has_value()) {
-      output << "\n<start " << name << ">\n";
-      output << dump.value();
-      output << "\n<end " << name << ">\n";
-    }
+  auto it = creators_.find(name);
+  if (it == creators_.end()) {
+    auto client_it = std::find(kClientDevices.begin(), kClientDevices.end(),
+                               name);
+    name = client_it == kClientDevices.end() ? "generic" : "client";
   }
 
-  auto result = output.str();
-  return result.empty() ? std::nullopt : std::make_optional(result);
+  ALOGI("Creating backend '%s' for device '%s'", name.c_str(),
+        drm.GetName().c_str());
+  return creators_[name](drm);
 }
 
 }  // namespace android::drm_hwcomposer

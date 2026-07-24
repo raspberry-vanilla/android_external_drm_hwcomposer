@@ -34,6 +34,7 @@ class Properties {
   static auto EnableVirtualDisplay() -> bool;
   static auto EnableExternalDisplays() -> bool;
   static auto GetCtmHandling() -> CtmHandling;
+  static auto BugfixCursorCtmOffset() -> bool;
   static auto GetBackendOverride() -> std::string;
   static auto GetDevicePath() -> std::string;
   static auto GetForceMode() -> std::string;

@@ -658,24 +658,21 @@ bool HwcDisplay::IsDozeSupported() const {
   if (IsInHeadlessMode()) {
     return false;
   }
-  return BackendManager::GetInstance().IsDozeSupported(
-      GetPipe().device->GetName());
+  return GetPipe().device->GetBackend().SupportsDoze();
 }
 
 bool HwcDisplay::IsDozeSuspendSupported() const {
   if (IsInHeadlessMode()) {
     return false;
   }
-  return BackendManager::GetInstance().IsDozeSuspendSupported(
-      GetPipe().device->GetName());
+  return GetPipe().device->GetBackend().SupportsDozeSuspend();
 }
 
 bool HwcDisplay::IsSuspendSupported() const {
   if (IsInHeadlessMode()) {
     return false;
   }
-  return BackendManager::GetInstance().IsSuspendSupported(
-      GetPipe().device->GetName());
+  return GetPipe().device->GetBackend().SupportsSuspend();
 }
 
 HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
