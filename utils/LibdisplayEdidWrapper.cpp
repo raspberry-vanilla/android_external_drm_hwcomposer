@@ -29,6 +29,7 @@ extern "C" {
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmUnique.h"
+
 #include "utils/EdidWrapper.h"
 #include "utils/log.h"
 
@@ -131,14 +132,15 @@ EdidWrapper::VendorProductInfo LibdisplayEdidWrapper::GetVendorProductInfo()
     const {
   auto vendor = VendorProductInfo{.make = std::string(di_info_get_make(info_)),
                                   .model = std::string(
-                                      di_info_get_model(info_)),
-                                  .year = 0};
+                                      di_info_get_model(info_))};
 
   const auto *edid = di_info_get_edid(info_);
   if (edid != nullptr) {
     const auto *vendor_product = di_edid_get_vendor_product(edid);
     if (vendor_product != nullptr) {
       vendor.year = vendor_product->manufacture_year;
+      vendor.manufacturer = vendor_product->manufacturer;
+      vendor.product_code = vendor_product->product;
     }
   }
 

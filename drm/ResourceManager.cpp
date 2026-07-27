@@ -17,9 +17,12 @@
 #include "ResourceManager.h"
 
 #include <android-base/strings.h>
+#include <cutils/properties.h>
 #include <linux/time.h>
 #include <sys/stat.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <ctime>
 #include <memory>
@@ -28,6 +31,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -42,6 +46,104 @@
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
+
+namespace {
+
+// Quirk flags for connectors identified via EDID manufacturer ID.
+enum ConnectorQuirk : uint32_t {
+  // Monitor uses a TCON/scaler that initially serves a dummy low-resolution
+  // EDID on boot. The real EDID becomes available only after the DP link is
+  // torn down and re-established, giving the scaler time to complete its
+  // internal initialization. Seen on Novatek-based gaming monitors connected
+  // via USB-C DP-alt (e.g. ASUS VG28UQL1A).
+  kQuirkDelayedEdidOnBoot = 1 << 0,
+};
+
+struct EdidQuirkEntry {
+  const char *mfg_id;    // 3-letter PNP manufacturer ID
+  std::optional<uint16_t> product_code; // nullopt = match any product
+  uint32_t quirks;       // Bitmask of ConnectorQuirk flags
+};
+
+// Table of known monitors/scalers requiring special handling.
+// To add a new quirk: append an entry with the manufacturer PNP ID
+// (from EDID bytes 8-9) and the applicable quirk flags.
+constexpr EdidQuirkEntry kEdidQuirks[] = {
+    // Novatek Microelectronics TCON/scaler: boots with dummy 2K EDID over
+    // DP1.2/HBR2, real 4K EDID (DP1.4/HBR3) available ~2-3s after boot
+    // on a fresh DP link session.
+    {"NVT", std::nullopt, kQuirkDelayedEdidOnBoot},
+};
+
+// Decode the PNP manufacturer ID from an EDID blob and return matching quirks.
+constexpr size_t kMinEdidBlobSize = 16;
+constexpr int kDefaultRecoveryDelayMs = 3000;
+
+uint32_t GetEdidQuirks(DrmConnector *conn) {
+  auto blob = conn->GetEdidBlob();
+  if (!blob || blob->length < kMinEdidBlobSize)
+    return 0;
+
+  std::string pnp_id;
+  uint16_t product = 0;
+
+#if HAS_LIBDISPLAY_INFO
+  // TODO(aswolfers): Move EdidWrapper ownership to DrmConnector to avoid decoding the
+  // EDID blob a second time here (HwcDisplay already creates one).
+  auto edid_wrapper = LibdisplayEdidWrapper::Create(std::move(blob));
+  if (edid_wrapper) {
+    auto info = edid_wrapper->GetVendorProductInfo();
+    pnp_id = info.manufacturer.substr(0, 3);
+    product = info.product_code;
+  }
+#else
+  // NOLINTBEGIN(readability-magic-numbers, cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  // Fall back to raw EDID parsing when libdisplay-info is not available.
+  const auto *edid = static_cast<const uint8_t *>(blob->data);
+
+  // Validate EDID header (00 FF FF FF FF FF FF 00)
+  if (edid[0] != 0x00 || edid[1] != 0xFF || edid[6] != 0xFF ||
+      edid[7] != 0x00) {
+    return 0;
+  }
+
+  // Manufacturer PNP ID at bytes 8-9 (big-endian 16-bit).
+  // Decode 3 letters: bits[14:10]=1st, bits[9:5]=2nd, bits[4:0]=3rd
+  // where A=1, B=2, ..., Z=26
+  uint16_t mfg = (static_cast<uint16_t>(edid[8]) << 8) | edid[9];
+  char id[4] = {
+      static_cast<char>(((mfg >> 10) & 0x1F) + 'A' - 1),
+      static_cast<char>(((mfg >> 5) & 0x1F) + 'A' - 1),
+      static_cast<char>((mfg & 0x1F) + 'A' - 1),
+      '\0'};
+  pnp_id = id;
+
+  // EDID product code at bytes 10-11 (little-endian)
+  product = static_cast<uint16_t>(edid[10]) |
+            (static_cast<uint16_t>(edid[11]) << 8);
+  // NOLINTEND(readability-magic-numbers, cppcoreguidelines-pro-bounds-pointer-arithmetic)
+#endif
+
+  if (pnp_id.empty())
+    return 0;
+
+  uint32_t quirks = 0;
+  for (const auto &entry : kEdidQuirks) {
+    if (pnp_id == entry.mfg_id &&
+        (!entry.product_code || *entry.product_code == product)) {
+      quirks |= entry.quirks;
+    }
+  }
+  return quirks;
+}
+
+// Convenience: check if a connector has the delayed-EDID-on-boot quirk.
+bool HasDelayedEdidQuirk(DrmConnector *conn) {
+  return (GetEdidQuirks(conn) & kQuirkDelayedEdidOnBoot) != 0;
+}
+
+}  // namespace
+
 
 ResourceManager::ResourceManager(
     PipelineToFrontendBindingInterface *p2f_bind_interface)
@@ -127,6 +229,7 @@ void ResourceManager::Init() {
   });
 
   UpdateFrontendDisplays();
+  MaybeScheduleDelayedEdidRecovery();
   frontend_interface_->FlushHotplugEvents();
 
   initialized_ = true;
@@ -137,6 +240,8 @@ void ResourceManager::DeInit() {
     ALOGE("Not initialized");
     return;
   }
+
+  CancelDelayedEdidRecovery();
 
   uevent_listener_.reset();
 
@@ -287,6 +392,108 @@ std::optional<std::string> ResourceManager::DumpBackends() {
   }
   auto result = output.str();
   return result.empty() ? std::nullopt : std::make_optional(result);
+}
+
+
+void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
+  // Check if any attached external DP connector matches a delayed-EDID quirk
+  // (indicates the monitor's scaler hasn't finished booting yet).
+  DrmConnector *quirk_conn = nullptr;
+  for (auto &[conn, pipeline] : attached_pipelines_) {
+    if (conn->IsConnected() && conn->IsExternal() &&
+        conn->GetConnectorType() == DRM_MODE_CONNECTOR_DisplayPort && // NOLINT(misc-include-cleaner)
+        HasDelayedEdidQuirk(conn)) {
+      quirk_conn = conn;
+      break;
+    }
+  }
+
+  if (quirk_conn == nullptr) {
+    return;
+  }
+
+  // Configurable delay (ms) for the scaler to finish its boot sequence.
+  // Default 3000ms is sufficient for Novatek-based TCONs.
+  int delay_ms = property_get_int32(
+      "vendor.hwc.delayed_edid_recovery_ms", kDefaultRecoveryDelayMs);
+  if (delay_ms <= 0) {
+    ALOGW("Delayed-EDID recovery disabled via property on %s",
+          quirk_conn->GetName().c_str());
+    return;
+  }
+
+  ALOGI("Delayed-EDID quirk matched on %s, scheduling DP link-reset reprobe "
+        "in %d ms",
+        quirk_conn->GetName().c_str(), delay_ms);
+
+  edid_recovery_pending_ = true;
+  edid_recovery_thread_ = std::thread([this, delay_ms] {
+    // Wait for the scaler to complete its internal boot sequence.
+    // Use a condition variable so DeInit() can cancel this wait.
+    {
+      std::unique_lock lock(edid_recovery_mutex_);
+      if (edid_recovery_cv_.wait_for(lock,
+                                     std::chrono::milliseconds(delay_ms),
+                                     [this] { return !edid_recovery_pending_; })) {
+        ALOGI("Delayed-EDID recovery cancelled");
+        return;
+      }
+    }
+
+    std::unique_lock lock(GetMainLock());
+
+    // Unbind all external DP connectors that match delayed-EDID quirk.
+    // This disables the CRTC -> tears down the DP link from the source side,
+    // forcing the kernel to do full link re-training on next modeset.
+    for (auto it = attached_pipelines_.begin();
+         it != attached_pipelines_.end();) {
+      auto *conn = it->first;
+      if (conn->IsConnected() && conn->IsExternal() &&
+          conn->GetConnectorType() == DRM_MODE_CONNECTOR_DisplayPort && // NOLINT(misc-include-cleaner)
+          HasDelayedEdidQuirk(conn)) {
+        ALOGI("Tearing down DP link on %s for delayed-EDID recovery",
+              conn->GetName().c_str());
+        frontend_interface_->UnbindDisplay(it->second);
+        it = attached_pipelines_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    frontend_interface_->FinalizeDisplayBinding();
+
+    // Release MainLock during DP link teardown wait to avoid
+    // blocking other display operations.
+    lock.unlock();
+
+    // Brief pause for the link to fully go down before reprobing.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    lock.lock();
+
+    // Re-probe: kernel re-reads DPCD/EDID since link was torn down.
+    // If scaler now serves real 4K EDID, display re-attaches at full res.
+    for (auto &drm : drms_) {
+      auto stale = drm->RefreshConnectors();
+      DetachStalePipelines(stale);
+    }
+    UpdateFrontendDisplays();
+
+    edid_recovery_pending_ = false;
+    ALOGI("Delayed-EDID recovery reprobe complete");
+  });
+}
+
+void ResourceManager::CancelDelayedEdidRecovery() {
+  if (edid_recovery_pending_) {
+    {
+      std::lock_guard lock(edid_recovery_mutex_);
+      edid_recovery_pending_ = false;
+    }
+    edid_recovery_cv_.notify_all();
+  }
+  if (edid_recovery_thread_.joinable()) {
+    edid_recovery_thread_.join();
+  }
 }
 
 }  // namespace android::drm_hwcomposer

@@ -49,6 +49,8 @@ class EdidWrapper {
   struct VendorProductInfo {
     std::string make;
     std::string model;
+    std::string manufacturer;  // PNP manufacturer ID
+    uint16_t product_code{};             // EDID product code (bytes 10-11)
     int32_t year;
   };
 

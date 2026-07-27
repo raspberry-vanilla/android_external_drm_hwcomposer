@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <thread>
+
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -98,6 +101,8 @@ class ResourceManager {
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
+  void MaybeScheduleDelayedEdidRecovery();
+  void CancelDelayedEdidRecovery();
 
   std::vector<std::unique_ptr<DrmDevice>> drms_;
   std::set<std::string> displays_;
@@ -117,6 +122,12 @@ class ResourceManager {
       attached_pipelines_;
 
   PipelineToFrontendBindingInterface *const frontend_interface_;
+
+  // Delayed-EDID recovery thread state
+  std::thread edid_recovery_thread_;
+  std::mutex edid_recovery_mutex_;
+  std::condition_variable edid_recovery_cv_;
+  bool edid_recovery_pending_{};
 
   bool initialized_{};
 };
