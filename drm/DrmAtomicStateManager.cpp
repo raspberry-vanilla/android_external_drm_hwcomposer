@@ -178,19 +178,17 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   return true;
 }
 
-bool DrmAtomicStateManager::SetLinkStatusIfNeeded(DrmAtomicRequest &request) {
+bool DrmAtomicStateManager::ResetLinkStatus(DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector->GetLinkStatusProperty().GetId() != 0 &&
-      connector->IsLinkRecoveryRequired()) {
-    if (!connector->GetLinkStatusProperty().AtomicSet(*request.property_set,
-                                                      DRM_MODE_LINK_STATUS_GOOD)) {
-      return false;
-    }
-    // We clear it here. If the commit fails due to EBUSY or modeset,
-    // the property is already in the property_set to be retried.
-    connector->SetLinkRecoveryRequired(false);
+
+  // Optional property: non-DP connectors (e.g., HDMI, DSI, Writeback) do not
+  // have link-status.
+  if (connector->GetLinkStatusProperty().GetId() == 0) {
+    return true;
   }
-  return true;
+
+  return connector->GetLinkStatusProperty()
+      .AtomicSet(*request.property_set, DRM_MODE_LINK_STATUS_GOOD);
 }
 
 bool DrmAtomicStateManager::SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
@@ -539,15 +537,15 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  // The kernel sets the link-status property to BAD when link training fails.
-  // According to the DRM documentation, we must reset this to GOOD during a
-  // commit to recover the link. We use a flag to only set GOOD when recovering
-  // from a BAD link status. This ensures we only reset the link-status
-  // property to GOOD on the commit after the uevent has been processed,
-  // avoiding a race where a commit could stomp on the BAD status before the
-  // uevent handler has a chance to process it.
-  if (!SetLinkStatusIfNeeded(*atomic_request)) {
-    ALOGE("Failed to set link status");
+  // When link training fails, the kernel sets link-status to BAD. Userspace
+  // must reset it to GOOD during a full modeset to trigger re-training; doing
+  // so on a seamless commit (without ALLOW_MODESET) can cause the commit to
+  // fail.
+  // https://www.kernel.org/doc/html/latest/gpu/drm-kms.html#standard-connector-properties
+  const bool full_modeset = args.display_mode.has_value() && !args.seamless;
+  if (full_modeset && !ResetLinkStatus(*atomic_request)) {
+    ALOGE("Failed to reset link status for connector %s",
+          pipe_->connector->Get()->GetName().c_str());
     return nullptr;
   }
 

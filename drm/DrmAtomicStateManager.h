@@ -127,7 +127,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
   bool SetOutputFence(DrmAtomicRequest &request);
   bool SetActiveIfNeeded(const AtomicCommitArgs &args,
                          DrmAtomicRequest &request);
-  bool SetLinkStatusIfNeeded(DrmAtomicRequest &request);
+  bool ResetLinkStatus(DrmAtomicRequest &request);
   bool SetDisplayModeIfNeeded(const AtomicCommitArgs &args,
                               DrmAtomicRequest &request);
   bool SetCtmIfNeeded(const AtomicCommitArgs &args, DrmAtomicRequest &request);

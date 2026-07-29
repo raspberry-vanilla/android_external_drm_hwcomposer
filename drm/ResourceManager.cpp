@@ -293,7 +293,6 @@ void ResourceManager::UpdateFrontendDisplays() {
     }
     if (connected) {
       if (!conn->IsLinkStatusGood()) {
-        conn->SetLinkRecoveryRequired(true);
         frontend_interface_->NotifyDisplayLinkStatus(attached_pipelines_[conn]);
       }
 
