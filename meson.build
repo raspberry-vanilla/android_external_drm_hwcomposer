@@ -72,8 +72,11 @@ cpp_compiler = meson.get_compiler('cpp')
 
 common_cpp_flags = [
     '-DUSE_IMAPPER4_METADATA_API',
-    '-D__ANDROID_API__=' + android_sdk_version,
 ]
+
+if cpp_compiler.get_define('__ANDROID_API__') == ''
+  common_cpp_flags += '-D__ANDROID_API__=' + android_sdk_version
+endif
 
 if cpp_compiler.has_argument('-Wno-error=invalid-specialization')
   common_cpp_flags += '-Wno-error=invalid-specialization'
