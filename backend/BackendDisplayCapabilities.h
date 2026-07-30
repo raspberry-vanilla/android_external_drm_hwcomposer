@@ -17,14 +17,22 @@
 #include <optional>
 #include <vector>
 
+#include <aidl/android/hardware/graphics/common/Hdr.h>
+
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmMode.h"
 
 namespace android::drm_hwcomposer {
 
+using Hdr = aidl::android::hardware::graphics::common::Hdr;
+
 // Per-display capabilities associated with a DrmDisplayPipeline.
 class BackendDisplayCapabilities {
  public:
+  virtual std::optional<std::vector<Hdr>> GetHdrTypesOverride() const {
+    return std::nullopt;
+  }
+
   // Returns true if the Backend implementation has provided an override for the
   // supported ColorModes.
   virtual std::optional<std::vector<ColorMode>> GetColorModeOverrides() const {

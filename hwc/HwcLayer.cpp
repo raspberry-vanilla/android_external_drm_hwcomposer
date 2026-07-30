@@ -96,7 +96,7 @@ void HwcLayer::PopulateLayerData() {
   if (blend_mode_ != BufferBlendMode::kUndefined) {
     layer_data_.bi->blend_mode = blend_mode_;
   }
-  if (colorspace_ != Colorspace::kDefault) {
+  if (colorspace_ != HwcColorspace::kDefault) {
     layer_data_.colorspace = colorspace_;
   }
   if (color_encoding_ != BufferColorEncoding::kUndefined) {

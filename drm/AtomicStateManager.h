@@ -36,7 +36,7 @@ class IDrmFbIdHandle;
 class DrmPlane;
 struct LayerToPlaneJoiningPlan;
 
-enum class Colorspace;
+enum class HwcColorspace;
 enum class ContentProtection;
 enum class ContentType;
 enum class HdcpContentType;
@@ -52,7 +52,7 @@ struct AtomicCommitArgs {
   std::optional<HwcDisplay::PowerMode> power_mode;
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
   std::shared_ptr<HalColorTransforMatrix> color_matrix;
-  std::optional<Colorspace> colorspace;
+  std::optional<HwcColorspace> colorspace;
   std::optional<TransferFunction> transfer_func;
   std::optional<ContentType> content_type;
   std::shared_ptr<hdr_output_metadata> hdr_metadata;

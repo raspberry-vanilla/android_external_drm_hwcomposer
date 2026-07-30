@@ -161,7 +161,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                                      /*alpha=*/kOpaque,
                                                      DRM_FORMAT_NV12);
   HwcLayer::LayerProperties props1;
-  props1.colorspace = Colorspace::kBt709Ycc;
+  props1.colorspace = HwcColorspace::kBt709;
   layer1.SetLayerProperties(props1);
 
   HwcLayer layer2 = CompositorTestUtils::CreateLayer(&mock_display,
@@ -176,7 +176,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   // are unsupported (UseColorPipeline == false), mixed colorspaces across
   // layers force the planner to flatten the scene to client composition.
   HwcLayer::LayerProperties props2;
-  props2.colorspace = Colorspace::kBt2020Rgb;
+  props2.colorspace = HwcColorspace::kBt2020;
   layer2.SetLayerProperties(props2);
 
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
@@ -216,7 +216,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                                      /*alpha=*/kOpaque,
                                                      DRM_FORMAT_NV12);
   HwcLayer::LayerProperties props1;
-  props1.colorspace = Colorspace::kBt709Ycc;
+  props1.colorspace = HwcColorspace::kBt709;
   layer1.SetLayerProperties(props1);
 
   HwcLayer layer2 = CompositorTestUtils::CreateLayer(&mock_display,
@@ -228,7 +228,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                                      CompositionType::kDevice,
                                                      /*alpha=*/kOpaque);
   HwcLayer::LayerProperties props2;
-  props2.colorspace = Colorspace::kBt2020Rgb;
+  props2.colorspace = HwcColorspace::kBt2020;
   layer2.SetLayerProperties(props2);
 
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())

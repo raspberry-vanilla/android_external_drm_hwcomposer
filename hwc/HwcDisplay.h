@@ -437,7 +437,7 @@ class HwcDisplay : public ICompositorDisplay {
   bool color_transform_is_identity_{};
   bool ctm_has_offset_ = false;
   ContentType content_type_ = ContentType::kNoData;
-  Colorspace colorspace_{};
+  HwcColorspace colorspace_{};
   TransferFunction transfer_func_{};
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;

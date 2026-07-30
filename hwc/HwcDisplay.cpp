@@ -219,7 +219,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     hdr_headroom_ = {};
     hdr_metadata_ = std::make_shared<hdr_output_metadata>();
     min_bpc_ = 6;
-    transfer_func_ = TransferFunction::kUnknown;
+    transfer_func_ = TransferFunction::kSrgb;
     return;
   }
 
@@ -807,6 +807,16 @@ void HwcDisplay::InitHdrSupported() {
     return;
   }
 
+  if (pipeline_->capabilities) {
+    auto override_types = pipeline_->capabilities->GetHdrTypesOverride();
+    if (override_types.has_value()) {
+      has_hdr_support_ = !override_types->empty();
+      ALOGI("InitHdrSupported: using backend override: has_hdr_support_=%d",
+            has_hdr_support_);
+      return;
+    }
+  }
+
   bool crtc_gamma = GetPipe().crtc && GetPipe().crtc->Get() &&
                     GetPipe().crtc->Get()->GetGammaLutProperty() &&
                     GetPipe().crtc->Get()->GetGammaLutSizeProperty();
@@ -1010,7 +1020,7 @@ auto HwcDisplay::GetColorModes() const -> std::vector<ColorMode> {
 }
 
 void HwcDisplay::SetColorMode(ColorMode mode) {
-  colorspace_ = ColorUtil::ToColorspace(mode);
+  colorspace_ = ColorUtil::ToHwcColorspace(mode);
 }
 
 void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
@@ -1019,6 +1029,18 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
                                     float *min_luminance) const {
   if (IsInHeadlessMode() || !has_hdr_support_) {
     return;
+  }
+
+  if (pipeline_->capabilities) {
+    auto override_types = pipeline_->capabilities->GetHdrTypesOverride();
+    if (override_types.has_value()) {
+      *types = *override_types;
+      if (GetEdid()) {
+        GetEdid()->GetHdrLuminance(max_luminance, max_average_luminance,
+                                   min_luminance);
+      }
+      return;
+    }
   }
 
   // Return HDR caps only when we have the ability to set HDR
@@ -1855,7 +1877,8 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
     return false;
   }
 
-  const Colorspace cursor_colorspace = cursor_layer.GetLayerData().colorspace;
+  const HwcColorspace cursor_colorspace = cursor_layer.GetLayerData()
+                                              .colorspace;
   CscCache cursor_color_map;
   auto cursor_matrix = ColorUtil::GamutAdjustIfNeeded<
       drm_color_ctm_3x4>(cursor_colorspace, colorspace_, color_matrix_,

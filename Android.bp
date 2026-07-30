@@ -348,6 +348,7 @@ cc_test_host {
         "utils/properties.cpp",
     ],
     static_libs: [
+        "android.hardware.graphics.common-V5-ndk",
         "libbase",
         "libcutils",
         "libdrm",

@@ -87,27 +87,16 @@ std::shared_ptr<drm_color_ctm> ToColorTransform3x3(
   return color_matrix;
 }
 
-ColorGamut ToColorGamut(Colorspace colorspace) {
+ColorGamut ToColorGamut(HwcColorspace colorspace) {
   switch (colorspace) {
-    case Colorspace::kBt709Ycc:
-    case Colorspace::kXvycc709:
-    case Colorspace::kDefault:
+    case HwcColorspace::kBt709:
+    case HwcColorspace::kDefault:
       return ColorGamut::BT709();
-    case Colorspace::kBt2020Cycc:
-    case Colorspace::kBt2020Rgb:
-    case Colorspace::kBt2020Ycc:
+    case HwcColorspace::kBt2020:
       return ColorGamut::BT2020();
-    case Colorspace::kDciP3RgbD65:
-    case Colorspace::kDciP3RgbTheater:
+    case HwcColorspace::kDciP3:
       return ColorGamut::DCIP3();
-    case Colorspace::kSycc601:
-    case Colorspace::kOpycc601:
-    case Colorspace::kBt601Ycc:
-    case Colorspace::kOprgb:
-    case Colorspace::kRgbWideFixed:
-    case Colorspace::kSmpte170MYcc:
-    case Colorspace::kRgbWideFloat:
-    default:
+    case HwcColorspace::kBt601:
       return ColorGamut::sRGB();
   }
 }
@@ -231,6 +220,9 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
         signal = is_degamma ? EvaluateHlgEotf(signal)
                             : ColorUtil::EvaluateHlgOetf(signal);
         break;
+      case TransferFunction::kUnknown:
+        ALOGV("Unknown transfer function, falling back to sRGB");
+        [[fallthrough]];
       case TransferFunction::kSrgb:
         signal = is_degamma ? ColorGamut::sRGB().toLinear(signal)[0]
                             : ColorGamut::sRGB().fromLinear(signal)[0];
@@ -240,8 +232,6 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
         signal = is_degamma ? ColorGamut::BT709().toLinear(signal)[0]
                             : ColorGamut::BT709().fromLinear(signal)[0];
         break;
-      case TransferFunction::kUnknown:
-        [[fallthrough]];
       default:
         break;
     }
@@ -317,7 +307,7 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
 
 template <typename T>
 std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
-    Colorspace src_colorspace, Colorspace dest_colorspace,
+    HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
     const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
     CscCache &color_transform_cache) {
   if (src_colorspace == dest_colorspace) {
@@ -372,18 +362,14 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
 }
 
 const Lut1D<drm_color_lut32> &ColorUtil::GetDegammaLut(
-    TransferFunction dest_tf, TransferFunction src_tf, const size_t lut_size,
+    TransferFunction tf, const size_t lut_size,
     Lut1DCache<drm_color_lut32> &lut_1d_map, const float layer_brightness) {
-  if (!NeedsTonemapping(dest_tf)) {
-    return kEmptyLut<drm_color_lut32>;
-  }
-
   // Validate layer brightness
   auto lut_scale = (float)kSignalMax;
   if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
     lut_scale = layer_brightness;
   }
-  return Get1DLut<drm_color_lut32>(src_tf, lut_size, lut_1d_map, lut_scale,
+  return Get1DLut<drm_color_lut32>(tf, lut_size, lut_1d_map, lut_scale,
                                    /*is_degamma=*/true);
 }
 
@@ -391,10 +377,6 @@ const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
     TransferFunction tf, const size_t lut_size,
     Lut1DCache<drm_color_lut> &lut_1d_map, const float display_brightness,
     const float hdr_headroom) {
-  if (!NeedsTonemapping(tf)) {
-    return kEmptyLut<drm_color_lut>;
-  }
-
   // Validate display brightness
   auto lut_scale = (float)kSignalMax;
   if (display_brightness >= kSignalMin && display_brightness < kSignalMax) {
@@ -410,11 +392,11 @@ const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
 
 // Tell the compiler explicitly to build these versions
 template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<
-    drm_color_ctm>(Colorspace, Colorspace,
+    drm_color_ctm>(HwcColorspace, HwcColorspace,
                    const std::shared_ptr<HalColorTransforMatrix> &, CscCache &);
 template std::shared_ptr<drm_color_ctm_3x4>
 ColorUtil::GamutAdjustIfNeeded<drm_color_ctm_3x4>(
-    Colorspace, Colorspace, const std::shared_ptr<HalColorTransforMatrix> &,
-    CscCache &);
+    HwcColorspace, HwcColorspace,
+    const std::shared_ptr<HalColorTransforMatrix> &, CscCache &);
 
 }  // namespace android::drm_hwcomposer

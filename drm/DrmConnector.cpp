@@ -122,38 +122,42 @@ auto DrmConnector::Init()-> bool {
   }
 
   if (GetOptionalConnectorProperty("Colorspace", &colorspace_property_)) {
-    colorspace_property_.AddEnumToMap("Default", Colorspace::kDefault,
+    colorspace_property_.AddEnumToMap("Default", DrmColorspace::kDefault,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("SMPTE_170M_YCC", Colorspace::kSmpte170MYcc,
+    colorspace_property_.AddEnumToMap("SMPTE_170M_YCC",
+                                      DrmColorspace::kSmpte170MYcc,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT709_YCC", Colorspace::kBt709Ycc,
+    colorspace_property_.AddEnumToMap("BT709_YCC", DrmColorspace::kBt709Ycc,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("XVYCC_601", Colorspace::kXvycc601,
+    colorspace_property_.AddEnumToMap("XVYCC_601", DrmColorspace::kXvycc601,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("XVYCC_709", Colorspace::kXvycc709,
+    colorspace_property_.AddEnumToMap("XVYCC_709", DrmColorspace::kXvycc709,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("SYCC_601", Colorspace::kSycc601,
+    colorspace_property_.AddEnumToMap("SYCC_601", DrmColorspace::kSycc601,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("opYCC_601", Colorspace::kOpycc601,
+    colorspace_property_.AddEnumToMap("opYCC_601", DrmColorspace::kOpycc601,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("opRGB", Colorspace::kOprgb,
+    colorspace_property_.AddEnumToMap("opRGB", DrmColorspace::kOprgb,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_CYCC", Colorspace::kBt2020Cycc,
+    colorspace_property_.AddEnumToMap("BT2020_CYCC", DrmColorspace::kBt2020Cycc,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_RGB", Colorspace::kBt2020Rgb,
+    colorspace_property_.AddEnumToMap("BT2020_RGB", DrmColorspace::kBt2020Rgb,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_YCC", Colorspace::kBt2020Ycc,
+    colorspace_property_.AddEnumToMap("BT2020_YCC", DrmColorspace::kBt2020Ycc,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("DCI-P3_RGB_D65", Colorspace::kDciP3RgbD65,
+    colorspace_property_.AddEnumToMap("DCI-P3_RGB_D65",
+                                      DrmColorspace::kDciP3RgbD65,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("DCI-P3_RGB_Theater", Colorspace::kDciP3RgbTheater,
+    colorspace_property_.AddEnumToMap("DCI-P3_RGB_Theater",
+                                      DrmColorspace::kDciP3RgbTheater,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("RGB_WIDE_FIXED", Colorspace::kRgbWideFixed,
+    colorspace_property_.AddEnumToMap("RGB_WIDE_FIXED",
+                                      DrmColorspace::kRgbWideFixed,
                                       colorspace_enum_map_);
     colorspace_property_.AddEnumToMap("RGB_WIDE_FLOAT",
-                                      Colorspace::kRgbWideFloat,
+                                      DrmColorspace::kRgbWideFloat,
                                       colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT601_YCC", Colorspace::kBt601Ycc,
+    colorspace_property_.AddEnumToMap("BT601_YCC", DrmColorspace::kBt601Ycc,
                                       colorspace_enum_map_);
   }
 

@@ -60,25 +60,14 @@ enum class ColorMode : int32_t {
 // NOLINTEND(readability-identifier-naming)
 
 /**
- * Display panel colorspace property values.
+ * Display panel colorspace operational values handled by drm_hwcomposer.
  */
-enum class Colorspace : int32_t {
+enum class HwcColorspace : int32_t {
   kDefault,
-  kSmpte170MYcc,
-  kBt709Ycc,
-  kXvycc601,
-  kXvycc709,
-  kSycc601,
-  kOpycc601,
-  kOprgb,
-  kBt2020Cycc,
-  kBt2020Rgb,
-  kBt2020Ycc,
-  kDciP3RgbD65,
-  kDciP3RgbTheater,
-  kRgbWideFixed,
-  kRgbWideFloat,
-  kBt601Ycc,
+  kBt601,
+  kBt709,
+  kDciP3,
+  kBt2020,
 };
 
 /**

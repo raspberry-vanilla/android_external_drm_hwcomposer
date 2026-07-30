@@ -126,6 +126,14 @@ HwcDisplayConfigsGenerator::GenerateDisplayConfigs(
 
   bool enable_hdr = params.use_color_pipeline &&
                     (connector.IsExternal() || params.persistent_hdr_enabled);
+
+  if (params.capabilities != nullptr) {
+    auto override_types = params.capabilities->GetHdrTypesOverride();
+    if (override_types.has_value()) {
+      enable_hdr = !override_types.value().empty();
+    }
+  }
+
   // Order determines preferred output type
   const std::vector<OutputType>
       hwc_supported_output_types = enable_hdr

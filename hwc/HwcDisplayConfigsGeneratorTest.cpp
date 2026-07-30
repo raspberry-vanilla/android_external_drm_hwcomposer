@@ -17,6 +17,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <aidl/android/hardware/graphics/common/Hdr.h>
+
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -83,6 +85,8 @@ class MockBackendDisplayCapabilities : public BackendDisplayCapabilities {
  public:
   MOCK_METHOD(std::vector<DrmMode>, FilterModes, (const std::vector<DrmMode>&),
               (const, override));
+  MOCK_METHOD(std::optional<std::vector<ui::Hdr>>, GetHdrTypesOverride, (),
+              (const, override));
 };
 
 }  // namespace
@@ -139,6 +143,35 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledExternal) {
   HwcConfigParameters params = {
       .use_color_pipeline = true,
       .persistent_hdr_enabled = false,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  EXPECT_EQ(configs_opt->hwc_configs.size(), 2);
+  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
+            OutputType::kSystem);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledViaBackend) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  MockBackendDisplayCapabilities capabilities;
+  std::vector<ui::Hdr> hdr_types = {ui::Hdr::HDR10};
+  EXPECT_CALL(capabilities, GetHdrTypesOverride())
+      .WillOnce(testing::Return(hdr_types));
+  EXPECT_CALL(capabilities, FilterModes(testing::_))
+      .WillRepeatedly(testing::ReturnArg<0>());
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .capabilities = &capabilities,
   };
 
   auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);

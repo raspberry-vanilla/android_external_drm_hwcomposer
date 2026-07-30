@@ -66,7 +66,6 @@ using ::android::drm_hwcomposer::BufferBlendMode;
 using ::android::drm_hwcomposer::BufferColorEncoding;
 using ::android::drm_hwcomposer::BufferInfo;
 using ::android::drm_hwcomposer::BufferSampleRange;
-using ::android::drm_hwcomposer::Colorspace;
 using ::android::drm_hwcomposer::CompositionType;
 using ::android::drm_hwcomposer::DamageInfo;
 using ::android::drm_hwcomposer::DrmFbIdHandle;
@@ -74,6 +73,7 @@ using ::android::drm_hwcomposer::DrmHwc;
 using ::android::drm_hwcomposer::DstRectInfo;
 using ::android::drm_hwcomposer::DupFd;
 using ::android::drm_hwcomposer::GrallocBufferCache;
+using ::android::drm_hwcomposer::HwcColorspace;
 using ::android::drm_hwcomposer::HwcDisplay;
 using ::android::drm_hwcomposer::HwcLayer;
 using ::android::drm_hwcomposer::IRect;
@@ -109,32 +109,33 @@ std::optional<BufferBlendMode> AidlToBlendMode(
   }
 }
 
-std::optional<Colorspace> AidlToColorspace(const common::Dataspace& dataspace) {
+std::optional<HwcColorspace> AidlToColorspace(
+    const common::Dataspace& dataspace) {
   int32_t standard = static_cast<int32_t>(dataspace) &
                      static_cast<int32_t>(common::Dataspace::STANDARD_MASK);
   switch (standard) {
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT709):
-      return Colorspace::kBt709Ycc;
+      return HwcColorspace::kBt709;
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_625):
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_625_UNADJUSTED):
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525):
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT601_525_UNADJUSTED):
-      return Colorspace::kBt601Ycc;
+      return HwcColorspace::kBt601;
     case static_cast<int32_t>(common::Dataspace::STANDARD_DCI_P3):
-      return Colorspace::kDciP3RgbD65;
+      return HwcColorspace::kDciP3;
     case static_cast<int32_t>(common::Dataspace::STANDARD_BT2020):
     case static_cast<int32_t>(
         common::Dataspace::STANDARD_BT2020_CONSTANT_LUMINANCE):
-      return Colorspace::kBt2020Rgb;
+      return HwcColorspace::kBt2020;
     case static_cast<int32_t>(common::Dataspace::UNKNOWN):
-      return Colorspace::kDefault;
+      return HwcColorspace::kDefault;
     default:
       ALOGE("Unsupported standard: %d", standard);
       return std::nullopt;
   }
 }
 
-std::optional<Colorspace> AidlToColorspace(
+std::optional<HwcColorspace> AidlToColorspace(
     const std::optional<ParcelableDataspace>& dataspace) {
   if (!dataspace) {
     return std::nullopt;
