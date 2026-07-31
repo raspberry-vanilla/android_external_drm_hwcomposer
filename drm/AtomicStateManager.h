@@ -51,7 +51,7 @@ struct AtomicCommitArgs {
   std::optional<DrmMode> display_mode;
   std::optional<HwcDisplay::PowerMode> power_mode;
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
-  std::shared_ptr<HalColorTransforMatrix> color_matrix;
+  std::shared_ptr<const HalColorTransformMatrix> color_matrix;
   std::optional<HwcColorspace> colorspace;
   std::optional<TransferFunction> transfer_func;
   std::optional<ContentType> content_type;

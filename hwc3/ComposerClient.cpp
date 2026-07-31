@@ -40,6 +40,7 @@
 #include <android/binder_ibinder_platform.h>
 #include <cutils/native_handle.h>
 #include <ui/GraphicBufferMapper.h>
+#include <ui/GraphicTypes.h>
 #include <utils/Errors.h>
 
 #if __ANDROID_API__ >= 36
@@ -95,6 +96,8 @@ using ::android::drm_hwcomposer::StatsPoller;
 using HwcOutputType = ::android::drm_hwcomposer::OutputType;
 using AidlOutputType = aidl::android::hardware::graphics::composer3::OutputType;
 #endif
+using AidlRenderIntent = aidl::android::hardware::graphics::composer3::
+    RenderIntent;
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 namespace {
@@ -638,22 +641,27 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
 
 ndk::ScopedAStatus ComposerClient::getRenderIntents(
     int64_t display_handle, AidlColorMode mode,
-    std::vector<RenderIntent>* intents) {
+    std::vector<AidlRenderIntent>* intents) {
   DEBUG_FUNC();
   // TODO: Remove invalid enum tests from VTS
   if (mode < AidlColorMode::NATIVE || mode > AidlColorMode::DISPLAY_BT2020)
     return ToBinderStatus(hwc3::Error::kBadParameter);
 
+  std::vector<::android::ui::RenderIntent> display_intents;
   {
     std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
     const HwcDisplay* display = GetDisplay(display_handle);
-    if (display == nullptr)
+    if (display == nullptr) {
       return ToBinderStatus(hwc3::Error::kBadDisplay);
+    }
+    display_intents = display->GetRenderIntents(
+        static_cast<::android::drm_hwcomposer::ColorMode>(mode));
   }
 
   intents->clear();
-  intents->reserve(1);
-  intents->emplace_back(RenderIntent::COLORIMETRIC);
+  for (auto intent : display_intents) {
+    intents->emplace_back(static_cast<AidlRenderIntent>(intent));
+  }
 
   return ndk::ScopedAStatus::ok();
 }
@@ -813,18 +821,27 @@ ndk::ScopedAStatus ComposerClient::setClientTargetSlotCount(
 
 ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_handle,
                                                 AidlColorMode mode,
-                                                RenderIntent intent) {
+                                                AidlRenderIntent intent) {
   DEBUG_FUNC();
 
   // TODO: Remove invalid enum tests from VTS
   if (mode < AidlColorMode::NATIVE || mode > AidlColorMode::DISPLAY_BT2020)
     return ToBinderStatus(hwc3::Error::kBadParameter);
 
-  if (intent < RenderIntent::COLORIMETRIC || intent > RenderIntent::TONE_MAP_ENHANCE)
-    return ToBinderStatus(hwc3::Error::kBadParameter);
-
-  if (intent != RenderIntent::COLORIMETRIC)
-    return ToBinderStatus(hwc3::Error::kUnsupported);
+  switch (intent) {
+    case AidlRenderIntent::COLORIMETRIC:
+    case AidlRenderIntent::TONE_MAP_COLORIMETRIC:
+      break;
+    case AidlRenderIntent::ENHANCE:
+    case AidlRenderIntent::TONE_MAP_ENHANCE:
+      return ToBinderStatus(hwc3::Error::kUnsupported);
+    default:
+      if (intent !=
+          static_cast<AidlRenderIntent>(
+              ::android::drm_hwcomposer::kVendorBoostedRenderIntent)) {
+        return ToBinderStatus(hwc3::Error::kBadParameter);
+      }
+  }
 
   {
     std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
@@ -833,8 +850,9 @@ ndk::ScopedAStatus ComposerClient::setColorMode(int64_t display_handle,
     if (display == nullptr)
       return ToBinderStatus(hwc3::Error::kBadDisplay);
 
-    display->SetColorMode(
-        static_cast<::android::drm_hwcomposer::ColorMode>(mode));
+    display->SetColorMode(static_cast<::android::drm_hwcomposer::ColorMode>(
+                              mode),
+                          static_cast<::android::ui::RenderIntent>(intent));
   }
   return ToBinderStatus(hwc3::Error::kNone);
 }

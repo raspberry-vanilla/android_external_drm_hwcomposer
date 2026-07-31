@@ -139,39 +139,37 @@ HwcDisplay::HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc)
   // operations
   writeback_layer_ = std::make_unique<HwcLayer>(this);
 
-  identity_color_matrix_ = std::make_shared<HalColorTransforMatrix>(
-      kIdentityMatrix);
-
   display_mode_reporter_ = DisplayHotplugConnectModeDetectedAtomReporter::
       Create();
   config_result_reporter_ = DisplayConfigurationResultReporter::Create();
 }
 
 void HwcDisplay::SetColorTransformMatrix(
-    const HalColorTransforMatrix &color_transform_matrix) {
-  color_transform_is_identity_ = std::equal(color_transform_matrix.begin(),
-                                            color_transform_matrix.end(),
-                                            kIdentityMatrix.begin(),
-                                            float_equals);
-  ctm_has_offset_ = false;
-
+    const HalColorTransformMatrix &color_transform_matrix) {
   if (IsInHeadlessMode())
     return;
 
-  if (color_transform_is_identity_) {
-    SetColorMatrixToIdentity();
-    return;
+  const bool
+      color_transform_is_identity = std::equal(color_transform_matrix.begin(),
+                                               color_transform_matrix.end(),
+                                               kIdentityMatrix.begin(),
+                                               float_equals);
+  if (color_transform_is_identity) {
+    client_color_matrix_ = GetIdentityCtmPtr();
+    client_ctm_has_offset_ = false;
+  } else {
+    client_ctm_has_offset_ = TransformHasOffsetValue(
+        color_transform_matrix.data());
+    client_color_matrix_ = std::make_shared<HalColorTransformMatrix>(
+        color_transform_matrix);
   }
 
-  ctm_has_offset_ = TransformHasOffsetValue(color_transform_matrix.data());
-  color_matrix_ = std::make_shared<HalColorTransforMatrix>(
-      color_transform_matrix);
+  UpdateColorTransformMatrix();
 }
 
-void HwcDisplay::SetColorMatrixToIdentity() {
-  ctm_has_offset_ = false;
-  color_matrix_ = identity_color_matrix_;
-  color_transform_is_identity_ = true;
+void HwcDisplay::UpdateColorTransformMatrix() {
+  color_matrix_ = ColorUtil::Multiply(render_intent_matrix_,
+                                      client_color_matrix_);
 }
 
 HwcDisplay::~HwcDisplay() {
@@ -891,8 +889,6 @@ bool HwcDisplay::Init() {
   lp.blend_mode = BufferBlendMode::kPreMult;
   client_layer_.SetLayerProperties(lp);
 
-  SetColorMatrixToIdentity();
-
   if (is_virtual_) {
     configs_ = configs_generator_.GetFakeMode(virtual_disp_width_,
                                               virtual_disp_height_);
@@ -1019,8 +1015,31 @@ auto HwcDisplay::GetColorModes() const -> std::vector<ColorMode> {
   return modes;
 }
 
-void HwcDisplay::SetColorMode(ColorMode mode) {
+auto HwcDisplay::GetRenderIntents(ColorMode /*color_mode*/) const
+    -> std::vector<ui::RenderIntent> {
+  return {ui::RenderIntent::COLORIMETRIC,
+          ui::RenderIntent::TONE_MAP_COLORIMETRIC, kVendorBoostedRenderIntent};
+}
+
+void HwcDisplay::SetColorMode(ColorMode mode, ui::RenderIntent render_intent) {
   colorspace_ = ColorUtil::ToHwcColorspace(mode);
+
+  switch (render_intent) {
+    case ui::RenderIntent::COLORIMETRIC:
+    case ui::RenderIntent::TONE_MAP_COLORIMETRIC:
+      render_intent_matrix_ = GetIdentityCtmPtr();
+      break;
+    default:
+      if (render_intent == kVendorBoostedRenderIntent) {
+        render_intent_matrix_ = GetBoostedCTMPtr();
+      } else {
+        ALOGW("Unsupported render intent (%d). Fallback to identity CTM",
+              static_cast<int32_t>(render_intent));
+        render_intent_matrix_ = GetIdentityCtmPtr();
+      }
+  }
+
+  UpdateColorTransformMatrix();
 }
 
 void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
@@ -1313,17 +1332,19 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     return std::nullopt;
   }
 
-  // CTM will be applied by the client, don't apply DRM CTM
   const bool all_client_layers = a_args.composition->client_z_order &&
                                  a_args.composition->plan.size() == 1;
+  // When client CTM will be applied by the GPU, only apply render intent CTM
+  // via DRM.
   if (all_client_layers &&
       hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
-    a_args.color_matrix = identity_color_matrix_;
+    a_args.color_matrix = render_intent_matrix_;
   }
 
-  // CTM with offset cannot be processed by CTM prop
-  if (ctm_has_offset_ && !UseColorPipeline()) {
-    a_args.color_matrix = identity_color_matrix_;
+  // Client CTM with offset cannot be processed by CTM prop. Only apply render
+  // intent CTM which will never have offset.
+  if (client_ctm_has_offset_ && !UseColorPipeline()) {
+    a_args.color_matrix = render_intent_matrix_;
   }
 
   if (pipeline_->writeback_connector) {
@@ -1502,13 +1523,13 @@ std::shared_ptr<BindingOwner<DrmPlane>> HwcDisplay::GetCursorPlane() const {
 }
 
 bool HwcDisplay::CtmByGpu() const {
-  if (color_transform_is_identity_)
+  if (client_color_matrix_ == GetIdentityCtmPtr())
     return false;
 
   if (UseColorPipeline())
     return false;
 
-  if (GetPipe().crtc->Get()->GetCtmProperty() && !ctm_has_offset_)
+  if (GetPipe().crtc->Get()->GetCtmProperty() && !client_ctm_has_offset_)
     return false;
 
   if (hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore)
@@ -1869,10 +1890,6 @@ void HwcDisplay::LogConfigResult(const AtomicCommitArgs &args, bool is_success,
 
 bool HwcDisplay::CursorPlaneNeedsColorPipeline(
     const HwcLayer &cursor_layer) const {
-  if (!identity_color_matrix_) {
-    return false;
-  }
-
   if (!UseColorPipeline()) {
     return false;
   }
@@ -1888,8 +1905,8 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
     return false;
   }
 
-  std::shared_ptr<drm_color_ctm_3x4>
-      identity_3x4 = ColorUtil::ToColorTransform3x4(identity_color_matrix_);
+  static const auto identity_3x4 = ColorUtil::ToColorTransform3x4(
+      GetIdentityCtmPtr());
 
   return (memcmp(cursor_matrix->matrix, identity_3x4->matrix,
                  sizeof(identity_3x4->matrix)) != 0);

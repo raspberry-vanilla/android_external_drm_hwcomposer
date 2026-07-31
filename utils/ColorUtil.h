@@ -81,7 +81,8 @@ class ColorUtil {
    * B_out = R*6 + G*7 + B*8
    */
   static std::shared_ptr<drm_color_ctm> ToColorTransform3x3(
-      const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix);
+      const std::shared_ptr<const HalColorTransformMatrix>
+          &color_transform_matrix);
 
   /* HAL provides a transposed 4x4 float type matrix:
    * | 0  1  2  3|
@@ -105,7 +106,12 @@ class ColorUtil {
    * B_out = R*8 + G*9 + B*10 + 11
    */
   static std::shared_ptr<drm_color_ctm_3x4> ToColorTransform3x4(
-      const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix);
+      const std::shared_ptr<const HalColorTransformMatrix>
+          &color_transform_matrix);
+
+  static std::shared_ptr<const HalColorTransformMatrix> Multiply(
+      const std::shared_ptr<const HalColorTransformMatrix> &a,
+      const std::shared_ptr<const HalColorTransformMatrix> &b);
 
   static HwcColorspace ToHwcColorspace(ColorMode mode) {
     switch (mode) {
@@ -152,7 +158,8 @@ class ColorUtil {
   template <typename T>
   static std::shared_ptr<T> GamutAdjustIfNeeded(
       HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
-      const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
+      const std::shared_ptr<const HalColorTransformMatrix>
+          &color_transform_matrix,
       CscCache &color_transform_cache);
 
   /* Creates 1D Gamma/Degamma LUTs using the appropriate OETF/EOTF for the given

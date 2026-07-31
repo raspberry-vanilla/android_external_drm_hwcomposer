@@ -168,7 +168,7 @@ CommitStatus TestLayerMappings(
   return result;
 }
 
-bool HasOffset(const std::shared_ptr<const HalColorTransforMatrix>& matrix) {
+bool HasOffset(const std::shared_ptr<const HalColorTransformMatrix>& matrix) {
   if (!matrix) {
     return false;
   }

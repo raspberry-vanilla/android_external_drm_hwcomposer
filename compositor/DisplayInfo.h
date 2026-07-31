@@ -18,24 +18,57 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 namespace android::drm_hwcomposer {
 
 constexpr int kColorMatrixSize = 16;
-using HalColorTransforMatrix = std::array<float, kColorMatrixSize>;
+using HalColorTransformMatrix = std::array<float, kColorMatrixSize>;
 
 /*
  * 4x4 Identity matrix used for color transformations.
  */
 // clang-format off
 // NOLINTNEXTLINE(clang-diagnostic-unused-const-variable)
-constexpr HalColorTransforMatrix kIdentityMatrix = {
+constexpr HalColorTransformMatrix kIdentityMatrix = {
     1.0F, 0.0F, 0.0F, 0.0F,
     0.0F, 1.0F, 0.0F, 0.0F,
     0.0F, 0.0F, 1.0F, 0.0F,
     0.0F, 0.0F, 0.0F, 1.0F,
 };
 // clang-format on
+
+inline const std::shared_ptr<const HalColorTransformMatrix>&
+GetIdentityCtmPtr() {
+  static const auto
+      kIdentityPtr = std::make_shared<const HalColorTransformMatrix>(
+          kIdentityMatrix);
+  return kIdentityPtr;
+}
+
+/*
+ * 4x4 Boosted CTM for kVendorBoostedRenderIntent.
+ *
+ * WARNING: This matrix must not have an offset. Ensure that requirement is
+ * satisfied if it is ever modified.
+ */
+// clang-format off
+// NOLINTNEXTLINE(clang-diagnostic-unused-const-variable)
+constexpr HalColorTransformMatrix kBoostedMatrix = {
+    1.097F, -0.026F, -0.026F, 0.000F,
+   -0.088F,  1.035F, -0.088F, 0.000F,
+   -0.009F, -0.009F,  1.114F, 0.000F,
+    0.000F,  0.000F,  0.000F, 1.000F,
+};
+// clang-format on
+
+inline const std::shared_ptr<const HalColorTransformMatrix>&
+GetBoostedCTMPtr() {
+  static const auto
+      kBoostedPtr = std::make_shared<const HalColorTransformMatrix>(
+          kBoostedMatrix);
+  return kBoostedPtr;
+}
 
 /*
  * Display colorimetry enums.

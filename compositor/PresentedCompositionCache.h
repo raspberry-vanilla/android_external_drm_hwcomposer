@@ -65,7 +65,7 @@ class ValidationRequestContext {
   const ICompositorDisplay* GetDisplay() const {
     return display_;
   }
-  std::shared_ptr<const HalColorTransforMatrix> GetColorMatrix() const {
+  std::shared_ptr<const HalColorTransformMatrix> GetColorMatrix() const {
     return color_matrix_;
   }
   std::chrono::steady_clock::time_point GetTimestamp() const {
@@ -82,7 +82,7 @@ class ValidationRequestContext {
 
   // Display properties.
   const ICompositorDisplay* display_ = nullptr;  // Pointer may be dangling.
-  std::shared_ptr<const HalColorTransforMatrix> color_matrix_;
+  std::shared_ptr<const HalColorTransformMatrix> color_matrix_;
 
   // Timestamp of being set.
   std::chrono::steady_clock::time_point timestamp_;

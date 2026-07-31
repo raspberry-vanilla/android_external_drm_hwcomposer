@@ -56,7 +56,8 @@ uint64_t To3132FixPt(double in) {
 
 template <typename T>
 std::shared_ptr<T> ToColorTransform(
-    const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix,
     const bool output_is_3x4_matrix) {
   if (!color_transform_matrix)
     return nullptr;
@@ -280,13 +281,15 @@ double ColorUtil::EvaluateHlgOetf(double l) {
 }
 
 std::shared_ptr<drm_color_ctm> ColorUtil::ToColorTransform3x3(
-    const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix) {
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix) {
   return ToColorTransform<drm_color_ctm>(color_transform_matrix,
                                          /*output_is_3x4_matrix=*/false);
 }
 
 std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
-    const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix) {
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix) {
   return ToColorTransform<drm_color_ctm_3x4>(color_transform_matrix,
                                              /*output_is_3x4_matrix=*/true);
 }
@@ -305,10 +308,33 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
   return color_matrix;
 }
 
+std::shared_ptr<const HalColorTransformMatrix> ColorUtil::Multiply(
+    const std::shared_ptr<const HalColorTransformMatrix> &a,
+    const std::shared_ptr<const HalColorTransformMatrix> &b) {
+  if (a == nullptr && b == nullptr) {
+    return nullptr;
+  }
+  if (a == nullptr || a == GetIdentityCtmPtr()) {
+    return b;
+  }
+  if (b == nullptr || b == GetIdentityCtmPtr()) {
+    return a;
+  }
+
+  android::mat4 mat_a(static_cast<const float *>(a->data()));
+  android::mat4 mat_b(static_cast<const float *>(b->data()));
+  android::mat4 res = mat_a * mat_b;
+  auto out = std::make_shared<HalColorTransformMatrix>();
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  std::copy(res.asArray(), res.asArray() + kColorMatrixSize, out->begin());
+  return out;
+}
+
 template <typename T>
 std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
-    const std::shared_ptr<HalColorTransforMatrix> &color_transform_matrix,
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix,
     CscCache &color_transform_cache) {
   if (src_colorspace == dest_colorspace) {
     if constexpr (std::is_same_v<T, drm_color_ctm>) {
@@ -318,9 +344,9 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     }
   }
 
-  const HalColorTransforMatrix &ctm_in = color_transform_matrix
-                                             ? *color_transform_matrix
-                                             : kIdentityMatrix;
+  const HalColorTransformMatrix &ctm_in = color_transform_matrix
+                                              ? *color_transform_matrix
+                                              : kIdentityMatrix;
   // Extract the inner 3x3 matrix from the 4x4 CTM
   // NOLINTBEGIN(readability-magic-numbers)
   // clang-format off
@@ -391,12 +417,13 @@ const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
 }
 
 // Tell the compiler explicitly to build these versions
-template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<
-    drm_color_ctm>(HwcColorspace, HwcColorspace,
-                   const std::shared_ptr<HalColorTransforMatrix> &, CscCache &);
+template std::shared_ptr<drm_color_ctm>
+ColorUtil::GamutAdjustIfNeeded<drm_color_ctm>(
+    HwcColorspace, HwcColorspace,
+    const std::shared_ptr<const HalColorTransformMatrix> &, CscCache &);
 template std::shared_ptr<drm_color_ctm_3x4>
 ColorUtil::GamutAdjustIfNeeded<drm_color_ctm_3x4>(
     HwcColorspace, HwcColorspace,
-    const std::shared_ptr<HalColorTransforMatrix> &, CscCache &);
+    const std::shared_ptr<const HalColorTransformMatrix> &, CscCache &);
 
 }  // namespace android::drm_hwcomposer

@@ -66,7 +66,7 @@ class ICompositorDisplay {
 
   virtual const HwcLayer &GetClientLayer() const = 0;
 
-  virtual std::shared_ptr<const HalColorTransforMatrix>
+  virtual std::shared_ptr<const HalColorTransformMatrix>
   GetColorTransformMatrix() const = 0;
 
   virtual bool CursorPlaneNeedsColorPipeline(
