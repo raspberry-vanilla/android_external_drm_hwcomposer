@@ -160,9 +160,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->connector_type;
   }
 
-  bool HasPathProperty() const {
-    return path_property_.GetValue().has_value();
-  }
+  bool IsMst() const;
 
  private:
   DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,

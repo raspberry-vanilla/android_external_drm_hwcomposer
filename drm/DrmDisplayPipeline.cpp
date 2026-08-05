@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "backend/BackendDisplayCapabilities.h"
+#include "compositor/CompositionPlanner.h"  // IWYU pragma: keep
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"

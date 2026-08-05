@@ -80,6 +80,10 @@ class ResourceManager {
     return persistent_hdr_enabled_;
   }
 
+  bool ExternalHdrEnabled() const {
+    return external_hdr_enabled_;
+  }
+
   int ForceColorMode() const {
     return force_color_mode_;
   }
@@ -113,6 +117,7 @@ class ResourceManager {
   bool color_pipeline_enabled_{};
   int force_color_mode_{};
   bool persistent_hdr_enabled_{};
+  bool external_hdr_enabled_{};
 
   std::shared_ptr<UEventListener> uevent_listener_;
 

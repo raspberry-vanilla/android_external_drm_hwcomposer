@@ -33,6 +33,7 @@ class Properties {
   static auto ScaleWithGpu() -> bool;
   static auto EnableVirtualDisplay() -> bool;
   static auto EnableExternalDisplays() -> bool;
+  static auto EnableHdcpOnHotplug() -> bool;
   static auto GetCtmHandling() -> CtmHandling;
   static auto BugfixCursorCtmOffset() -> bool;
   static auto GetBackendOverride() -> std::string;
@@ -40,11 +41,13 @@ class Properties {
   static auto GetForceMode() -> std::string;
   static auto UseColorPipeline() -> bool;
   static auto ForcedHolePunchingEnabled() -> bool;
+  static auto SkipInternalDisplayReset() -> bool;
   static auto ForceColorMode() -> int;
   static auto PersistentHdrEnabled() -> bool;
   static auto ValidationShortCircuiting() -> bool;
   static auto ShortCircuitIgnoreGeometry() -> bool;
   static auto ShortCircuitIgnoreCtm() -> bool;
+  static auto ExternalHdrEnabled() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

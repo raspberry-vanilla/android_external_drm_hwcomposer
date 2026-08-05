@@ -27,6 +27,7 @@
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
+#include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
 #include "compositor/ShortCircuitor.h"
 #include "compositor/mapper/LayerMapper.h"

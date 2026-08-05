@@ -382,4 +382,12 @@ std::optional<PanelOrientation> DrmConnector::GetPanelOrientation() {
   return {};
 }
 
+/* Returns true if the connector is a Multi-Stream Transport (MST) connector */
+bool DrmConnector::IsMst() const {
+  // It is a MST connector if the path property is present and has a non-zero
+  // value.
+  return path_property_.GetId() != 0 &&
+         path_property_.GetValue().value_or(0) != 0;
+}
+
 }  // namespace android::drm_hwcomposer

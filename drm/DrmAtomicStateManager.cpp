@@ -35,6 +35,7 @@
 #include <tuple>
 #include <utility>
 
+#include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/AtomicStateManager.h"
@@ -98,7 +99,7 @@ void DrmAtomicStateManager::WaitLastFrame() {
 void DrmAtomicStateManager::CheckDoubleSettingState(
     AtomicCommitArgs &args) const {
   if (args.power_mode) {
-    bool is_active = *args.power_mode != HwcDisplay::PowerMode::kOff;
+    bool is_active = *args.power_mode != PowerMode::kOff;
     if (is_active == committed_frame_state_.crtc_active_state) {
       /* Don't set the same state twice */
       args.power_mode.reset();
@@ -160,7 +161,7 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   }
   auto *crtc = pipe_->crtc->Get();
   auto *connector = pipe_->connector->Get();
-  bool active = *args.power_mode != HwcDisplay::PowerMode::kOff;
+  bool active = *args.power_mode != PowerMode::kOff;
   request.new_frame_state.crtc_active_state = active;
   if (!crtc->GetActiveProperty().AtomicSet(*request.property_set,
                                            active ? 1 : 0) ||
@@ -271,6 +272,11 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
   if (!crtc->GetGammaLutProperty() || !lut_size.has_value()) {
     ALOGV("Missing optional GAMMA_LUT property");
     return true;
+  }
+
+  // Must be used with corresponding plane degamma LUT
+  if (!use_color_pipeline_) {
+    return crtc->GetGammaLutProperty().AtomicSet(*request.property_set, 0);
   }
 
   if (!args.transfer_func) {
@@ -497,7 +503,7 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
   if (!committed_frame_state_.crtc_active_state) {
     // Force args.power_mode if the display is not active and there are other
     // things to commit.
-    args.power_mode = HwcDisplay::PowerMode::kOn;
+    args.power_mode = PowerMode::kOn;
   }
 
   auto atomic_request = std::make_unique<DrmAtomicRequest>();

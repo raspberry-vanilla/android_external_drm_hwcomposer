@@ -114,8 +114,8 @@ class ShortCircuitorTest : public ::testing::Test {
 
   static void SetUpDisplay(MockCompositorDisplay& display) {
     ON_CALL(display, GetColorTransformMatrix())
-        .WillByDefault(
-            Return(std::make_shared<HalColorTransforMatrix>(kIdentityMatrix)));
+        .WillByDefault(Return(
+            std::make_shared<const HalColorTransformMatrix>(kIdentityMatrix)));
   }
   static void SetUpCursorPlane(MockCompositorDisplay& display,
                                FakeDrmDevice& drm_device,
@@ -235,7 +235,7 @@ TEST_F(ShortCircuitorTest, DifferentColorMatrix) {
                                LayerList& layers) -> ValidationRequestContext {
     // Assume display had identity color matrix during last request.
     EXPECT_CALL(display, GetColorTransformMatrix())
-        .WillOnce(Return(std::make_shared<HalColorTransforMatrix>()));
+        .WillOnce(Return(std::make_shared<const HalColorTransformMatrix>()));
 
     return ValidationRequestContext(display, ToConstPtrList(layers));
   });
@@ -393,7 +393,7 @@ TEST_F(ShortCircuitorTest, IgnoreColorMatrix) {
                                LayerList& layers) -> ValidationRequestContext {
     // Assume display had identity color matrix during last request.
     EXPECT_CALL(display, GetColorTransformMatrix())
-        .WillOnce(Return(std::make_shared<HalColorTransforMatrix>()));
+        .WillOnce(Return(std::make_shared<const HalColorTransformMatrix>()));
 
     return ValidationRequestContext(display, ToConstPtrList(layers));
   });

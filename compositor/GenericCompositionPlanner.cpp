@@ -25,6 +25,7 @@
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/FlatteningController.h"
+#include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmPlane.h"

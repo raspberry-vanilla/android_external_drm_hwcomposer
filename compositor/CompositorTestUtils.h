@@ -57,7 +57,7 @@ class MockCompositorDisplay : public ICompositorDisplay {
   MOCK_METHOD(bool, UseColorPipeline, (), (const));
   MOCK_METHOD((std::pair<uint32_t, uint32_t>), GetSize, (), (const));
   MOCK_METHOD(const HwcLayer&, GetClientLayer, (), (const));
-  MOCK_METHOD((std::shared_ptr<const HalColorTransforMatrix>),
+  MOCK_METHOD((std::shared_ptr<const HalColorTransformMatrix>),
               GetColorTransformMatrix, (), (const));
   MOCK_METHOD(bool, CursorPlaneNeedsColorPipeline, (const HwcLayer&), (const));
 };

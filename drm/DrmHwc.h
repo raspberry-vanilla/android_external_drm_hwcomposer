@@ -133,11 +133,15 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   HotplugEventQueue hotplug_event_queue_;
   std::vector<DisplayHandle> displays_for_removal_list_;
 
+  void RequestHdcpNegotiation(DisplayHandle display_handle);
+
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
   StatsTracker dump_stats_tracker_;
 
   std::unique_ptr<DisplayRefreshRatesChangedAtomReporter>
       refresh_rates_reporter_;
+
+  bool hdcp_on_hotplug_enabled_{};
 };
 
 }  // namespace android::drm_hwcomposer

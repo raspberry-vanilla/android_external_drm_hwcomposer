@@ -125,7 +125,8 @@ HwcDisplayConfigsGenerator::GenerateDisplayConfigs(
   configs.mm_height = connector.GetMmHeight();
 
   bool enable_hdr = params.use_color_pipeline &&
-                    (connector.IsExternal() || params.persistent_hdr_enabled);
+                    (connector.IsExternal() ? params.external_hdr_enabled
+                                            : params.persistent_hdr_enabled);
 
   if (params.capabilities != nullptr) {
     auto override_types = params.capabilities->GetHdrTypesOverride();

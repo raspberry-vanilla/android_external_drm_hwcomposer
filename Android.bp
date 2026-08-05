@@ -342,6 +342,7 @@ cc_test_host {
         "utils/BacklightController.cpp",
         "utils/BacklightControllerTest.cpp",
         "utils/ColorUtil.cpp",
+        "utils/ColorUtilTest.cpp",
         "utils/SysfsBacklightController.cpp",
         "utils/SysfsBacklightControllerTest.cpp",
         "utils/fd.cpp",

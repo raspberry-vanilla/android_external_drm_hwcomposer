@@ -24,7 +24,6 @@
 #include <thread>
 
 #include "compositor/FlatteningController.h"
-#include "hwc/HwcDisplay.h"
 
 using ::testing::StrictMock;
 

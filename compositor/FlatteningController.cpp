@@ -38,8 +38,8 @@
 #include <thread>
 #include <utility>
 
+#include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningEventAtomReporter.h"
-#include "hwc/HwcDisplay.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {

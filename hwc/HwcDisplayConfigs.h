@@ -62,6 +62,7 @@ class BackendDisplayCapabilities;
 struct HwcConfigParameters {
   bool use_color_pipeline = false;
   bool persistent_hdr_enabled = false;
+  bool external_hdr_enabled = false;
   const BackendDisplayCapabilities *capabilities = nullptr;
 };
 

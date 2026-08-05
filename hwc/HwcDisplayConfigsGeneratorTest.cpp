@@ -29,6 +29,10 @@
 #include "drm/DrmTestUtils.h"
 #include "hwc/HwcDisplayConfigs.h"
 
+namespace android::ui {
+using aidl::android::hardware::graphics::common::Hdr;
+}  // namespace android::ui
+
 namespace android::drm_hwcomposer {
 
 namespace {
@@ -131,6 +135,27 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_BasicSuccess) {
   EXPECT_EQ(preferred_config->second.output_type, OutputType::kSdr);
 }
 
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrDisabledExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/true, 500,
+                                                      300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = true,
+      .persistent_hdr_enabled = false,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  EXPECT_EQ(configs_opt->hwc_configs.size(), 1);
+  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
+            OutputType::kSdr);
+}
+
 TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledExternal) {
   auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
                                                       /*is_external=*/true, 500,
@@ -143,6 +168,7 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledExternal) {
   HwcConfigParameters params = {
       .use_color_pipeline = true,
       .persistent_hdr_enabled = false,
+      .external_hdr_enabled = true,
   };
 
   auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
@@ -239,6 +265,7 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {
       .use_color_pipeline = true,
       .persistent_hdr_enabled = false,
+      .external_hdr_enabled = true,
   };
 
   auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);

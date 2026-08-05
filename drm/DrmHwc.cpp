@@ -29,7 +29,9 @@
 #include <utility>
 #include <vector>
 
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
+#include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
@@ -82,8 +84,9 @@ std::string DumpDisplayStats(const HwcDisplay *display,
 DrmHwc::DrmHwc()
     : resource_manager_(this),
       dump_stats_tracker_(this),
-      refresh_rates_reporter_(
-          DisplayRefreshRatesChangedAtomReporter::Create()) {};
+      refresh_rates_reporter_(DisplayRefreshRatesChangedAtomReporter::Create()),
+      hdcp_on_hotplug_enabled_(Properties::EnableHdcpOnHotplug()) {
+}
 
 /* Must be called after every display attach/detach cycle */
 void DrmHwc::FinalizeDisplayBinding() {
@@ -146,6 +149,8 @@ bool DrmHwc::BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   displays_[disp_handle]->SetPipeline(pipeline);
   display_handles_[pipeline] = disp_handle;
 
+  RequestHdcpNegotiation(disp_handle);
+
   return true;
 }
 
@@ -192,20 +197,47 @@ void DrmHwc::NotifyHdcpTermination(
   }
 
   auto handle = display_handles_[pipeline];
-  if (displays_.count(handle) == 0) {
-    ALOGE("%s, can't find the display, handle: %" PRIu64, __func__, handle);
-    return;
-  }
-
-  HwcDisplay *display = displays_[handle].get();
+  auto *display = GetDisplay(handle);
   if (display == nullptr) {
     ALOGE("%s, display is null for handle: %" PRIu64, __func__, handle);
     return;
   }
 
-  // Trigger HwcDisplay to terminate HDCP negotiation.
+  // Trigger HwcDisplay to terminate HDCP negotiation only if it was previously
+  // enabled.
   if (!display->StopHdcp()) {
     ALOGI("%s, StopHdcp() failed for display: %" PRIu64, __func__, handle);
+  }
+}
+
+void DrmHwc::RequestHdcpNegotiation(DisplayHandle display_handle) {
+  auto *display = GetDisplay(display_handle);
+  if (display == nullptr) {
+    ALOGE("%s, display is null for handle: %" PRIu64, __func__, display_handle);
+    return;
+  }
+
+  const auto &pipeline = display->GetPipe();
+  if (!hdcp_on_hotplug_enabled_) {
+    return;
+  }
+
+  if (pipeline.connector && pipeline.connector->Get() != nullptr &&
+      (pipeline.connector->Get()->IsInternal() ||
+       pipeline.connector->Get()->IsMst())) {
+    ALOGI(
+        "%s, skipping default HDCP enabling for internal or MST display "
+        "handle: "
+        "%" PRIu64,
+        __func__, display_handle);
+    return;
+  }
+
+  if (!display->StartHdcp()) {
+    ALOGI(
+        "%s, StartHdcp() requested by default not supported for display: "
+        "%" PRIu64,
+        __func__, display_handle);
   }
 }
 

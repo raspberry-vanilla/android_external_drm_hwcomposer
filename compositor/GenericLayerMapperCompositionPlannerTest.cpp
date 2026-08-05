@@ -47,11 +47,12 @@ using ::testing::ReturnRefOfCopy;
 constexpr float kOpaque = 1.0F;
 constexpr float kLayerCached = 0.0F;
 
-std::shared_ptr<HalColorTransforMatrix>
-    kIdentityCtm = std::make_shared<HalColorTransforMatrix>(kIdentityMatrix);
+std::shared_ptr<const HalColorTransformMatrix>
+    kIdentityCtm = std::make_shared<const HalColorTransformMatrix>(
+        kIdentityMatrix);
 
 // clang-format off
-constexpr HalColorTransforMatrix kOffsetMatrix = {
+constexpr const HalColorTransformMatrix kOffsetMatrix = {
     1.0F, 0.0F, 0.0F, 0.0F,
     0.0F, 1.0F, 0.0F, 0.0F,
     0.0F, 0.0F, 1.0F, 0.0F,
@@ -59,8 +60,8 @@ constexpr HalColorTransforMatrix kOffsetMatrix = {
 };
 // clang-format on
 
-std::shared_ptr<HalColorTransforMatrix>
-    kOffsetCtm = std::make_shared<HalColorTransforMatrix>(kOffsetMatrix);
+std::shared_ptr<const HalColorTransformMatrix>
+    kOffsetCtm = std::make_shared<const HalColorTransformMatrix>(kOffsetMatrix);
 }  // namespace
 
 TEST(GenericLayerMapperCompositionPlannerTest,

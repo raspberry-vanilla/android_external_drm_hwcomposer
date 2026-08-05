@@ -68,7 +68,6 @@ struct CompositionAttributes;
 struct CompositionStats;
 struct DrmDisplayPipeline;
 
-using DisplayHandle = int64_t;
 using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
 using ColorGamut = ::android::ColorSpace;
 
@@ -102,13 +101,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   enum DisplayType { kInternal, kExternal, kVirtual };
 
-  enum class PowerMode {
-    kOff,
-    kDoze,
-    kDozeSuspend,
-    kSuspend,
-    kOn,
-  };
+  using PowerMode = android::drm_hwcomposer::PowerMode;
 
   HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
@@ -346,6 +339,7 @@ class HwcDisplay : public ICompositorDisplay {
   void InitUseColorPipeline();
   void InitWcgSupported();
   void InitHdrSupported();
+  void InitForcedColorMode();
 
   // Before CreateFrameUpdateCommit() can be called, it must be ensured that
   // the composition's internal states are up to date and ready to create an
@@ -459,6 +453,7 @@ class HwcDisplay : public ICompositorDisplay {
   bool has_wcg_support_ = false;
   bool has_hdr_support_ = false;
   bool use_color_pipeline_ = false;
+  std::optional<ColorMode> forced_color_mode_;
 
   // Most recent result of ValidateStagedComposition. Must be kept alive until
   // the composition is committed.

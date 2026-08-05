@@ -399,7 +399,18 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
     ALOGE("Failed to allocate property set");
     return;
   }
+
+  std::set<uint32_t> crtcs_to_skip;
+  static const bool kSkipInternalReset = Properties::SkipInternalDisplayReset();
+
   for (const auto &conn : connectors_) {
+    if (kSkipInternalReset && conn->IsInternal()) {
+      auto crtc_id = conn->GetCrtcIdProperty().GetValue();
+      if (crtc_id && *crtc_id != 0) {
+        crtcs_to_skip.insert(*crtc_id);
+      }
+      continue;
+    }
     if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
       ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
       return;
@@ -413,6 +424,9 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
     }
   }
   for (const auto &crtc : crtcs_) {
+    if (crtcs_to_skip.find(crtc->GetId()) != crtcs_to_skip.end()) {
+      continue;
+    }
     if (!crtc->GetModeProperty().AtomicSet(*pset.get(), 0) ||
         !crtc->GetActiveProperty().AtomicSet(*pset.get(), 0)) {
       ALOGE(

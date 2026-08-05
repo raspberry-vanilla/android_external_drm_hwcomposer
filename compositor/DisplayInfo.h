@@ -22,6 +22,16 @@
 
 namespace android::drm_hwcomposer {
 
+using DisplayHandle = int64_t;
+
+enum class PowerMode {
+  kOff,
+  kDoze,
+  kDozeSuspend,
+  kSuspend,
+  kOn,
+};
+
 constexpr int kColorMatrixSize = 16;
 using HalColorTransformMatrix = std::array<float, kColorMatrixSize>;
 

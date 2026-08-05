@@ -127,6 +127,7 @@ SKIP_FILES := \
     stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp \
     stats/StatsTest.cpp \
     utils/BacklightControllerTest.cpp \
+    utils/ColorUtilTest.cpp \
     utils/SysfsBacklightControllerTest.cpp \
     tests/backend_test_stub.cpp \
 

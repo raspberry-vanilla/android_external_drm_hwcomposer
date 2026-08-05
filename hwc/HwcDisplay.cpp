@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -231,27 +232,32 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     case OutputType::kSystem: {
       std::vector<ui::Hdr> hdr_types;
       GetEdid()->GetSupportedHdrTypes(hdr_types);
-      if (!hdr_types.empty()) {
-        SetHdrHeadroom();
-        auto type = hdr_types.front();
-        switch (type) {
-          case ui::Hdr::HDR10:
-            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
-            break;
-          case ui::Hdr::HLG:
-            SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kHlg);
-            break;
-          default:
-            ALOGW("HDR type %d is not supported, using Display BT2020 instead.",
-                  static_cast<int>(type));
-            SetHdrOutputMetadata(ColorGamut::BT2020(),
-                                 TransferFunction::kSmpte170M);
-            break;
-        }
-        min_bpc_ = 8;
+      if (hdr_types.empty() && !forced_color_mode_) {
+        SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kSrgb);
+        min_bpc_ = 6;
         break;
       }
-      [[fallthrough]];
+
+      // TODO: pick appropriate HDR type
+      SetHdrHeadroom();
+      min_bpc_ = 8;
+      auto type = (hdr_types.empty() && forced_color_mode_) ? ui::Hdr::HDR10
+                                                            : hdr_types.front();
+      switch (type) {
+        case ui::Hdr::HDR10:
+          SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kPq);
+          break;
+        case ui::Hdr::HLG:
+          SetHdrOutputMetadata(ColorGamut::BT2020(), TransferFunction::kHlg);
+          break;
+        default:
+          ALOGW("HDR type %d is not supported, using Display BT2020 instead.",
+                static_cast<int>(type));
+          SetHdrOutputMetadata(ColorGamut::BT2020(),
+                               TransferFunction::kSmpte170M);
+          break;
+      }
+      break;
     }
     case OutputType::kSdr:
       hdr_headroom_ = {};
@@ -774,6 +780,31 @@ void HwcDisplay::Deinit() {
   }
 }
 
+void HwcDisplay::InitForcedColorMode() {
+  if (IsInHeadlessMode()) {
+    return;
+  }
+
+  // Forced color modes only apply to the internal display
+  if (GetPipe().connector && GetPipe().connector->Get() &&
+      GetPipe().connector->Get()->IsExternal()) {
+    return;
+  }
+
+  if (hwc_->GetResMan().ForceColorMode() < 0) {
+    return;
+  }
+
+  auto force_color_mode = static_cast<ColorMode>(
+      hwc_->GetResMan().ForceColorMode());
+  if (force_color_mode < ColorMode::kNative ||
+      force_color_mode > ColorMode::kDisplayBt2020) {
+    return;
+  }
+
+  forced_color_mode_ = force_color_mode;
+}
+
 void HwcDisplay::InitUseColorPipeline() {
   if (IsInHeadlessMode()) {
     use_color_pipeline_ = false;
@@ -796,7 +827,11 @@ void HwcDisplay::InitWcgSupported() {
                   GetPipe().crtc->Get()->GetCtmProperty();
   std::vector<ColorMode> color_modes;
   GetEdid()->GetColorModes(color_modes);
-  has_wcg_support_ = (use_color_pipeline_ || crtc_ctm) && !color_modes.empty();
+  // TODO check for WCG modes
+  has_wcg_support_ = (use_color_pipeline_ || crtc_ctm) &&
+                     (!color_modes.empty() ||
+                      (forced_color_mode_ &&
+                       forced_color_mode_.value() != ColorMode::kNative));
 }
 
 void HwcDisplay::InitHdrSupported() {
@@ -820,15 +855,27 @@ void HwcDisplay::InitHdrSupported() {
                     GetPipe().crtc->Get()->GetGammaLutSizeProperty();
   std::vector<ui::Hdr> hdr_types;
   GetEdid()->GetSupportedHdrTypes(hdr_types);
+
+  if (!GetPipe().connector || !GetPipe().connector->Get()) {
+    has_hdr_support_ = false;
+    return;
+  }
+
+  const bool hdr_sysprop_enabled = GetPipe().connector->Get()->IsExternal()
+                                       ? hwc_->GetResMan().ExternalHdrEnabled()
+                                       : hwc_->GetResMan()
+                                             .PersistentHdrEnabled();
+
+  // TODO check for HDR types
   has_hdr_support_ = use_color_pipeline_ && crtc_gamma && has_wcg_support_ &&
-                     GetPipe().connector && GetPipe().connector->Get() &&
-                     (GetPipe().connector->Get()->IsExternal() ||
-                      hwc_->GetResMan().PersistentHdrEnabled()) &&
+                     hdr_sysprop_enabled &&
                      GetPipe()
                          .connector->Get()
                          ->GetHdrOutputMetadataProperty() &&
                      GetPipe().connector->Get()->GetColorspaceProperty() &&
-                     !hdr_types.empty();
+                     (!hdr_types.empty() ||
+                      (forced_color_mode_ &&
+                       forced_color_mode_.value() != ColorMode::kNative));
 }
 
 bool HwcDisplay::Init() {
@@ -911,6 +958,7 @@ bool HwcDisplay::Init() {
     const HwcConfigParameters params = {
         .use_color_pipeline = Properties::UseColorPipeline(),
         .persistent_hdr_enabled = Properties::PersistentHdrEnabled(),
+        .external_hdr_enabled = Properties::ExternalHdrEnabled(),
         .capabilities = pipeline_->capabilities.get(),
     };
     auto configs = configs_generator_.GenerateDisplayConfigs(*connector,
@@ -921,6 +969,7 @@ bool HwcDisplay::Init() {
     configs_ = std::move(*configs);
   }
 
+  InitForcedColorMode();
   InitUseColorPipeline();
   InitWcgSupported();
   InitHdrSupported();
@@ -983,35 +1032,28 @@ auto HwcDisplay::GetColorModes() const -> std::vector<ColorMode> {
     }
   }
 
-  std::vector<ColorMode> modes;
-  GetEdid()->GetColorModes(modes);
-
-  if (GetPipe().connector->Get()->IsInternal() &&
-      hwc_->GetResMan().ForceColorMode() >= 0) {
-    auto force_color_mode = static_cast<ColorMode>(
-        hwc_->GetResMan().ForceColorMode());
-
-    if (force_color_mode >= ColorMode::kNative &&
-        force_color_mode <= ColorMode::kDisplayBt2020) {
-      modes.clear();
-      modes.emplace_back(ColorMode::kNative);
-
-      if (force_color_mode != ColorMode::kNative) {
-        modes.emplace_back(force_color_mode);
-      }
-
-      return modes;
-    }
+  // If forced_color_mode_ is set, override the color modes.
+  if (forced_color_mode_.has_value()) {
+    std::set<ColorMode> modes;
+    modes.emplace(ColorMode::kNative);
+    modes.emplace(ColorMode::kSrgb);
+    modes.emplace(forced_color_mode_.value());
+    return {modes.begin(), modes.end()};
   }
 
   if (!GetPipe().connector->Get()->GetColorspaceProperty()) {
     return {ColorMode::kNative};
   }
 
+  // TODO: refactor to use set instead of vector
+  std::vector<ColorMode> modes;
+  GetEdid()->GetColorModes(modes);
+
   if (modes.empty()) {
     return {ColorMode::kNative};
   }
 
+  modes.emplace_back(ColorMode::kSrgb);
   return modes;
 }
 
@@ -1022,7 +1064,10 @@ auto HwcDisplay::GetRenderIntents(ColorMode /*color_mode*/) const
 }
 
 void HwcDisplay::SetColorMode(ColorMode mode, ui::RenderIntent render_intent) {
-  colorspace_ = ColorUtil::ToHwcColorspace(mode);
+  // If force_color_mode is set, override the color modes.
+  colorspace_ = forced_color_mode_
+                    ? ColorUtil::ToHwcColorspace(forced_color_mode_.value())
+                    : ColorUtil::ToHwcColorspace(mode);
 
   switch (render_intent) {
     case ui::RenderIntent::COLORIMETRIC:
@@ -1062,15 +1107,12 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
     }
   }
 
-  // Return HDR caps only when we have the ability to set HDR
-  const DrmDisplayPipeline &pipeline = GetPipe();
-  if (pipeline.connector == nullptr || pipeline.connector->Get() == nullptr ||
-      !pipeline.connector->Get()->GetHdrOutputMetadataProperty()) {
-    return;
-  }
-
   GetEdid()->GetHdrCapabilities(*types, max_luminance, max_average_luminance,
                                 min_luminance);
+  // TODO: pick appropriate HDR type
+  if (types->empty() && forced_color_mode_) {
+    types->emplace_back(ui::Hdr::HDR10);
+  }
 }
 
 auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
@@ -1086,8 +1128,8 @@ auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
 
 auto HwcDisplay::StartHdcp() -> bool {
   /*
-   * Client can request to start Hdcp
-   * If Client requests to start Hdcp, internal state is set to kDesired
+   * Hdcp will be enabled on hotplug or client can request to start Hdcp
+   * With requests to start Hdcp, internal state is set to kDesired
    * else the state stays as Undesired
    * Since the HDCP Content and Content Protection prop are optional
    * We need to make sure the connector has these properties else
@@ -1096,11 +1138,11 @@ auto HwcDisplay::StartHdcp() -> bool {
    */
   if (hdcpcon_ == nullptr) {
     ALOGE(
-        "Client requested HDCP, but HDCP properties not available on that "
+        "HDCP requested, but HDCP properties not available on that "
         "display");
     return false;
   }
-  ALOGI("Client requested to start HDCP");
+  ALOGI("HDCP requested to start");
   hdcpcon_->Start();
   return true;
 }
@@ -1778,7 +1820,7 @@ void HwcDisplay::LogModesOnHotplug() {
 
   const uint32_t
       connection_type = GetPipe().connector->Get()->GetConnectorType();
-  const bool has_path = GetPipe().connector->Get()->HasPathProperty();
+  const bool is_mst = GetPipe().connector->Get()->IsMst();
 
   auto vendor = EdidWrapper::VendorProductInfo{};
   uint32_t vrr_range_min = 0;
@@ -1838,7 +1880,7 @@ void HwcDisplay::LogModesOnHotplug() {
          .max_average_luminance = max_average_luminance,
          .min_luminance = min_luminance,
          .connection_type = connection_type,
-         .has_path = has_path,
+         .has_path = is_mst,
          .vrr_range_min = vrr_range_min,
          .vrr_range_max = vrr_range_max};
 

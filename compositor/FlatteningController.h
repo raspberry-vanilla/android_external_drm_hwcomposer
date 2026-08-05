@@ -25,7 +25,7 @@
 #include <mutex>
 #include <thread>
 
-#include "hwc/HwcDisplay.h"
+#include "compositor/DisplayInfo.h"
 
 namespace android::drm_hwcomposer {
 
