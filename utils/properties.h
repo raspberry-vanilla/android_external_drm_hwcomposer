@@ -48,6 +48,7 @@ class Properties {
   static auto ShortCircuitIgnoreGeometry() -> bool;
   static auto ShortCircuitIgnoreCtm() -> bool;
   static auto ExternalHdrEnabled() -> bool;
+  static auto SkipPlaneDamageClips() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

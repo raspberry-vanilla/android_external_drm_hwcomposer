@@ -99,6 +99,9 @@ ColorGamut ToColorGamut(HwcColorspace colorspace) {
       return ColorGamut::DCIP3();
     case HwcColorspace::kBt601:
       return ColorGamut::sRGB();
+    default:
+      ALOGW("Unknown colorspace %d, falling back to sRGB", colorspace);
+      return ColorGamut::sRGB();
   }
 }
 

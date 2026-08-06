@@ -33,6 +33,13 @@
 namespace android::drm_hwcomposer {
 
 enum class ColorOpType : int32_t {
+  /*
+   * when a kernel TYPE enum value is not present in color_op_type_enum_map.
+   * Pipelines that contain an op with this type are rejected by VerifyColorPipeline()
+   * so they are never activated. If it somehow went through to AtomicSetColorPipeline()
+   * then op is bypassed.
+   */
+  kUnknown = -1,
   kMatrix3x4,
   k1DLut,
   k1DLutMultiSegmented,

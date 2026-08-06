@@ -64,10 +64,27 @@ bool VerifyColorPipeline(
     return false;
   }
 
+  /*
+   * Reject the entire pipeline, If any color op carries a TYPE value that
+   * userspace does not recognise. If a new TYPE appears in the
+   * kernel it must first add userspace support before this device
+   * activates the pipeline.
+   */
+  for (const auto &color_op : color_pipeline.color_ops) {
+    if (color_op_type_enum_map.find(
+            color_op->GetTypeProperty().GetValue().value_or(-1)) ==
+        color_op_type_enum_map.end()) {
+      ALOGW("Color pipeline rejected: unrecognized TYPE on %s",
+            color_op->DumpState().c_str());
+      return false;
+    }
+  }
+
   ColorOpType type = ColorOpType::kMatrix3x4;
   auto is_type = [&color_op_type_enum_map, &type](const auto &c) {
-    return color_op_type_enum_map.at(
-               c->GetTypeProperty().GetValue().value_or(0)) == type;
+    const auto it = color_op_type_enum_map.find(
+        c->GetTypeProperty().GetValue().value_or(-1));
+    return it != color_op_type_enum_map.end() && it->second == type;
   };
 
   // Verify one 3x4 CTM operation is present
@@ -83,31 +100,33 @@ bool VerifyColorPipeline(
     return false;
   };
 
-  // The first 1D LUT we encounter should be degamma, second is gamma
+  // The first 1D LUT we encounter should be degamma, second is gamma.
   bool is_degamma = true;
   for (const auto &color_op : color_pipeline.color_ops) {
-    const auto type = color_op->GetTypeProperty().GetValue().value_or(0);
-    if (color_op_type_enum_map.at(type) == ColorOpType::k1DLut) {
-      // Extract LUT size information
-      if (!color_op->GetSizeProperty() ||
-          !color_op->GetSizeProperty().IsRange() ||
-          !color_op->GetSizeProperty().GetValue().has_value()) {
-        ALOGE("Failed to get SIZE property on %s",
-              color_op->DumpState().c_str());
-        return false;
-      }
+    // 'type' is still set to k1DLut from the count check above, so is_type()
+    // correctly selects only 1D LUT ops without duplicating the map-lookup.
+    if (!is_type(color_op)) {
+      continue;
+    }
+    // Extract LUT size information
+    if (!color_op->GetSizeProperty() ||
+        !color_op->GetSizeProperty().IsRange() ||
+        !color_op->GetSizeProperty().GetValue().has_value()) {
+      ALOGE("Failed to get SIZE property on %s",
+            color_op->DumpState().c_str());
+      return false;
+    }
 
-      if (is_degamma) {
-        color_pipeline.degamma_lut_size = color_op->GetSizeProperty()
-                                              .GetValue()
-                                              .value_or(0);
-      } else {
-        color_pipeline.gamma_lut_size = color_op->GetSizeProperty()
+    if (is_degamma) {
+      color_pipeline.degamma_lut_size = color_op->GetSizeProperty()
                                             .GetValue()
                                             .value_or(0);
-      }
-      is_degamma = !is_degamma;
+    } else {
+      color_pipeline.gamma_lut_size = color_op->GetSizeProperty()
+                                          .GetValue()
+                                          .value_or(0);
     }
+    is_degamma = !is_degamma;
   }
 
   return true;
@@ -273,8 +292,12 @@ int DrmPlane::Init() {
     size_hints_property_.GetBlobData(size_hints_);
   }
 
-  GetPlaneProperty("FB_DAMAGE_CLIPS", fb_damage_clips_property_,
-                   Presence::kOptional);
+  if (Properties::SkipPlaneDamageClips()) {
+    ALOGV("Skipping initialization of FB_DAMAGE_CLIPS plane property");
+  } else {
+    GetPlaneProperty("FB_DAMAGE_CLIPS", fb_damage_clips_property_,
+                     Presence::kOptional);
+  }
 
   return 0;
 }
@@ -565,8 +588,17 @@ auto DrmPlane::AtomicSetColorPipeline(
   // The first 1D LUT we encounter should be degamma, second is gamma
   bool is_degamma_color_op = true;
   for (const auto &color_op : color_pipeline_.color_ops) {
-    switch (color_op_type_enum_map_.at(
-        (color_op->GetTypeProperty().GetValue().value_or(0)))) {
+    /*
+     * Map the kernel TYPE value to our internal enum.  If the value is
+     * not present in the map, then assign as kUnknown, otherwise the type.
+     */
+    const auto type_val = color_op->GetTypeProperty().GetValue().value_or(-1);
+    const auto type_it = color_op_type_enum_map_.find(type_val);
+    const ColorOpType color_op_type =
+        (type_it != color_op_type_enum_map_.end())
+            ? type_it->second
+            : ColorOpType::kUnknown;
+    switch (color_op_type) {
       case ColorOpType::kMatrix3x4:
         if (ctm_blob) {  // Set 3x4 CTM
           if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
@@ -620,8 +652,10 @@ auto DrmPlane::AtomicSetColorPipeline(
         is_degamma_color_op = !is_degamma_color_op;
         break;
       case ColorOpType::k1DLutMultiSegmented:
-        [[fallthrough]];
+      case ColorOpType::kUnknown:
       default:
+        ALOGE("Unexpected color op type on %s — bypassing",
+              color_op->DumpState().c_str());
         if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
           ALOGE("Failed to set BYPASS property on %s",
                 color_op->DumpState().c_str());

@@ -165,7 +165,7 @@ auto Properties::EnableExternalDisplays() -> bool {
 }
 
 auto Properties::EnableHdcpOnHotplug() -> bool {
-  return (property_get_bool("vendor.hwc.drm.enable_hdcp_on_hotplug", 0) != 0);
+  return (property_get_bool("vendor.hwc.drm.enable_hdcp_on_hotplug", 1) != 0);
 }
 
 auto Properties::ForcedHolePunchingEnabled() -> bool {
@@ -242,6 +242,12 @@ auto Properties::ExternalHdrEnabled() -> bool {
   constexpr int kDefault = 1;
   return (property_get_bool("vendor.hwc.drm.external_hdr_enabled", kDefault) !=
           0);
+}
+
+auto Properties::SkipPlaneDamageClips() -> bool {
+  constexpr int kDefault = 0;
+  return (property_get_bool("vendor.hwc.drm.skip_plane_damage_clips",
+                            kDefault) != 0);
 }
 
 }  // namespace android::drm_hwcomposer
