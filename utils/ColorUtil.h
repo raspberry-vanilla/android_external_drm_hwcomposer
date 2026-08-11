@@ -51,6 +51,9 @@ inline constexpr float kDefaultMaxLuminance = 500.F;
 inline constexpr double kSignalMin = 0.0;
 inline constexpr double kSignalMax = 1.0;
 
+inline constexpr float kMinBrightness = 0.0F;
+inline constexpr float kMaxBrightness = 1.0F;
+
 class ColorUtil {
  public:
   /**
@@ -175,6 +178,11 @@ class ColorUtil {
       TransferFunction tf, size_t lut_size,
       Lut1DCache<drm_color_lut> &lut_1d_map, float display_brightness,
       float hdr_headroom);
+
+  /**
+   * Applies the minimum display brightness floor.
+   */
+  static auto ScaleBrightnessIfNeeded(float display_brightness) -> float;
 
  private:
   /* Converts a column-major 4x4 float type flat array matrix into

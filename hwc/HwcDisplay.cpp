@@ -1798,9 +1798,9 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
   }
 
   if (brightness >= 0.0F && GetPipe().connector->Get()->IsInternal()) {
-    brightness_ = brightness;
+    brightness_ = ColorUtil::ScaleBrightnessIfNeeded(brightness);
     return backlight_controller_->SetBrightness(
-        std::optional<float>(brightness));
+        std::optional<float>(brightness_));
   }
 
   // Negative values indicate turning the backlight off per HAL API.

@@ -26,7 +26,9 @@
 
 #include "utils/BacklightController.h"
 #include "utils/BacklightFileInterface.h"
+#include "utils/ColorUtil.h"
 #include "utils/SysfsBacklightController.h"
+#include "utils/TestUtils.h"
 
 class SysfsBacklightFileInterfaceFake {
  public:
@@ -294,6 +296,72 @@ TEST_F(SysfsBacklightControllerTest, OverflowBrightness) {
   ASSERT_NE(bl.bl_, nullptr);
   ASSERT_NE(bl.fake_, nullptr);
   EXPECT_FALSE(bl.bl_->SetBrightness(2.0F));
+}
+
+TEST_F(SysfsBacklightControllerTest,
+       SetBrightnessWithMinDisplayBrightnessClamping) {
+  int max = 10000;
+  TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
+                                                                 max, 0, true);
+  ASSERT_NE(bl.bl_, nullptr);
+  ASSERT_NE(bl.fake_, nullptr);
+
+  ScopedTestProperty prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  // 0.0F scaled to 0.1F -> 1 + (10000 - 1) * 0.1 = 1000
+  EXPECT_EQ(bl.fake_->brightness_val(), "1000");
+}
+
+TEST_F(SysfsBacklightControllerTest,
+       SetBrightnessWithScaledBrightnessRangeNoopWhenMinZero) {
+  int max = 10000;
+  TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
+                                                                 max, 0, true);
+  ASSERT_NE(bl.bl_, nullptr);
+  ASSERT_NE(bl.fake_, nullptr);
+
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  EXPECT_EQ(bl.fake_->brightness_val(), "1");
+}
+
+TEST_F(SysfsBacklightControllerTest,
+       SetBrightnessWithScaledBrightnessRangeNonZeroAtZero) {
+  int max = 10000;
+  TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
+                                                                 max, 0, true);
+  ASSERT_NE(bl.bl_, nullptr);
+  ASSERT_NE(bl.fake_, nullptr);
+
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  // 0.0F scaled to 0.1F -> 1 + (10000 - 1) * 0.1 = 1000
+  EXPECT_EQ(bl.fake_->brightness_val(), "1000");
+}
+
+TEST_F(SysfsBacklightControllerTest,
+       SetBrightnessWithScaledBrightnessRangeCalculatesExpectedScale) {
+  int max = 10000;
+  TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
+                                                                 max, 0, true);
+  ASSERT_NE(bl.bl_, nullptr);
+  ASSERT_NE(bl.fake_, nullptr);
+
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.5F)));
+  // 0.5F scaled to 0.55F -> 1 + (10000 - 1) * 0.55 = 5500
+  EXPECT_EQ(bl.fake_->brightness_val(), "5500");
 }
 
 }  // namespace android::drm_hwcomposer

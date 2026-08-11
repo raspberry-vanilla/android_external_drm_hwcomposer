@@ -18,6 +18,7 @@
 
 #include <string>
 
+#include "utils/ColorUtil.h"
 #include "utils/log.h"
 
 #ifdef ANDROID
@@ -248,6 +249,39 @@ auto Properties::SkipPlaneDamageClips() -> bool {
   constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.skip_plane_damage_clips",
                             kDefault) != 0);
+}
+
+auto Properties::MinDisplayBrightness() -> float {
+  char buf[PROPERTY_VALUE_MAX] = {};
+  const int prop_length = property_get("vendor.hwc.drm.min_display_brightness",
+                                       buf, "");
+  if (prop_length == 0) {
+    return kMinBrightness;
+  }
+
+  char *end = nullptr;
+  const float val = strtof(buf, &end);
+  if (end == buf || *end != '\0') {
+    ALOGE("Failed to convert min_display_brightness property (\"%s\") to float",
+          buf);
+    return kMinBrightness;
+  }
+
+  if (val < kMinBrightness || val > kMaxBrightness) {
+    ALOGE(
+        "min_display_brightness property (%f) outside expected range [%f, "
+        "%f]",
+        val, kMinBrightness, kMaxBrightness);
+    return kMinBrightness;
+  }
+
+  return val;
+}
+
+auto Properties::ScaleBrightnessRangeToMinBrightness() -> bool {
+  return (property_get_bool("vendor.hwc.drm.scale_brightness_range_to_min_"
+                            "brightness",
+                            0) != 0);
 }
 
 }  // namespace android::drm_hwcomposer

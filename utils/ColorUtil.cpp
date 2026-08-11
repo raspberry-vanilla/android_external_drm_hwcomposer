@@ -34,6 +34,7 @@
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "utils/log.h"
+#include "utils/properties.h"
 
 using ColorGamut = android::ColorSpace;
 
@@ -417,6 +418,23 @@ const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
   }
   return Get1DLut<drm_color_lut>(tf, lut_size, lut_1d_map, lut_scale,
                                  /*is_degamma=*/false);
+}
+
+auto ColorUtil::ScaleBrightnessIfNeeded(float display_brightness) -> float {
+  // Pass through unset or out-of-range sentinel values untouched.
+  if (display_brightness < kMinBrightness ||
+      display_brightness > kMaxBrightness) {
+    return display_brightness;
+  }
+
+  const float min_brightness = Properties::MinDisplayBrightness();
+  if (min_brightness > kMinBrightness &&
+      Properties::ScaleBrightnessRangeToMinBrightness()) {
+    return min_brightness +
+           (display_brightness * (kMaxBrightness - min_brightness));
+  }
+
+  return std::max(display_brightness, min_brightness);
 }
 
 // Tell the compiler explicitly to build these versions

@@ -22,6 +22,7 @@
 
 #include "compositor/DisplayInfo.h"
 #include "utils/ColorUtil.h"
+#include "utils/TestUtils.h"
 
 namespace android::drm_hwcomposer {
 
@@ -291,6 +292,145 @@ TEST(ColorUtilTest, GetGammaLutValidAndCaching) {
   const auto &lut_cached = ColorUtil::GetGammaLut(TransferFunction::kHlg,
                                                   kLutSize, cache, 1.0F, 1.0F);
   EXPECT_EQ(&lut, &lut_cached);
+}
+
+TEST(ColorUtilTest, GetGammaLutHdrClampsToMinFloorAtZeroDisplayBrightness) {
+  Lut1DCache<drm_color_lut> cache;
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.01");
+
+  const size_t kLutSize = 512;
+  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
+                                           cache,
+                                           ColorUtil::ScaleBrightnessIfNeeded(
+                                               0.0F),
+                                           1.0F);
+
+  ASSERT_EQ(lut.size(), kLutSize);
+  EXPECT_GT(lut[kLutSize - 1].red, 0U);
+  EXPECT_GT(lut[kLutSize - 1].green, 0U);
+  EXPECT_GT(lut[kLutSize - 1].blue, 0U);
+}
+
+// Tests for ScaleBrightnessIfNeeded
+TEST(ColorUtilTest, ScaleBrightnessIfNeededDefaultZero) {
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(-1.0F), -1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.5F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(1.0F), 1.0F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededClampsToMinFloor) {
+  ScopedTestProperty prop("vendor.hwc.drm.min_display_brightness", "0.01");
+
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(-1.0F), -1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.01F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.005F), 0.01F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.5F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(1.0F), 1.0F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededInvalidStringDefaultsToZero) {
+  ScopedTestProperty prop("vendor.hwc.drm.min_display_brightness", "invalid");
+
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.5F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededOutOfRangeDefaultsToZero) {
+  ScopedTestProperty prop("vendor.hwc.drm.min_display_brightness", "1.5");
+
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.5F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededRangeScaleNoopWhenMinZero) {
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.5F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(1.0F), 1.0F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededRangeScaleNonZeroAtZero) {
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.0F), 0.1F);
+}
+
+TEST(ColorUtilTest, ScaleBrightnessIfNeededRangeScaleCalculatesExpectedScale) {
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  // expected scale = 0.1 + 0.5 * (1.0 - 0.1) = 0.55
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(0.5F), 0.55F);
+  EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(1.0F), 1.0F);
+}
+
+TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNoopWhenMinZero) {
+  Lut1DCache<drm_color_lut> cache;
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  const size_t kLutSize = 512;
+  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
+                                           cache,
+                                           ColorUtil::ScaleBrightnessIfNeeded(
+                                               0.0F),
+                                           1.0F);
+
+  ASSERT_EQ(lut.size(), kLutSize);
+  EXPECT_EQ(lut[kLutSize - 1].red, 0U);
+  EXPECT_EQ(lut[kLutSize - 1].green, 0U);
+  EXPECT_EQ(lut[kLutSize - 1].blue, 0U);
+}
+
+TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNonZeroAtZero) {
+  Lut1DCache<drm_color_lut> cache;
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "true");
+
+  const size_t kLutSize = 512;
+  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
+                                           cache,
+                                           ColorUtil::ScaleBrightnessIfNeeded(
+                                               0.0F),
+                                           1.0F);
+
+  ASSERT_EQ(lut.size(), kLutSize);
+  EXPECT_GT(lut[kLutSize - 1].red, 0U);
+  EXPECT_GT(lut[kLutSize - 1].green, 0U);
+  EXPECT_GT(lut[kLutSize - 1].blue, 0U);
+}
+
+TEST(ColorUtilTest, GetGammaLutHdrScaleRangeCalculatesExpectedScale) {
+  Lut1DCache<drm_color_lut> cache;
+  const size_t kLutSize = 512;
+
+  const auto &lut_scaled = [&]() -> const auto & {
+    ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
+    ScopedTestProperty
+        scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                   "true");
+    return ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize, cache,
+                                  ColorUtil::ScaleBrightnessIfNeeded(0.5F),
+                                  1.0F);
+  }();
+
+  const auto &lut_expected = ColorUtil::GetGammaLut(TransferFunction::kHlg,
+                                                    kLutSize, cache, 0.55F,
+                                                    1.0F);
+
+  EXPECT_EQ(&lut_scaled, &lut_expected);
 }
 
 }  // namespace android::drm_hwcomposer
