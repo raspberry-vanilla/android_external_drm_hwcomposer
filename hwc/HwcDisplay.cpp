@@ -1803,7 +1803,9 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
         std::optional<float>(brightness));
   }
 
-  brightness_ = kBrightnessUnset;
+  // Negative values indicate turning the backlight off per HAL API.
+  // Set to 0 so downstream color and gamma pipelines scale to 0 (black).
+  brightness_ = 0.0F;
   return backlight_controller_->SetBrightness(std::nullopt);
 }
 
