@@ -120,13 +120,13 @@ class ColorUtil {
     switch (mode) {
       case ColorMode::kNative:
         return HwcColorspace::kDefault;
+      case ColorMode::kSrgb:
       case ColorMode::kBt601_625:
       case ColorMode::kBt601_625Unadjusted:
       case ColorMode::kBt601_525:
       case ColorMode::kBt601_525Unadjusted:
         return HwcColorspace::kBt601;
       case ColorMode::kBt709:
-      case ColorMode::kSrgb:
         return HwcColorspace::kBt709;
       case ColorMode::kDciP3:
       case ColorMode::kDisplayP3:
@@ -156,6 +156,12 @@ class ColorUtil {
         return DrmColorspace::kBt2020Rgb;
     }
   }
+
+  /* Framework sends CTM assuming non-linear input. Transform must be converted
+   * to a linear matrix to be applied correctly in the color pipeline.
+   */
+  static HalColorTransformMatrix ToLinearCtm(HalColorTransformMatrix ctm,
+                                             ColorMode mode);
 
   // If required, adjust color transform matrix to handle gamut mapping
   template <typename T>

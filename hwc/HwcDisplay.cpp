@@ -162,7 +162,7 @@ void HwcDisplay::SetColorTransformMatrix(
     client_ctm_has_offset_ = TransformHasOffsetValue(
         color_transform_matrix.data());
     client_color_matrix_ = std::make_shared<HalColorTransformMatrix>(
-        color_transform_matrix);
+        ColorUtil::ToLinearCtm(color_transform_matrix, color_mode_));
   }
 
   UpdateColorTransformMatrix();
@@ -1064,10 +1064,12 @@ auto HwcDisplay::GetRenderIntents(ColorMode /*color_mode*/) const
 }
 
 void HwcDisplay::SetColorMode(ColorMode mode, ui::RenderIntent render_intent) {
+  color_mode_ = mode;
+
   // If force_color_mode is set, override the color modes.
   colorspace_ = forced_color_mode_
                     ? ColorUtil::ToHwcColorspace(forced_color_mode_.value())
-                    : ColorUtil::ToHwcColorspace(mode);
+                    : ColorUtil::ToHwcColorspace(color_mode_);
 
   switch (render_intent) {
     case ui::RenderIntent::COLORIMETRIC:

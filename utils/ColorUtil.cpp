@@ -334,6 +334,16 @@ std::shared_ptr<const HalColorTransformMatrix> ColorUtil::Multiply(
   return out;
 }
 
+HalColorTransformMatrix ColorUtil::ToLinearCtm(
+    const HalColorTransformMatrix ctm_in, ColorMode mode) {
+  HalColorTransformMatrix ctm_out = kIdentityMatrix;
+  const ColorGamut::transfer_function
+      &tf = ToColorGamut(ColorUtil::ToHwcColorspace(mode)).getEOTF();
+  std::transform(ctm_in.begin(), ctm_in.end(), ctm_out.begin(),
+                 [&tf](float val) { return tf(val); });
+  return ctm_out;
+}
+
 template <typename T>
 std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
