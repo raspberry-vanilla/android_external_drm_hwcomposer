@@ -632,4 +632,240 @@ TEST_F(HwcDisplayConfigsGeneratorTest, Init_3DModesFilteredBeforeBackend) {
   ASSERT_TRUE(configs_opt.has_value());
 }
 
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_MaxRefreshRatePruningInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, 0, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .max_refresh_rate = 60.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  const auto& configs = *configs_opt;
+
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  for (const auto& [_, config] : configs.hwc_configs) {
+    EXPECT_LE(config.mode.GetVRefresh(), 61.0F);
+  }
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_MaxRefreshRateIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/true, 500,
+                                                      300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, 0, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .max_refresh_rate = 60.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  EXPECT_EQ(configs_opt->hwc_configs.size(), 4);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_FallbackPreferredModeWhenPrunedByMaxRefreshRate) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 120.0F, 0, DRM_MODE_TYPE_PREFERRED,
+                      "1080p120"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, 0, "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .max_refresh_rate = 60.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  const auto& configs = *configs_opt;
+
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_NE(configs.preferred_config_id, 0);
+
+  auto preferred_config = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(preferred_config, configs.hwc_configs.end());
+  EXPECT_EQ(preferred_config->second.mode.GetVRefresh(), 60.0F);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_MinRefreshRatePruningInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, 0, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .min_refresh_rate = 60.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  const auto& configs = *configs_opt;
+
+  EXPECT_EQ(configs.hwc_configs.size(), 3);
+  for (const auto& [_, config] : configs.hwc_configs) {
+    EXPECT_GE(config.mode.GetVRefresh(), 59.0F);
+  }
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_MinRefreshRateIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/true, 500,
+                                                      300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, 0, "1080p90"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .min_refresh_rate = 60.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  EXPECT_EQ(configs_opt->hwc_configs.size(), 3);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_MinAndMaxRefreshRateCombined) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, 0, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .min_refresh_rate = 60.0F,
+      .max_refresh_rate = 90.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  const auto& configs = *configs_opt;
+
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  for (const auto& [_, config] : configs.hwc_configs) {
+    EXPECT_GE(config.mode.GetVRefresh(), 59.0F);
+    EXPECT_LE(config.mode.GetVRefresh(), 91.0F);
+  }
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_ForceDisableMrrInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 60.0F, 0, 0, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .force_disable_mrr = true,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  const auto& configs = *configs_opt;
+
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.mode.GetVRefresh(), 90.0F);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_ForceDisableMrrIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/true, 500,
+                                                      300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 60.0F, 0, 0, "1080p60"),
+      CreateModeFloat(1920, 1080, 90.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p90"),
+      CreateModeFloat(1920, 1080, 120.0F, 0, 0, "1080p120"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .force_disable_mrr = true,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  EXPECT_EQ(configs_opt->hwc_configs.size(), 3);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigs_AllModesPrunedReturnsNullopt) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 30.0F, 0, 0, "1080p30"),
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+      .min_refresh_rate = 90.0F,
+  };
+
+  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  EXPECT_FALSE(configs_opt.has_value());
+}
+
 }  // namespace android::drm_hwcomposer

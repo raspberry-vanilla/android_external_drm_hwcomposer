@@ -154,6 +154,30 @@ HwcDisplayConfigsGenerator::GenerateDisplayConfigs(
             mode.GetName().c_str());
       continue;
     }
+
+    if (connector.IsInternal()) {
+      if (params.min_refresh_rate.has_value() &&
+          mode.GetVRefresh() < (params.min_refresh_rate.value() - 1)) {
+        ALOGI("Skipping display mode %s (Refresh not above min)",
+              mode.GetName().c_str());
+        continue;
+      }
+
+      if (params.max_refresh_rate.has_value() &&
+          mode.GetVRefresh() > (params.max_refresh_rate.value() + 1)) {
+        ALOGI("Skipping display mode %s (Refresh not below max)",
+              mode.GetName().c_str());
+        continue;
+      }
+
+      if (params.force_disable_mrr &&
+          (mode.GetRawMode().type & DRM_MODE_TYPE_PREFERRED) == 0) {
+        ALOGI("Skipping display mode %s (MRR disabled)",
+              mode.GetName().c_str());
+        continue;
+      }
+    }
+
     modes.push_back(mode);
   }
 

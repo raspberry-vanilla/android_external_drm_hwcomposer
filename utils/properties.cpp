@@ -16,6 +16,7 @@
 
 #include "properties.h"
 
+#include <optional>
 #include <string>
 
 #include "utils/ColorUtil.h"
@@ -237,6 +238,20 @@ auto Properties::ShortCircuitIgnoreCtm() -> bool {
   constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.short_circuit_ignore_ctm",
                             kDefault) != 0);
+}
+
+auto Properties::ForceDisableMrr() -> bool {
+  return (property_get_bool("ro.vendor.hwc.drm.force_disable_mrr", 0) != 0);
+}
+
+auto Properties::MinRefreshRate() -> std::optional<int> {
+  int val = property_get_int32("ro.vendor.hwc.drm.min_refresh_rate", -1);
+  return val >= 0 ? std::make_optional(val) : std::nullopt;
+}
+
+auto Properties::MaxRefreshRate() -> std::optional<int> {
+  int val = property_get_int32("ro.vendor.hwc.drm.max_refresh_rate", -1);
+  return val >= 0 ? std::make_optional(val) : std::nullopt;
 }
 
 auto Properties::ExternalHdrEnabled() -> bool {
