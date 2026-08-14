@@ -376,10 +376,12 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
   }
 
   // Notify the flattening controller of a new frame.
-  if (layers_.size() <= 1) {
-    flatcon_->DisableFlattening();
-  } else {
-    flatcon_->NewFrame();
+  if (flatcon_) {
+    if (layers_.size() <= 1) {
+      flatcon_->DisableFlattening();
+    } else {
+      flatcon_->NewFrame();
+    }
   }
 
   auto [composition,
@@ -888,10 +890,12 @@ bool HwcDisplay::Init() {
   }
 
   if (!IsInHeadlessMode()) {
-    auto flatcbk = (struct FlatConCallbacks){
-        .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
-    flatcon_ = std::make_unique<FlatteningController>(handle_, flatcbk,
-                                                      kFlatteningTimeout);
+    if (Properties::FlatteningEnabled()) {
+      auto flatcbk = (struct FlatConCallbacks){
+          .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
+      flatcon_ = std::make_unique<FlatteningController>(handle_, flatcbk,
+                                                        kFlatteningTimeout);
+    }
 
     if (IsHdcpPropertyPresent()) {
       ALOGI("HDCP properties found on display %d", int(handle_));

@@ -19,7 +19,9 @@ CXXARGS := $(shell cat $(BASE_DIR)/toolchain_wrapper/sharedlib.cppflags)
 CXXARGS := $(subst [BASE_DIR],$(BASE_DIR),$(CXXARGS))
 # clang-tidy doesn't like -mcpu=xxx flag
 CXXARGS := $(patsubst -mcpu=%,,$(CXXARGS))
-CXXARGS += -I. -I./tests/test_include $(CXXFLAGS)
+GTEST_INCLUDE_DIR := $(OUT_DIR)/googletest_include
+$(shell mkdir -p $(GTEST_INCLUDE_DIR) && ln -sfn /usr/include/gtest $(GTEST_INCLUDE_DIR)/gtest && ln -sfn /usr/include/gmock $(GTEST_INCLUDE_DIR)/gmock)
+CXXARGS += -I. -I./tests/test_include -isystem $(GTEST_INCLUDE_DIR) $(CXXFLAGS)
 
 TIDY_FILES_OVERRIDE := \
     bufferinfo/legacy/BufferInfoImagination.cpp:COARSE  \
@@ -99,42 +101,9 @@ clean:
 	rm -rf $(OUT_DIR)/
 
 # Build
-# clang-tidy picks up gtest and gmock headers
-# IStats includes are not available in aospless
-SKIP_FILES := \
-    bufferinfo/GrallocBufferCacheTest.cpp \
-    compositor/mapper/CursorLayerMapperTest.cpp \
-    compositor/mapper/ForceClientCompositionLayerMapperTest.cpp \
-    compositor/mapper/LayerCachingMapperTest.cpp \
-    compositor/mapper/LeftoverLayerMapperTest.cpp \
-    compositor/mapper/UnderlayMapperTest.cpp \
-    compositor/CompositorTestUtils.h \
-    compositor/CompositorTestUtils.cpp \
-    compositor/FlatteningControllerTests.cpp \
-    compositor/FlatteningEventAtomReporterDesktop.cpp \
-    compositor/FrameTimeHistoryTest.cpp \
-    compositor/GenericLayerMapperCompositionPlannerTest.cpp \
-    compositor/IntelMappingValidatorTest.cpp \
-    compositor/ShortCircuitorTest.cpp \
-    drm/DrmDisplayPipelineTest.cpp \
-    drm/DrmTestUtils.h \
-    hwc/HwcBufferCacheTest.cpp \
-    hwc/HwcDisplayConfigsGeneratorTest.cpp \
-    stats/CompositionStatsAtomReporterDesktop.cpp \
-    stats/CountActiveDisplaysReporterDesktop.cpp \
-    stats/DisplayConfigurationResultReporterDesktop.cpp \
-    stats/DisplayHotplugConnectModeDetectedAtomReporterDesktop.cpp \
-    stats/DisplayRefreshRatesChangedAtomReporterDesktop.cpp \
-    stats/StatsTest.cpp \
-    utils/BacklightControllerTest.cpp \
-    utils/ColorUtilTest.cpp \
-    utils/SysfsBacklightControllerTest.cpp \
-    tests/backend_test_stub.cpp \
-
 BUILD_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -path '*.cpp')
-SKIP_FILES_path := $(foreach file,$(SKIP_FILES),$(SRC_DIR)/$(file))
 
-BUILD_FILES := $(subst ./,,$(filter-out $(SKIP_FILES_path),$(BUILD_FILES_AUTO)))
+BUILD_FILES := $(subst ./,,$(BUILD_FILES_AUTO))
 
 _OBJ := $(BUILD_FILES:.cpp=.o)
 OBJ  := $(patsubst %,$(OUT_DIR)/%,$(_OBJ))
@@ -155,13 +124,11 @@ $(OUT_DIR)/%.d: $(SRC_DIR)/%.cpp
 # TIDY
 TIDY_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' \( -path '*.cpp' -o -path '*.h' \))
 
-TIDY_FILES_AUTO_filtered := $(filter-out $(SKIP_FILES_path),$(TIDY_FILES_AUTO))
-
 TIDY_FILES_OVERRIDE_path := $(foreach pair,$(TIDY_FILES_OVERRIDE),$(SRC_DIR)/$(pair))
 
 TIDY_FILES_OVERRIDE_name_only := $(foreach pair,$(TIDY_FILES_OVERRIDE_path),$(word 1, $(subst :, ,$(pair))))
 
-TIDY_FILES := $(sort $(TIDY_FILES_AUTO_filtered) $(TIDY_FILES_OVERRIDE_name_only))
+TIDY_FILES := $(sort $(TIDY_FILES_AUTO) $(TIDY_FILES_OVERRIDE_name_only))
 
 space := $(subst ,, )
 comma := ,

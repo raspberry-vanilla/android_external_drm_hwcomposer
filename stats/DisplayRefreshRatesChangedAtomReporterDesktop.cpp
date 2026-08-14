@@ -53,10 +53,10 @@ class DisplayRefreshRatesChangedAtomReporterDesktop
 
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
-    const char* deprecated_reverse_domain_name = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
     const VendorAtom vendor_atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::DISPLAY_REFRESH_RATES_CHANGED,
-                         deprecated_reverse_domain_name, refresh_rates);
+                         kDeprecatedReverseDomainName, refresh_rates);
 
     auto stats_service = IStats::fromBinder(ndk::SpAIBinder(
         AServiceManager_checkService(kStatsServiceName.c_str())));

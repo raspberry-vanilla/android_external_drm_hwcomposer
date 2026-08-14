@@ -6,7 +6,7 @@ ENV PATH="/home/user/bin:${PATH}"
 
 # Taking into account layer structure, everything should be done within one layer.
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y clang-19 clang-tidy-19 clang-format-19 git libdrm-dev blueprint-tools libgtest-dev clang \
+    apt-get install -y clang-19 clang-tidy-19 clang-format-19 git libdrm-dev blueprint-tools libgtest-dev libgmock-dev clang \
     llvm make python3 wget sudo rsync lld pkg-config ninja-build meson \
     python3-mako python3-jinja2 python3-ply python3-yaml
 

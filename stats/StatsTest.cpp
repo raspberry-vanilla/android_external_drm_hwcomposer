@@ -97,21 +97,18 @@ class MockStatsCallback {
   }
 };
 
-class StatsTrackerTest : public ::testing::Test {
- protected:
-  std::unique_ptr<NiceMock<MockStatsProvider>> mock_provider_;
-  std::unique_ptr<StatsTracker> tracker_;
-
+struct StatsTrackerTest : public ::testing::Test {
   void SetUp() override {
-    mock_provider_ = std::make_unique<NiceMock<MockStatsProvider>>();
-    tracker_ = std::make_unique<StatsTracker>(mock_provider_.get());
+    mock_provider = std::make_unique<NiceMock<MockStatsProvider>>();
+    tracker = std::make_unique<StatsTracker>(mock_provider.get());
   }
 
   // Helper method to create sample stats. Actual values don't really matter.
-  CompositionStats CreateStats(uint32_t base) {
+  static CompositionStats CreateStats(uint32_t base) {
+    // NOLINTBEGIN(readability-magic-numbers)
     return CompositionStats{.total_frames = base,
-                            .total_pixops = base * 1000,
-                            .gpu_pixops = base * 500,
+                            .total_pixops = base * 1000UL,
+                            .gpu_pixops = base * 500UL,
                             .failed_kms_validate = base / 10,
                             .failed_kms_present = base / 20,
                             .frames_flattened = base / 5,
@@ -119,7 +116,11 @@ class StatsTrackerTest : public ::testing::Test {
                             .failed_kms_cursor_validate = base / 50,
                             .layer_count = 2,
                             .used_plane_count = 2};
+    // NOLINTEND(readability-magic-numbers)
   }
+
+  std::unique_ptr<NiceMock<MockStatsProvider>> mock_provider;
+  std::unique_ptr<StatsTracker> tracker;
 };
 
 // Initial call to ReportCompositionStats reports the same stats for cumulative
@@ -132,14 +133,14 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsInitialCall) {
 
   StrictMock<MockStatsCallback> mock_callback;
 
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result));
 
   // Expect that delta is same as cumulative.
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr), Eq(current_stats), Eq(current_stats)));
 
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Subsequent calls to ReportCompositionStats with no change in cumulative
@@ -152,18 +153,18 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsSubsequentCallNoChange) {
   const CompositionStats zero_delta{};
 
   // Same provider result for both calls.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillRepeatedly(Return(provider_result));
 
   StrictMock<MockStatsCallback> mock_callback;
 
   // Initial call.
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(stats)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call. Delta should be zero.
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats), Eq(zero_delta)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Test that the delta is reported as expected.
@@ -180,16 +181,16 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsSubsequentCallWithChange) {
   StrictMock<MockStatsCallback> mock_callback;
 
   // First call with the initial stats.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats1), Eq(stats1)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call with updated stats and non-trivial delta.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback, Invoke(Eq(attr), Eq(stats2), Eq(expected_delta)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Test that stats for multiple attributes are reported correctly.
@@ -214,22 +215,22 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsMultipleAttributes) {
   StrictMock<MockStatsCallback> mock_callback;
 
   // Initial call. Ordering between attributes doesn't matter.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats1), Eq(attr2_expected_delta1)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Updated call. Ordering between attributes doesn't matter.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats2), Eq(attr2_expected_delta2)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // No entries in the provider result.
@@ -238,9 +239,9 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsEmptyResult) {
 
   // StrictMock will fail if there are any unexpected calls to Invoke.
   StrictMock<MockStatsCallback> mock_callback;
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(empty_result));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Attributes added in between calls to ReportCompositionStats.
@@ -263,20 +264,20 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsAttributesAdded) {
   StrictMock<MockStatsCallback> mock_callback;
 
   // First call only contains attr1.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call has both attributes.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 // Attributes removed in between calls to ReportCompositionStats.
@@ -299,21 +300,21 @@ TEST_F(StatsTrackerTest, ReportCompositionStatsAttributesRemoved) {
   StrictMock<MockStatsCallback> mock_callback;
 
   // Initial call has both attributes.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result1));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats1), Eq(attr1_expected_delta1)));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr2), Eq(attr2_stats), Eq(attr2_expected_delta)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 
   // Second call has only attr1. StrictMock will fail if Invoke is called
   // for attr2.
-  EXPECT_CALL(*mock_provider_, PullCompositionStats())
+  EXPECT_CALL(*mock_provider, PullCompositionStats())
       .WillOnce(Return(provider_result2));
   EXPECT_CALL(mock_callback,
               Invoke(Eq(attr1), Eq(attr1_stats2), Eq(attr1_expected_delta2)));
-  tracker_->ReportCompositionStats(mock_callback.AsStdFunction());
+  tracker->ReportCompositionStats(mock_callback.AsStdFunction());
 }
 
 }  // namespace android::drm_hwcomposer

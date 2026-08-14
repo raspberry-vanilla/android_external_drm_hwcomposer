@@ -23,8 +23,10 @@
 #include <drm/drm_mode.h>
 #include <ui/GraphicTypes.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "stats/DisplayHotplugConnectModeDetectedAtomReporter.h"
 #include "utils/log.h"
@@ -162,16 +164,17 @@ class DisplayHotplugConnectModeDetectedAtomReporterDesktop
   void PushAtom(Atom atom) override {
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
-    const char* deprecated_reverse_domain_name = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
 
     std::vector<int32_t> hdr_types;
+    hdr_types.reserve(atom.hdr_types.size());
     for (const auto hdr_type : atom.hdr_types) {
       hdr_types.push_back(HdrTypeToProtoEnum(hdr_type));
     }
 
     const VendorAtom vendor_atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::DISPLAY_HOTPLUG_CONNECT_MODE_DETECTED,
-                         deprecated_reverse_domain_name, atom.display_handle,
+                         kDeprecatedReverseDomainName, atom.display_handle,
                          atom.resolution_x, atom.resolution_y,
                          atom.refresh_rate, atom.dpi_x, atom.dpi_y,
                          DisplayTypeToProtoEnum(atom.display_type),

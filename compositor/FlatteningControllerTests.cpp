@@ -23,6 +23,7 @@
 #include <mutex>
 #include <thread>
 
+#include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 
 using ::testing::StrictMock;

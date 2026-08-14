@@ -15,8 +15,9 @@
  */
 #pragma once
 
-#include <drm/drm_fourcc.h>
 #include <gmock/gmock.h>
+
+#include <drm/drm_fourcc.h>
 
 #include <chrono>
 #include <cstddef>
@@ -26,9 +27,11 @@
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"
+#include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
+#include "compositor/PresentedCompositionCache.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
@@ -85,6 +88,7 @@ class CompositorTestUtils {
  public:
   static HwcLayer CreateLayer(ICompositorDisplay* display, IRect dest_ltrb,
                               uint32_t z_order, CompositionType type,
+                              // NOLINTNEXTLINE(readability-magic-numbers)
                               float alpha = 1.0F,
                               uint32_t buffer_format = DRM_FORMAT_RGBA8888,
                               bool is_active = false);

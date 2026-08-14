@@ -14,13 +14,19 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gtest/gtest.h>
 
+#include <drm/drm_mode.h>
+
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
 #include "compositor/DisplayInfo.h"
+#include "compositor/LayerData.h"
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
 
@@ -98,9 +104,11 @@ TEST(ColorUtilTest, ToColorTransform3x3ValuesAndSigns) {
   ASSERT_NE(ctm, nullptr);
 
   constexpr uint64_t kSignMask = 1ULL << 63;
-  constexpr uint64_t kVal0_5 = static_cast<uint64_t>(0.5 * (1ULL << 32));
-  constexpr uint64_t kVal0_25 = static_cast<uint64_t>(0.25 * (1ULL << 32));
-  constexpr uint64_t kVal0_75 = static_cast<uint64_t>(0.75 * (1ULL << 32));
+  // NOLINTBEGIN(readability-identifier-naming)
+  constexpr auto kVal0_5 = static_cast<uint64_t>(0.5 * (1ULL << 32));
+  constexpr auto kVal0_25 = static_cast<uint64_t>(0.25 * (1ULL << 32));
+  constexpr auto kVal0_75 = static_cast<uint64_t>(0.75 * (1ULL << 32));
+  // NOLINTEND(readability-identifier-naming)
 
   EXPECT_EQ(ctm->matrix[0], kVal0_5);
   EXPECT_EQ(ctm->matrix[1], kVal0_25);
@@ -160,10 +168,12 @@ TEST(ColorUtilTest, ToColorTransform3x4ValuesAndSigns) {
   ASSERT_NE(ctm, nullptr);
 
   constexpr uint64_t kSignMask = 1ULL << 63;
-  constexpr uint64_t kVal0_5 = static_cast<uint64_t>(0.5 * (1ULL << 32));
-  constexpr uint64_t kVal0_25 = static_cast<uint64_t>(0.25 * (1ULL << 32));
-  constexpr uint64_t kVal0_75 = static_cast<uint64_t>(0.75 * (1ULL << 32));
-  constexpr uint64_t kVal0_125 = static_cast<uint64_t>(0.125 * (1ULL << 32));
+  // NOLINTBEGIN(readability-identifier-naming)
+  constexpr auto kVal0_5 = static_cast<uint64_t>(0.5 * (1ULL << 32));
+  constexpr auto kVal0_25 = static_cast<uint64_t>(0.25 * (1ULL << 32));
+  constexpr auto kVal0_75 = static_cast<uint64_t>(0.75 * (1ULL << 32));
+  constexpr auto kVal0_125 = static_cast<uint64_t>(0.125 * (1ULL << 32));
+  // NOLINTEND(readability-identifier-naming)
 
   EXPECT_EQ(ctm->matrix[0], kVal0_5);
   EXPECT_EQ(ctm->matrix[1], kVal0_25);
@@ -243,7 +253,7 @@ TEST(ColorUtilTest, GetDegammaLutInvalidLutSize) {
 TEST(ColorUtilTest, GetDegammaLutValidAndCaching) {
   Lut1DCache<drm_color_lut32> cache;
 
-  const size_t kLutSize = 256;
+  static constexpr size_t kLutSize = 256;
   const auto &lut = ColorUtil::GetDegammaLut(TransferFunction::kPq, kLutSize,
                                              cache, 1.0F);
 
@@ -275,7 +285,7 @@ TEST(ColorUtilTest, GetGammaLutInvalidLutSize) {
 TEST(ColorUtilTest, GetGammaLutValidAndCaching) {
   Lut1DCache<drm_color_lut> cache;
 
-  const size_t kLutSize = 512;
+  static constexpr size_t kLutSize = 512;
   const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
                                            cache, 1.0F, 1.0F);
 
@@ -298,7 +308,7 @@ TEST(ColorUtilTest, GetGammaLutHdrClampsToMinFloorAtZeroDisplayBrightness) {
   Lut1DCache<drm_color_lut> cache;
   ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.01");
 
-  const size_t kLutSize = 512;
+  static constexpr size_t kLutSize = 512;
   const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
                                            cache,
                                            ColorUtil::ScaleBrightnessIfNeeded(
@@ -379,7 +389,7 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNoopWhenMinZero) {
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
-  const size_t kLutSize = 512;
+  static constexpr size_t kLutSize = 512;
   const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
                                            cache,
                                            ColorUtil::ScaleBrightnessIfNeeded(
@@ -399,7 +409,7 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNonZeroAtZero) {
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
-  const size_t kLutSize = 512;
+  static constexpr size_t kLutSize = 512;
   const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
                                            cache,
                                            ColorUtil::ScaleBrightnessIfNeeded(
@@ -414,7 +424,7 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNonZeroAtZero) {
 
 TEST(ColorUtilTest, GetGammaLutHdrScaleRangeCalculatesExpectedScale) {
   Lut1DCache<drm_color_lut> cache;
-  const size_t kLutSize = 512;
+  static constexpr size_t kLutSize = 512;
 
   const auto &lut_scaled = [&]() -> const auto & {
     ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
@@ -434,3 +444,5 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeCalculatesExpectedScale) {
 }
 
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

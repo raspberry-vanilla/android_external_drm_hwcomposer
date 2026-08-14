@@ -18,7 +18,6 @@
 #include <linux/fb.h>
 
 #include <filesystem>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,13 +29,14 @@
 #include "utils/SysfsBacklightController.h"
 #include "utils/TestUtils.h"
 
+namespace android::drm_hwcomposer {
+
 class SysfsBacklightFileInterfaceFake {
  public:
-  SysfsBacklightFileInterfaceFake(const std::string &path,
-                                  const std::string &power_val,
-                                  const std::string &max_brightness_val,
-                                  const std::string &brightness_val,
-                                  const std::string &scale_val)
+  SysfsBacklightFileInterfaceFake(std::string path, std::string power_val,
+                                  std::string max_brightness_val,
+                                  std::string brightness_val,
+                                  std::string scale_val)
       : path_(std::move(path)),
         power_val_(std::move(power_val)),
         max_brightness_val_(std::move(max_brightness_val)),
@@ -78,19 +78,19 @@ class SysfsBacklightFileInterfaceFake {
     return true;
   }
 
-  std::string path() const {
+  std::string Path() const {
     return path_;
   }
-  std::string power_val() const {
+  std::string PowerVal() const {
     return power_val_;
   }
-  std::string max_brightness_val() const {
+  std::string MaxBrightnessVal() const {
     return max_brightness_val_;
   }
-  std::string brightness_val() const {
+  std::string BrightnessVal() const {
     return brightness_val_;
   }
-  std::string scale_val() const {
+  std::string ScaleVal() const {
     return scale_val_;
   }
 
@@ -102,31 +102,31 @@ class SysfsBacklightFileInterfaceFake {
   std::string scale_val_;
 };
 
-std::map<std::string, std::shared_ptr<SysfsBacklightFileInterfaceFake>> kFakes;
-
-namespace android::drm_hwcomposer {
-
 class TestBacklightFileInterface : public BacklightFileInterface {
  public:
+  explicit TestBacklightFileInterface(
+      std::shared_ptr<SysfsBacklightFileInterfaceFake> fake)
+      : fake_(std::move(fake)) {
+  }
+
   bool ReadFileToString(const std::string &path,
                         std::string *content) override {
-    for (auto &[key, fake] : kFakes) {
-      if (path.find(key) == 0) {
-        return fake->ReadFileToString(path, content, false);
-      }
+    if (fake_) {
+      return fake_->ReadFileToString(path, content, false);
     }
     return false;
   }
 
   bool WriteStringToFile(const std::string &content,
                          const std::string &path) override {
-    for (auto &[key, fake] : kFakes) {
-      if (path.find(key) == 0) {
-        return fake->WriteStringToFile(content, path, false);
-      }
+    if (fake_) {
+      return fake_->WriteStringToFile(content, path, false);
     }
     return false;
   }
+
+ private:
+  std::shared_ptr<SysfsBacklightFileInterfaceFake> fake_;
 };
 
 struct TestSysfsBacklightController {
@@ -135,7 +135,7 @@ struct TestSysfsBacklightController {
                                bool hw_handles_encoding) {
     std::string path = "/sys/class/backlight/" + name;
 
-    fake_ = std::make_shared<
+    fake = std::make_shared<
         SysfsBacklightFileInterfaceFake>(path,
                                          powered
                                              ? std::to_string(FB_BLANK_UNBLANK)
@@ -145,223 +145,238 @@ struct TestSysfsBacklightController {
                                          std::to_string(brightness),
                                          hw_handles_encoding ? "linear"
                                                              : "non-linear");
-    if (fake_ != nullptr) {
-      kFakes[path] = fake_;
-    }
 
-    bl_ = SysfsBacklightController::
+    bl = SysfsBacklightController::
         CreateInstanceFromName(name,
-                               std::make_unique<TestBacklightFileInterface>());
+                               std::make_unique<TestBacklightFileInterface>(
+                                   fake));
   }
 
-  std::unique_ptr<BacklightController> bl_;
-  std::shared_ptr<SysfsBacklightFileInterfaceFake> fake_;
+  std::unique_ptr<BacklightController> bl;
+  std::shared_ptr<SysfsBacklightFileInterfaceFake> fake;
 };
 
-class SysfsBacklightControllerTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    kFakes.clear();
-  }
-};
+class SysfsBacklightControllerTest : public ::testing::Test {};
 
 // Turn on the backlight.
 TEST_F(SysfsBacklightControllerTest, TurnOnBacklight) {
+  static constexpr int kMaxBrightness = 4096;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", false,
-                                                                 4096, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(1.0F));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
-  EXPECT_EQ(bl.fake_->brightness_val(), bl.fake_->max_brightness_val());
+  EXPECT_TRUE(bl.bl->SetBrightness(1.0F));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_UNBLANK));
+  EXPECT_EQ(bl.fake->BrightnessVal(), bl.fake->MaxBrightnessVal());
 }
 
 // Turn off the backlight.
 TEST_F(SysfsBacklightControllerTest, TurnOffBacklight) {
+  static constexpr int kMaxBrightness = 4096;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 4096, 4096,
+                                                                 kMaxBrightness,
+                                                                 kMaxBrightness,
                                                                  true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(std::nullopt));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_POWERDOWN));
+  EXPECT_TRUE(bl.bl->SetBrightness(std::nullopt));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_POWERDOWN));
 }
 
 // Cycle the backlight on/off/on.
 TEST_F(SysfsBacklightControllerTest, CycleBacklight) {
+  static constexpr int kMaxBrightness = 4096;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", false,
-                                                                 4096, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
   // On
-  EXPECT_TRUE(bl.bl_->SetBrightness(1.0F));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
+  EXPECT_TRUE(bl.bl->SetBrightness(1.0F));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_UNBLANK));
 
   // Off
-  EXPECT_TRUE(bl.bl_->SetBrightness(std::nullopt));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_POWERDOWN));
+  EXPECT_TRUE(bl.bl->SetBrightness(std::nullopt));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_POWERDOWN));
 
   // On
-  EXPECT_TRUE(bl.bl_->SetBrightness(1.0F));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
+  EXPECT_TRUE(bl.bl->SetBrightness(1.0F));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_UNBLANK));
 }
 
 // Turn on the backlight.
 TEST_F(SysfsBacklightControllerTest, TurnOnBacklightWithMinBrightness) {
+  static constexpr int kMaxBrightness = 4096;
+  static constexpr int kBrightness = 100;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", false,
-                                                                 4096, 100,
+                                                                 kMaxBrightness,
+                                                                 kBrightness,
                                                                  true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(0.0F));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
-  EXPECT_EQ(bl.fake_->brightness_val(), "1");
+  EXPECT_TRUE(bl.bl->SetBrightness(0.0F));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_UNBLANK));
+  EXPECT_EQ(bl.fake->BrightnessVal(), "1");
 }
 
 // Reduce the brightness to zero, but remain powered.
 TEST_F(SysfsBacklightControllerTest, UpdateToZeroBrightness) {
+  static constexpr int kMaxBrightness = 4096;
+  static constexpr int kBrightness = 100;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 4096, 100,
+                                                                 kMaxBrightness,
+                                                                 kBrightness,
                                                                  true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(0.0F));
-  EXPECT_EQ(bl.fake_->power_val(), std::to_string(FB_BLANK_UNBLANK));
-  EXPECT_EQ(bl.fake_->brightness_val(), "1");
+  EXPECT_TRUE(bl.bl->SetBrightness(0.0F));
+  EXPECT_EQ(bl.fake->PowerVal(), std::to_string(FB_BLANK_UNBLANK));
+  EXPECT_EQ(bl.fake->BrightnessVal(), "1");
 }
 
 // If the hardware handles encoding (scale: linear), the Linear brightness
 // values should be passed through.
 TEST_F(SysfsBacklightControllerTest, SmartHardware) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  int step_num = 100;
-  // Being lazy, make max evenly divisible by step_num to make the loop easy.
-  EXPECT_EQ(max % step_num, 0);
+  static constexpr int kStepNum = 100;
+  // Being lazy, make kMaxBrightness evenly divisible by kStepNum to make the
+  // loop easy.
+  EXPECT_EQ(kMaxBrightness % kStepNum, 0);
 
-  int step_size = max / step_num;
-  for (int i = 0; i <= max; i += step_size) {
-    EXPECT_TRUE(bl.bl_->SetBrightness(static_cast<float>(i) / max));
-    EXPECT_NEAR(std::stoi(bl.fake_->brightness_val()), i, 1);
+  int step_size = kMaxBrightness / kStepNum;
+  for (int i = 0; i <= kMaxBrightness; i += step_size) {
+    EXPECT_TRUE(bl.bl->SetBrightness(static_cast<float>(i) / kMaxBrightness));
+    EXPECT_NEAR(std::stoi(bl.fake->BrightnessVal()), i, 1);
   }
 }
 
 // If the hardware is "passthrough" (scale: non-linear), the Linear brightness
 // values should be converted to HLG signal using the OETF.
 TEST_F(SysfsBacklightControllerTest, PassthroughHardware) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, false);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, false);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
-  int step_num = 100;
-  // Being lazy, make max evenly divisible by step_num to make the loop easy.
-  EXPECT_EQ(max % step_num, 0);
+  static constexpr int kStepNum = 100;
+  // Being lazy, make kMaxBrightness evenly divisible by kStepNum to make the
+  // loop easy.
+  EXPECT_EQ(kMaxBrightness % kStepNum, 0);
 
-  int step_size = max / step_num;
-  for (int i = 0; i <= max; i += step_size) {
-    float brightness = static_cast<float>(i) / max;
-    EXPECT_TRUE(bl.bl_->SetBrightness(brightness));
-    float expected = BacklightController::HlgOetf(brightness) * max;
-    EXPECT_NEAR(std::stoi(bl.fake_->brightness_val()),
-                static_cast<int>(expected), 1);
+  int step_size = kMaxBrightness / kStepNum;
+  for (int i = 0; i <= kMaxBrightness; i += step_size) {
+    float brightness = static_cast<float>(i) / kMaxBrightness;
+    EXPECT_TRUE(bl.bl->SetBrightness(brightness));
+    float expected = BacklightController::HlgOetf(brightness) * kMaxBrightness;
+    EXPECT_NEAR(std::stoi(bl.fake->BrightnessVal()), static_cast<int>(expected),
+                1);
   }
 }
 
 // Brightness values less than 0 should be rejected.
 TEST_F(SysfsBacklightControllerTest, NegativeBrightness) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, false);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
-  EXPECT_FALSE(bl.bl_->SetBrightness(-1.0F));
+                                                                 kMaxBrightness,
+                                                                 0, false);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
+  EXPECT_FALSE(bl.bl->SetBrightness(-1.0F));
 }
 
 // Brightness values greater than 1 should be rejected.
 TEST_F(SysfsBacklightControllerTest, OverflowBrightness) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, false);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
-  EXPECT_FALSE(bl.bl_->SetBrightness(2.0F));
+                                                                 kMaxBrightness,
+                                                                 0, false);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
+  EXPECT_FALSE(bl.bl->SetBrightness(2.0F));
 }
 
 TEST_F(SysfsBacklightControllerTest,
        SetBrightnessWithMinDisplayBrightnessClamping) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
   ScopedTestProperty prop("vendor.hwc.drm.min_display_brightness", "0.1");
-  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  EXPECT_TRUE(bl.bl->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
   // 0.0F scaled to 0.1F -> 1 + (10000 - 1) * 0.1 = 1000
-  EXPECT_EQ(bl.fake_->brightness_val(), "1000");
+  EXPECT_EQ(bl.fake->BrightnessVal(), "1000");
 }
 
 TEST_F(SysfsBacklightControllerTest,
        SetBrightnessWithScaledBrightnessRangeNoopWhenMinZero) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
   ScopedTestProperty
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
-  EXPECT_EQ(bl.fake_->brightness_val(), "1");
+  EXPECT_TRUE(bl.bl->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  EXPECT_EQ(bl.fake->BrightnessVal(), "1");
 }
 
 TEST_F(SysfsBacklightControllerTest,
        SetBrightnessWithScaledBrightnessRangeNonZeroAtZero) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
   ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
   ScopedTestProperty
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
+  EXPECT_TRUE(bl.bl->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.0F)));
   // 0.0F scaled to 0.1F -> 1 + (10000 - 1) * 0.1 = 1000
-  EXPECT_EQ(bl.fake_->brightness_val(), "1000");
+  EXPECT_EQ(bl.fake->BrightnessVal(), "1000");
 }
 
 TEST_F(SysfsBacklightControllerTest,
        SetBrightnessWithScaledBrightnessRangeCalculatesExpectedScale) {
-  int max = 10000;
+  static constexpr int kMaxBrightness = 10000;
   TestSysfsBacklightController bl = TestSysfsBacklightController("bl-0", true,
-                                                                 max, 0, true);
-  ASSERT_NE(bl.bl_, nullptr);
-  ASSERT_NE(bl.fake_, nullptr);
+                                                                 kMaxBrightness,
+                                                                 0, true);
+  ASSERT_NE(bl.bl, nullptr);
+  ASSERT_NE(bl.fake, nullptr);
 
   ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
   ScopedTestProperty
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
-  EXPECT_TRUE(bl.bl_->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.5F)));
+  EXPECT_TRUE(bl.bl->SetBrightness(ColorUtil::ScaleBrightnessIfNeeded(0.5F)));
   // 0.5F scaled to 0.55F -> 1 + (10000 - 1) * 0.55 = 5500
-  EXPECT_EQ(bl.fake_->brightness_val(), "5500");
+  EXPECT_EQ(bl.fake->BrightnessVal(), "5500");
 }
 
 }  // namespace android::drm_hwcomposer

@@ -37,6 +37,8 @@ DEPS_FOR_BUILD=(
 
 DEPS_FOR_TIDY=(
   clang-tidy-19
+  libgmock-dev
+  libgtest-dev
 )
 
 DEPS_FOR_CHECK=(

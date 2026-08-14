@@ -53,7 +53,7 @@ class DisplayConfigurationResultReporterDesktop
     : public DisplayConfigurationResultReporter {
  public:
   void PushAtom(const DisplayConfigurationResultReporter::Atom& atom) override {
-    const char* kDeprecatedReverseDomainName = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
     const VendorAtom vendor_atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::DISPLAY_CONFIGURATION_RESULT,
                          kDeprecatedReverseDomainName, atom.display_handle,

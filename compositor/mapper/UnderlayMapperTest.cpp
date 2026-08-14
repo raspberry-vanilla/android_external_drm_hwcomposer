@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
-#include <drm/drm_fourcc.h>
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <drm/drm_fourcc.h>
 
 #include <vector>
 
@@ -834,3 +837,5 @@ TEST(UnderlayMapperTest, HotspotUnderlayButClientCompositionRequest) {
 }
 
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

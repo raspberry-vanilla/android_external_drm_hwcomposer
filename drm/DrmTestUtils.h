@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
@@ -109,11 +110,12 @@ class FakeDrmCrtc : public DrmCrtc {
 
 class FakeDrmPlane : public DrmPlane {
  public:
-  FakeDrmPlane(DrmDevice& dev, uint32_t type) : DrmPlane(dev, nullptr) {
+  FakeDrmPlane(DrmDevice& dev, uint32_t type, bool is_valid = true)
+      : DrmPlane(dev, nullptr), is_valid_(is_valid) {
     type_ = type;
   }
 
-  bool IsCrtcSupported(const DrmCrtc& crtc) const override {
+  bool IsCrtcSupported(const DrmCrtc& /*crtc*/) const override {
     return true;
   }
 
@@ -121,7 +123,8 @@ class FakeDrmPlane : public DrmPlane {
     return is_valid_;
   }
 
-  bool is_valid_ = true;
+ private:
+  const bool is_valid_;
 };
 
 class FakeDrmDevice : public DrmDevice {

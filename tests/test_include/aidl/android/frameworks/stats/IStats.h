@@ -14,29 +14,25 @@
  * limitations under the License.
  */
 
+#pragma once
+
+#include <android/binder_auto_utils.h>
+
 #include <memory>
-#include <string>
 
-#include "backend/Backend.h"
-#include "backend/BackendManager.h"
+namespace aidl::android::frameworks::stats {
 
-namespace android::drm_hwcomposer {
+struct VendorAtom {};
 
-BackendManager &BackendManager::GetInstance() {
-  static BackendManager backend_manager;
-  return backend_manager;
-}
+class IStats {
+ public:
+  virtual ~IStats() = default;
 
-void BackendManager::RegisterCreator(
-    const std::string & /*name*/,
-    // NOLINTNEXTLINE(performance-unnecessary-value-param)
-    BackendCreator /*creator*/) {
-}
+  static constexpr char descriptor[] = "android.frameworks.stats.IStats";
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
-std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
-    DrmDevice & /*drm*/) {
-  return nullptr;
-}
+  static std::shared_ptr<IStats> fromBinder(const ndk::SpAIBinder& binder);
 
-}   // namespace android::drm_hwcomposer
+  virtual ndk::ScopedAStatus reportVendorAtom(const VendorAtom& vendorAtom) = 0;
+};
+
+}  // namespace aidl::android::frameworks::stats

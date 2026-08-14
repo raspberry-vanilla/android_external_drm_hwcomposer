@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -108,3 +110,5 @@ TEST(ForceClientCompositionLayerMapperTest, NegativeValidatorNoEffect) {
                                       CompositionType::kClient))));
 }
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

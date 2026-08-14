@@ -49,9 +49,9 @@ class PrimeFdsSharedBase {
 };
 
 struct BufferInfo {
-  uint32_t width;
-  uint32_t height;
-  uint32_t format; /* DRM_FORMAT_* from drm_fourcc.h */
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t format = 0; /* DRM_FORMAT_* from drm_fourcc.h */
   uint32_t pitches[kBufferMaxPlanes];
   uint32_t offsets[kBufferMaxPlanes];
   /* sizes[] is used only by mapper@4 metadata getter for internal purposes */
@@ -59,9 +59,9 @@ struct BufferInfo {
   int prime_fds[kBufferMaxPlanes];
   uint64_t modifiers[kBufferMaxPlanes];
 
-  BufferColorEncoding color_encoding;
-  BufferSampleRange sample_range;
-  BufferBlendMode blend_mode;
+  BufferColorEncoding color_encoding = BufferColorEncoding::kUndefined;
+  BufferSampleRange sample_range = BufferSampleRange::kUndefined;
+  BufferBlendMode blend_mode = BufferBlendMode::kUndefined;
 
   /* prime_fds field require valid file descriptors. While their lifecycle is
    * managed elsewhere. The shared_ptr is used to ensure that the fds are not

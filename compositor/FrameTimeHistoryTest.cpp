@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gtest/gtest.h>
 
 #include "compositor/FrameTimeHistory.h"
@@ -24,11 +26,8 @@
 namespace android::drm_hwcomposer {
 namespace {
 
-constexpr std::chrono::milliseconds
-    kMaxFrameTimeAge = std::chrono::milliseconds(1200);
-
 std::chrono::nanoseconds HzToNs(float hz) {
-  return std::chrono::nanoseconds(std::lrint(1000000000.0f / hz));
+  return std::chrono::nanoseconds(std::lrint(1000000000.0F / hz));
 }
 }  // namespace
 
@@ -36,7 +35,7 @@ TEST(FrameTimeHistory, EmptyHistory) {
   FrameTimeHistory history;
 
   std::chrono::time_point<std::chrono::steady_clock> now;
-  EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0F);
 }
 
 TEST(FrameTimeHistory, InfreqeuntLayerFps) {
@@ -45,13 +44,13 @@ TEST(FrameTimeHistory, InfreqeuntLayerFps) {
   std::chrono::time_point<std::chrono::steady_clock> now;
   for (int i = 0; i < 3; i++) {
     history.AddFrameTime(now);
-    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0f);
-    now += HzToNs(60.0f);
+    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0F);
+    now += HzToNs(60.0F);
   }
 
   // With 4 frames it should be above the threshold.
   history.AddFrameTime(now);
-  EXPECT_FLOAT_EQ(history.CalculateFps(now), 60.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(now), 60.0F);
 }
 
 TEST(FrameTimeHistory, InfreqeuntLayerFpsDueToAgeOut) {
@@ -60,15 +59,15 @@ TEST(FrameTimeHistory, InfreqeuntLayerFpsDueToAgeOut) {
   std::chrono::time_point<std::chrono::steady_clock> now;
   for (int i = 0; i < 3; i++) {
     history.AddFrameTime(now);
-    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0f);
-    now += HzToNs(100.0f);
+    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0F);
+    now += HzToNs(100.0F);
   }
 
   // With 4 layers it should be above the threshold, but the added 3 are outside
   // of max time age so shouldn't count towards activity.
   now += FrameTimeHistory::kMaxFrameTimeAge;
   history.AddFrameTime(now);
-  EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0F);
 }
 
 TEST(FrameTimeHistory, InfreqeuntLayerFpsDueToAgeOutWhenCalculating) {
@@ -77,8 +76,8 @@ TEST(FrameTimeHistory, InfreqeuntLayerFpsDueToAgeOutWhenCalculating) {
   std::chrono::time_point<std::chrono::steady_clock> now;
   for (int i = 0; i < 3; i++) {
     history.AddFrameTime(now);
-    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0f);
-    now += HzToNs(100.0f);
+    EXPECT_FLOAT_EQ(history.CalculateFps(now), 0.0F);
+    now += HzToNs(100.0F);
   }
 
   // With 4 layers it should be above the threshold, but the added 3 are outside
@@ -86,20 +85,20 @@ TEST(FrameTimeHistory, InfreqeuntLayerFpsDueToAgeOutWhenCalculating) {
   history.AddFrameTime(now);
 
   EXPECT_FLOAT_EQ(history.CalculateFps(
-                      now + FrameTimeHistory::kMaxFrameTimeAge - HzToNs(50.0f)),
-                  0.0f);
+                      now + FrameTimeHistory::kMaxFrameTimeAge - HzToNs(50.0F)),
+                  0.0F);
 }
 
 TEST(FrameTimeHistory, UnorderedFrameTimeInsert) {
   FrameTimeHistory history;
 
   const std::chrono::time_point<std::chrono::steady_clock> now;
-  history.AddFrameTime(now + 3 * HzToNs(60.0f));
-  history.AddFrameTime(now + 0 * HzToNs(60.0f));
-  history.AddFrameTime(now + 2 * HzToNs(60.0f));
-  history.AddFrameTime(now + 1 * HzToNs(60.0f));
+  history.AddFrameTime(now + 3 * HzToNs(60.0F));
+  history.AddFrameTime(now + 0 * HzToNs(60.0F));
+  history.AddFrameTime(now + 2 * HzToNs(60.0F));
+  history.AddFrameTime(now + 1 * HzToNs(60.0F));
 
-  EXPECT_FLOAT_EQ(history.CalculateFps(now + 3 * HzToNs(60.0f)), 60.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(now + 3 * HzToNs(60.0F)), 60.0F);
 }
 
 TEST(FrameTimeHistory, ALotOfInserts) {
@@ -107,11 +106,11 @@ TEST(FrameTimeHistory, ALotOfInserts) {
 
   std::chrono::time_point<std::chrono::steady_clock> now;
   for (int i = 0; i < 1000; i++) {
-    now += HzToNs(144.0f);
+    now += HzToNs(144.0F);
     history.AddFrameTime(now);
   }
 
-  EXPECT_FLOAT_EQ(history.CalculateFps(now), 144.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(now), 144.0F);
 }
 
 TEST(FrameTimeHistory, CalculateFpsInThePast) {
@@ -124,20 +123,22 @@ TEST(FrameTimeHistory, CalculateFpsInThePast) {
   std::chrono::time_point<std::chrono::steady_clock> now;
   history.AddFrameTime(now);
   for (int i = 0; i < 4; i++) {
-    now += HzToNs(120.0f);
+    now += HzToNs(120.0F);
     history.AddFrameTime(now);
   }
 
   const std::chrono::time_point<std::chrono::steady_clock> last_120hz = now;
   for (int i = 0; i < 4; i++) {
-    now += HzToNs(60.0f);
+    now += HzToNs(60.0F);
     history.AddFrameTime(now);
   }
 
-  EXPECT_FLOAT_EQ(history.CalculateFps(last_120hz), 120.0f);
+  EXPECT_FLOAT_EQ(history.CalculateFps(last_120hz), 120.0F);
   // The calculated FPS should equal the geometric mean of the frame rates.
   EXPECT_FLOAT_EQ(history.CalculateFps(now),
-                  (8 / ((4 / 120.0f) + (4 / 60.0f))));
+                  (8 / ((4 / 120.0F) + (4 / 60.0F))));
 }
 
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

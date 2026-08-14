@@ -88,7 +88,7 @@ class FlatteningEventAtomReporterDesktop : public FlatteningEventAtomReporter {
           " state=%s",
           display_handle, StateToString(state).c_str());
 
-    const char* kDeprecatedReverseDomainName = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
     const VendorAtom atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::FLATTENING_STATE_CHANGED,
                          kDeprecatedReverseDomainName, display_handle,

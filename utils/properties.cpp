@@ -299,4 +299,10 @@ auto Properties::ScaleBrightnessRangeToMinBrightness() -> bool {
                             0) != 0);
 }
 
+auto Properties::FlatteningEnabled() -> bool {
+  // Default off, this needs tweaking/validation
+  constexpr int kDefault = 0;
+  return (property_get_bool("vendor.hwc.drm.flattening", kDefault) != 0);
+}
+
 }  // namespace android::drm_hwcomposer

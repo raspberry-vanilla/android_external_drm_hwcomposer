@@ -14,16 +14,18 @@
  * limitations under the License.
  */
 
-#include <gmock/gmock.h>
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gtest/gtest.h>
-#include <memory>
+
+#include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/IntelMappingValidator.h"
 #include "compositor/LayerData.h"
 #include "compositor/mapper/LayerMapper.h"
-#include "drm/DrmTestUtils.h"
 #include "drm/drm_fourcc.h"
 #include "hwc/HwcLayer.h"
 
@@ -47,9 +49,9 @@ constexpr float kMaxSrcHeightExceededBottom = 8194.0F;
 constexpr int kMaxDstWidthExceededRight = 8194;
 constexpr int kMaxDstHeightExceededBottom = 8194;
 
-static void SetLayerProps(HwcLayer& layer, const FRect& src, const IRect& dst,
-                          bool rotate90 = false,
-                          std::optional<uint32_t> format = std::nullopt) {
+void SetLayerProps(HwcLayer& layer, const FRect& src, const IRect& dst,
+                   bool rotate90 = false,
+                   std::optional<uint32_t> format = std::nullopt) {
   HwcLayer::LayerProperties props{
       .display_frame = DstRectInfo{.i_rect = dst},
       .source_crop = SrcRectInfo{.f_rect = src},
@@ -72,7 +74,7 @@ static void SetLayerProps(HwcLayer& layer, const FRect& src, const IRect& dst,
 // This test verifies that a mapping with all layers set to client composition
 // is considered valid, even if the layers have properties that would normally
 // make them invalid for device composition.
-TEST(IntelMappingValidatorTest, ValidMapping_AllClient) {
+TEST(IntelMappingValidatorTest, ValidMappingAllClient) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // Setup a layer that would fail if evaluated as a device layer (e.g., has
@@ -89,7 +91,7 @@ TEST(IntelMappingValidatorTest, ValidMapping_AllClient) {
 
 // This test verifies that a standard 1:1 layer mapping without any scaling or
 // rotation is considered valid.
-TEST(IntelMappingValidatorTest, ValidMapping_NoScalingOrRotation) {
+TEST(IntelMappingValidatorTest, ValidMappingNoScalingOrRotation) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -102,7 +104,7 @@ TEST(IntelMappingValidatorTest, ValidMapping_NoScalingOrRotation) {
 
 // This test ensures that any mapping requiring a 90-degree rotation is marked
 // as invalid, as it is unsupported by the Intel hardware.
-TEST(IntelMappingValidatorTest, InvalidMapping_Rotate90) {
+TEST(IntelMappingValidatorTest, InvalidMappingRotate90) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -116,7 +118,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_Rotate90) {
 
 // This test checks that a source crop with an odd X coordinate is rejected,
 // as the hardware requires even alignment when scaling is involved.
-TEST(IntelMappingValidatorTest, InvalidMapping_OddSourceX) {
+TEST(IntelMappingValidatorTest, InvalidMappingOddSourceX) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -129,7 +131,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_OddSourceX) {
 
 // This test verifies that a source crop with an odd width is rejected when
 // scaling is required.
-TEST(IntelMappingValidatorTest, InvalidMapping_OddSourceWidth) {
+TEST(IntelMappingValidatorTest, InvalidMappingOddSourceWidth) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -142,7 +144,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_OddSourceWidth) {
 
 // This test ensures that a mapping is rejected if the source width exceeds
 // the hardware scaler limit of 4096 for a YUV format.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededYuv) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxSrcWidthExceededYuv) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -157,7 +159,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededYuv) {
 
 // This test ensures that a mapping is accepted if the source width is between
 // 4096 and 6144 for an RGB format.
-TEST(IntelMappingValidatorTest, ValidMapping_SrcWidthForRgb) {
+TEST(IntelMappingValidatorTest, ValidMappingSrcWidthForRgb) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -172,7 +174,7 @@ TEST(IntelMappingValidatorTest, ValidMapping_SrcWidthForRgb) {
 
 // This test ensures that a mapping is rejected if the source width exceeds
 // the hardware scaler limit of 6144 for an RGB format.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededRgb) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxSrcWidthExceededRgb) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   constexpr float kMaxRgbSrcWidthExceededRight = 6146.0F;
@@ -188,7 +190,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcWidthExceededRgb) {
 
 // This test ensures that a mapping is rejected if the source height exceeds
 // the hardware scaler limit of 8192.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcHeightExceeded) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxSrcHeightExceeded) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -202,7 +204,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxSrcHeightExceeded) {
 
 // This test checks that a mapping is rejected if the destination width exceeds
 // the hardware scaler limit of 8192.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxDstWidthExceeded) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxDstWidthExceeded) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -215,7 +217,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxDstWidthExceeded) {
 
 // This test checks that a mapping is rejected if the destination height exceeds
 // the hardware scaler limit of 8192.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxDstHeightExceeded) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxDstHeightExceeded) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -228,7 +230,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxDstHeightExceeded) {
 
 // This test verifies that a mapping using exactly the maximum allowed number
 // of hardware scalers (2) is accepted.
-TEST(IntelMappingValidatorTest, ValidMapping_MaxScalersCount) {
+TEST(IntelMappingValidatorTest, ValidMappingMaxScalersCount) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   HwcLayer layer2(&mock_display);
@@ -247,7 +249,7 @@ TEST(IntelMappingValidatorTest, ValidMapping_MaxScalersCount) {
 
 // This test ensures that a mapping requiring more hardware scalers than
 // available (limit is 2) is rejected.
-TEST(IntelMappingValidatorTest, InvalidMapping_TooManyScalers) {
+TEST(IntelMappingValidatorTest, InvalidMappingTooManyScalers) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   HwcLayer layer2(&mock_display);
@@ -273,7 +275,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_TooManyScalers) {
 
 // This test ensures that a mapping is rejected if the downscaling limit
 // of 3 is exceeded for scaler 0.
-TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleLimitExceededScaler0) {
+TEST(IntelMappingValidatorTest, InvalidMappingDownscaleLimitExceededScaler0) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // Downscale ratio > 3.0
@@ -287,7 +289,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleLimitExceededScaler0) {
 
 // This test ensures that a mapping is rejected if any downscaling is
 // attempted on scaler 1.
-TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleNotAllowedScaler1) {
+TEST(IntelMappingValidatorTest, InvalidMappingDownscaleNotAllowedScaler1) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   HwcLayer layer2(&mock_display);
@@ -307,7 +309,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_DownscaleNotAllowedScaler1) {
 
 // This test checks that a mapping is rejected if the source height is less
 // than 1, enforcing the hardware plane minimum regardless of scaling.
-TEST(IntelMappingValidatorTest, InvalidMapping_SourceHeightLessThanOne) {
+TEST(IntelMappingValidatorTest, InvalidMappingSourceHeightLessThanOne) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -320,7 +322,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_SourceHeightLessThanOne) {
 
 // This test ensures that an NV12 buffer is rejected if the source width
 // is less than the hardware plane minimum of 16, regardless of scaling.
-TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthNv12) {
+TEST(IntelMappingValidatorTest, InvalidMappingPlaneMinWidthNv12) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -334,7 +336,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthNv12) {
 
 // This test ensures that an XRGB8888 buffer is rejected if the source width
 // is less than the hardware plane minimum of 4, regardless of scaling.
-TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthXrgb) {
+TEST(IntelMappingValidatorTest, InvalidMappingPlaneMinWidthXrgb) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   SetLayerProps(/*layer=*/layer1,
@@ -348,7 +350,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_PlaneMinWidthXrgb) {
 
 // This test checks that a non-YUV format buffer is rejected if scaling is
 // requested and the source width is below the hardware minimum of 8.
-TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinWidthNonYuv) {
+TEST(IntelMappingValidatorTest, InvalidMappingScalingMinWidthNonYuv) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // src_w = 6, dst_w = 12 (scaled). Format = XRGB8888.
@@ -363,7 +365,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinWidthNonYuv) {
 
 // This test checks that a non-YUV format buffer is rejected if scaling is
 // requested and the source height is below the hardware minimum of 8.
-TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightNonYuv) {
+TEST(IntelMappingValidatorTest, InvalidMappingScalingMinHeightNonYuv) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // src_h = 6, dst_h = 12 (scaled). Format = XRGB8888.
@@ -378,7 +380,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightNonYuv) {
 
 // This test checks that a YUV format buffer is rejected if scaling is
 // requested and the source height is below the hardware minimum of 16.
-TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightYuv) {
+TEST(IntelMappingValidatorTest, InvalidMappingScalingMinHeightYuv) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // src_w = 16, src_h = 14, dst_h = 28 (scaled). Format = NV12.
@@ -393,7 +395,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_ScalingMinHeightYuv) {
 
 // This test ensures that a mapping is rejected if the upscale factor exceeds
 // the hardware maximum of 32768.
-TEST(IntelMappingValidatorTest, InvalidMapping_MaxUpscaleExceeded) {
+TEST(IntelMappingValidatorTest, InvalidMappingMaxUpscaleExceeded) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   // dst_w = src_w * 32768 + 1
@@ -407,7 +409,7 @@ TEST(IntelMappingValidatorTest, InvalidMapping_MaxUpscaleExceeded) {
 }
 
 // This test verifies that YUV formats are not allowed on the second scaler.
-TEST(IntelMappingValidatorTest, InvalidMapping_SecondScalerYuvNotAllowed) {
+TEST(IntelMappingValidatorTest, InvalidMappingSecondScalerYuvNotAllowed) {
   MockCompositorDisplay mock_display;
   HwcLayer layer1(&mock_display);
   HwcLayer layer2(&mock_display);
@@ -429,3 +431,5 @@ TEST(IntelMappingValidatorTest, InvalidMapping_SecondScalerYuvNotAllowed) {
 
 }  // namespace
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -291,3 +293,5 @@ TEST(LayerCachingMapperTest, RespectSFClientCompositionRequest) {
                                       CompositionType::kInvalid))));
 }
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

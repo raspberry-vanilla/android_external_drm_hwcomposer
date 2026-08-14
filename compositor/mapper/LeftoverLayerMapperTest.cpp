@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -35,7 +37,7 @@ using ::testing::Field;
 constexpr float kOpaque = 1.0F;
 constexpr float kLayerCached = 0.0F;
 
-bool TrueValidator(const std::vector<LayerMapping>&) {
+bool TrueValidator(const std::vector<LayerMapping>& /*layers*/) {
   return true;
 }
 }  // namespace
@@ -303,3 +305,5 @@ TEST(LeftoverLayerMapperTest, LayerCaching) {
                                       CompositionType::kCursor))));
 }
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

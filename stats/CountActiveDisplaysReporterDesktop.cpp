@@ -43,7 +43,7 @@ class CompositionStatsReporterDesktop : public CountActiveDisplaysReporter {
   void PushAtom(int32_t num_active_physical_displays,
                 int32_t num_active_external_displays,
                 int32_t num_virtual_displays) override {
-    const char* kDeprecatedReverseDomainName = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
     const VendorAtom atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::COUNT_ACTIVE_DISPLAYS,
                          kDeprecatedReverseDomainName,

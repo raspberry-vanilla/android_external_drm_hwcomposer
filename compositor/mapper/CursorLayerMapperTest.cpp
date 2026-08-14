@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -31,7 +33,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Field;
 
-bool TrueValidator(const std::vector<LayerMapping>&) {
+bool TrueValidator(const std::vector<LayerMapping>& /*layers*/) {
   return true;
 }
 }  // namespace
@@ -225,3 +227,5 @@ INSTANTIATE_TEST_SUITE_P(CursorAndDeviceComposition, CursorLayerMapperTest,
                          testing::Values(CompositionType::kCursor,
                                          CompositionType::kDevice));
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

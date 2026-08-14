@@ -66,7 +66,7 @@ class PipelineBindable {
   }
 
  private:
-  const DrmDisplayPipeline *bound_pipeline_;
+  const DrmDisplayPipeline *bound_pipeline_{};
   std::weak_ptr<BindingOwner<O>> owner_object_;
 };
 

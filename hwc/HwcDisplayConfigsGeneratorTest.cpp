@@ -14,14 +14,22 @@
  * limitations under the License.
  */
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <aidl/android/hardware/graphics/common/Hdr.h>
+#include <drm/drm_mode.h>
+#include <xf86drmMode.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <map>
+#include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include "backend/BackendDisplayCapabilities.h"
@@ -97,12 +105,12 @@ class MockBackendDisplayCapabilities : public BackendDisplayCapabilities {
 
 class HwcDisplayConfigsGeneratorTest : public ::testing::Test {
  protected:
-  FakeDrmDevice fake_device_;
-  HwcDisplayConfigsGenerator generator_;
+  FakeDrmDevice fake_device;
+  HwcDisplayConfigsGenerator generator;
 };
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_BasicSuccess) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsBasicSuccess) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       /*width=*/500,
                                                       /*height=*/300);
@@ -117,9 +125,10 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_BasicSuccess) {
       .persistent_hdr_enabled = false,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
 
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 2);
@@ -135,8 +144,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_BasicSuccess) {
   EXPECT_EQ(preferred_config->second.output_type, OutputType::kSdr);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrDisabledExternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrDisabledExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -149,15 +158,16 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrDisabledExternal) {
       .persistent_hdr_enabled = false,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 1);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
-            OutputType::kSdr);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type, OutputType::kSdr);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledExternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrEnabledExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -171,15 +181,17 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledExternal) {
       .external_hdr_enabled = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 2);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type,
             OutputType::kSystem);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledViaBackend) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrEnabledViaBackend) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -200,16 +212,18 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_HdrEnabledViaBackend) {
       .capabilities = &capabilities,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 2);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type,
             OutputType::kSystem);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_HdrDisabledInternalWithoutPersistent) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsHdrDisabledInternalWithoutPersistent) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -222,16 +236,17 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .persistent_hdr_enabled = false,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 1);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
-            OutputType::kSdr);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type, OutputType::kSdr);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_HdrEnabledInternalWithPersistent) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsHdrEnabledInternalWithPersistent) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -244,16 +259,18 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .persistent_hdr_enabled = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 2);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.output_type,
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 2);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type,
             OutputType::kSystem);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_HdrEnabledRegistersDoubleConfigs) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsHdrEnabledRegistersDoubleConfigs) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -268,8 +285,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .external_hdr_enabled = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 4);
@@ -297,8 +315,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().hdisplay, 1920);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_Filter3DModes) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsFilter3DModes) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
       CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
@@ -310,16 +328,17 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_Filter3DModes) {
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 1);
-  EXPECT_EQ(configs_opt->hwc_configs.begin()->second.mode.GetRawMode().hdisplay,
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.mode.GetRawMode().hdisplay,
             1920);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_FallbackPreferredMode) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsFallbackPreferredMode) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
       CreateModeFloat(1920, 1080, 60.0F, DRM_MODE_FLAG_3D_FRAME_PACKING,
@@ -331,20 +350,22 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  EXPECT_EQ(configs_opt->hwc_configs.size(), 1);
-  EXPECT_NE(configs_opt->preferred_config_id, 0);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
 
-  auto preferred_config = configs_opt->hwc_configs.find(
-      configs_opt->preferred_config_id);
-  ASSERT_NE(preferred_config, configs_opt->hwc_configs.end());
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_NE(configs.preferred_config_id, 0);
+
+  auto preferred_config = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(preferred_config, configs.hwc_configs.end());
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().hdisplay, 1280);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       SanitizeGroups_EraseTooCloseRefreshRates) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+       SanitizeGroupsEraseTooCloseRefreshRates) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
       CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
@@ -356,9 +377,10 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
-  auto configs = std::move(*configs_opt);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  auto& configs = *configs_opt;
 
   ASSERT_EQ(configs.hwc_configs.size(), 3);
 
@@ -387,7 +409,7 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       SanitizeGroups_PreserveDifferentOutputTypes) {
+       SanitizeGroupsPreserveDifferentOutputTypes) {
   HwcDisplayConfigs configs;
 
   configs.hwc_configs[1] = HwcDisplayConfig{
@@ -413,30 +435,34 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   EXPECT_EQ(configs.hwc_configs.at(2).output_type, OutputType::kSystem);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_NoIdRecycling) {
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsNoIdRecycling) {
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto connector1 = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+  auto connector1 = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                        500, 300);
   std::vector<DrmMode> modes1 = {
       CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
   };
   connector1->SetModes(modes1);
 
-  auto configs_opt1 = generator_.GenerateDisplayConfigs(*connector1, params);
+  const auto configs_opt1 = generator.GenerateDisplayConfigs(*connector1,
+                                                             params);
   ASSERT_TRUE(configs_opt1.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   ConfigId id1 = configs_opt1->hwc_configs.begin()->first;
 
-  auto connector2 = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+  auto connector2 = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                        500, 300);
   std::vector<DrmMode> modes2 = {
       CreateModeFloat(1280, 720, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "720p60"),
   };
   connector2->SetModes(modes2);
 
-  auto configs_opt2 = generator_.GenerateDisplayConfigs(*connector2, params);
+  const auto configs_opt2 = generator.GenerateDisplayConfigs(*connector2,
+                                                             params);
   ASSERT_TRUE(configs_opt2.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   ConfigId id2 = configs_opt2->hwc_configs.begin()->first;
 
   EXPECT_NE(id1, id2);
@@ -444,21 +470,21 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigs_NoIdRecycling) {
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_EmptyModesReturnsNullopt) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+       GetDisplayConfigsEmptyModesReturnsNullopt) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   // Do not call SetModes() -> connector will have an empty modes list.
 
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   EXPECT_FALSE(configs_opt.has_value());
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_AllModesFilteredOutReturnsNullopt) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+       GetDisplayConfigsAllModesFilteredOutReturnsNullopt) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   // All provided modes are 3D (unsupported)
   std::vector<DrmMode> modes = {
@@ -470,13 +496,12 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   EXPECT_FALSE(configs_opt.has_value());
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_PreferredModeNotFirst) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsPreferredModeNotFirst) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
       CreateModeFloat(1280, 720, 60.0F, 0, 0, "720p60"),
@@ -488,19 +513,20 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
 
-  auto preferred_config = configs_opt->hwc_configs.find(
-      configs_opt->preferred_config_id);
-  ASSERT_NE(preferred_config, configs_opt->hwc_configs.end());
+  auto preferred_config = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(preferred_config, configs.hwc_configs.end());
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().hdisplay, 1920);
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().vdisplay, 1080);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MultiplePreferredModesSelectsFirst) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1, false,
+       GetDisplayConfigsMultiplePreferredModesSelectsFirst) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1, false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
       CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
@@ -511,18 +537,19 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   HwcConfigParameters params = {.use_color_pipeline = false,
                                 .persistent_hdr_enabled = false};
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
 
-  auto preferred_config = configs_opt->hwc_configs.find(
-      configs_opt->preferred_config_id);
-  ASSERT_NE(preferred_config, configs_opt->hwc_configs.end());
+  auto preferred_config = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(preferred_config, configs.hwc_configs.end());
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().hdisplay, 1920);
   EXPECT_EQ(preferred_config->second.mode.GetRawMode().vdisplay, 1080);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetFakeMode_VirtualDisplay) {
-  auto configs = generator_.GetFakeMode(1920, 1080);
+TEST_F(HwcDisplayConfigsGeneratorTest, GetFakeModeVirtualDisplay) {
+  auto configs = generator.GetFakeMode(1920, 1080);
 
   EXPECT_EQ(configs.hwc_configs.size(), 1);
   EXPECT_NE(configs.preferred_config_id, 0);
@@ -535,18 +562,18 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetFakeMode_VirtualDisplay) {
   EXPECT_EQ(config->second.output_type, OutputType::kSystem);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetFakeMode_HeadlessZeroResolution) {
+TEST_F(HwcDisplayConfigsGeneratorTest, GetFakeModeHeadlessZeroResolution) {
   // Ensure passing 0x0 during headless boot produces valid default structures
   // without division-by-zero or floating point anomalies.
-  auto configs = generator_.GetFakeMode(0, 0);
+  auto configs = generator.GetFakeMode(0, 0);
 
   EXPECT_EQ(configs.hwc_configs.size(), 1);
   EXPECT_NE(configs.preferred_config_id, 0);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_HdrDisabledWithoutColorPipeline) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsHdrDisabledWithoutColorPipeline) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -559,16 +586,17 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .persistent_hdr_enabled = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 1);
   EXPECT_EQ(configs.hwc_configs.begin()->second.output_type, OutputType::kSdr);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, Init_FilterModesViaCapabilities) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, InitFilterModesViaCapabilities) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -590,8 +618,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest, Init_FilterModesViaCapabilities) {
       .capabilities = &capabilities,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   // Only 60Hz should remain
@@ -599,8 +628,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest, Init_FilterModesViaCapabilities) {
   EXPECT_EQ(configs.hwc_configs.begin()->second.mode.GetVRefresh(), 60.0F);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, Init_3DModesFilteredBeforeBackend) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+TEST_F(HwcDisplayConfigsGeneratorTest, Init3DModesFilteredBeforeBackend) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -628,13 +657,13 @@ TEST_F(HwcDisplayConfigsGeneratorTest, Init_3DModesFilteredBeforeBackend) {
       .capabilities = &mock_capabilities,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MaxRefreshRatePruningInternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsMaxRefreshRatePruningInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -651,8 +680,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .max_refresh_rate = 60.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 2);
@@ -662,8 +692,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MaxRefreshRateIgnoredExternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsMaxRefreshRateIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -680,14 +710,15 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .max_refresh_rate = 60.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   EXPECT_EQ(configs_opt->hwc_configs.size(), 4);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_FallbackPreferredModeWhenPrunedByMaxRefreshRate) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsFallbackPreferredModeWhenPrunedByMaxRefreshRate) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -703,8 +734,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .max_refresh_rate = 60.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 1);
@@ -716,8 +748,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MinRefreshRatePruningInternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsMinRefreshRatePruningInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -734,8 +766,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .min_refresh_rate = 60.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 3);
@@ -745,8 +778,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MinRefreshRateIgnoredExternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsMinRefreshRateIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -762,14 +795,15 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .min_refresh_rate = 60.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   EXPECT_EQ(configs_opt->hwc_configs.size(), 3);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_MinAndMaxRefreshRateCombined) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsMinAndMaxRefreshRateCombined) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -787,8 +821,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .max_refresh_rate = 90.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 2);
@@ -799,8 +834,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_ForceDisableMrrInternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsForceDisableMrrInternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -816,8 +851,9 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .force_disable_mrr = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   const auto& configs = *configs_opt;
 
   EXPECT_EQ(configs.hwc_configs.size(), 1);
@@ -825,8 +861,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_ForceDisableMrrIgnoredExternal) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsForceDisableMrrIgnoredExternal) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/true, 500,
                                                       300);
   std::vector<DrmMode> modes = {
@@ -842,14 +878,15 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .force_disable_mrr = true,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   EXPECT_EQ(configs_opt->hwc_configs.size(), 3);
 }
 
 TEST_F(HwcDisplayConfigsGeneratorTest,
-       GetDisplayConfigs_AllModesPrunedReturnsNullopt) {
-  auto connector = std::make_unique<FakeDrmConnector>(&fake_device_, 1,
+       GetDisplayConfigsAllModesPrunedReturnsNullopt) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
   std::vector<DrmMode> modes = {
@@ -864,8 +901,10 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
       .min_refresh_rate = 90.0F,
   };
 
-  auto configs_opt = generator_.GenerateDisplayConfigs(*connector, params);
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
   EXPECT_FALSE(configs_opt.has_value());
 }
 
 }  // namespace android::drm_hwcomposer
+
+// NOLINTEND(readability-magic-numbers)

@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include <cutils/native_handle.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <cutils/native_handle.h>
 
 #include <memory>
 #include <optional>
@@ -26,7 +27,6 @@
 #include "bufferinfo/GrallocBufferCache.h"
 #include "hwc/HwcBufferCache.h"
 
-using ::testing::_;
 using ::testing::NiceMock;
 using ::testing::Return;
 
@@ -38,29 +38,29 @@ class MockBufferInfoGetter : public BufferInfoGetter {
               (override));
 };
 
-class GrallocBufferCacheTest : public ::testing::Test {
- protected:
+struct GrallocBufferCacheTest : public ::testing::Test {
   void SetUp() override {
-    auto mock_getter = std::make_unique<NiceMock<MockBufferInfoGetter>>();
-    mock_getter_ = mock_getter.get();
-    BufferInfoGetter::Init(std::move(mock_getter));
+    auto mock = std::make_unique<NiceMock<MockBufferInfoGetter>>();
+    mock_getter = mock.get();
+    BufferInfoGetter::Init(std::move(mock));
 
     // Default importer that returns nullptr (sufficient for these tests as we
     // focus on caching logic) GrallocBufferCache passes this to HwcBufferCache.
-    importer_ = [](BufferInfo&) { return nullptr; };
-    cache_ = std::make_unique<GrallocBufferCache>(importer_);
+    importer = [](BufferInfo&) { return nullptr; };
+    cache = std::make_unique<GrallocBufferCache>(importer);
   }
 
   void TearDown() override {
     BufferInfoGetter::Init(nullptr);
   }
 
-  MockBufferInfoGetter* mock_getter_;
-  HwcBufferCache::ImporterCallback importer_;
-  std::unique_ptr<GrallocBufferCache> cache_;
+  MockBufferInfoGetter* mock_getter = nullptr;
+  HwcBufferCache::ImporterCallback importer;
+  std::unique_ptr<GrallocBufferCache> cache;
 };
 
-TEST_F(GrallocBufferCacheTest, HandleNextBuffer_NewHandle_ImportsAndCaches) {
+TEST_F(GrallocBufferCacheTest, HandleNextBufferNewHandleImportsAndCaches) {
+  // NOLINTBEGIN(readability-magic-numbers)
   native_handle dummy_handle = {};
   buffer_handle_t handle = &dummy_handle;
 
@@ -68,47 +68,51 @@ TEST_F(GrallocBufferCacheTest, HandleNextBuffer_NewHandle_ImportsAndCaches) {
   expected_bi.width = 100;
   expected_bi.height = 200;
 
-  EXPECT_CALL(*mock_getter_, GetBoInfo(handle)).WillOnce(Return(expected_bi));
+  EXPECT_CALL(*mock_getter, GetBoInfo(handle)).WillOnce(Return(expected_bi));
 
-  auto result = cache_->HandleNextBuffer(handle, /*fence_fd=*/{},
-                                         /*slot_id=*/0);
+  auto result = cache->HandleNextBuffer(handle, /*fence_fd=*/{},
+                                        /*slot_id=*/0);
 
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->bi.width, 100);
-  EXPECT_EQ(result->bi.height, 200);
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& result_val = result.value();
+  EXPECT_EQ(result_val.bi.width, 100);
+  EXPECT_EQ(result_val.bi.height, 200);
 
   // Now verify it's cached by calling with nullopt
-  auto cached_result = cache_->HandleNextBuffer(std::nullopt, /*fence_fd=*/{},
-                                                /*slot_id=*/0);
+  auto cached_result = cache->HandleNextBuffer(std::nullopt, /*fence_fd=*/{},
+                                               /*slot_id=*/0);
   ASSERT_TRUE(cached_result.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   EXPECT_EQ(cached_result->bi.width, 100);
+  // NOLINTEND(readability-magic-numbers)
 }
 
-TEST_F(GrallocBufferCacheTest, HandleNextBuffer_GetBoInfoFails_ReturnsNullopt) {
+TEST_F(GrallocBufferCacheTest, HandleNextBufferGetBoInfoFailsReturnsNullopt) {
   native_handle dummy_handle = {};
   buffer_handle_t handle = &dummy_handle;
 
-  EXPECT_CALL(*mock_getter_, GetBoInfo(handle)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(*mock_getter, GetBoInfo(handle)).WillOnce(Return(std::nullopt));
 
-  auto result = cache_->HandleNextBuffer(handle, /*fence_fd=*/{},
-                                         /*slot_id=*/0);
+  auto result = cache->HandleNextBuffer(handle, /*fence_fd=*/{},
+                                        /*slot_id=*/0);
 
   EXPECT_FALSE(result.has_value());
 }
 
-TEST_F(GrallocBufferCacheTest, ClearSlot_RemovesEntry) {
+TEST_F(GrallocBufferCacheTest, ClearSlotRemovesEntry) {
   native_handle dummy_handle = {};
   buffer_handle_t handle = &dummy_handle;
   BufferInfo expected_bi;
 
-  EXPECT_CALL(*mock_getter_, GetBoInfo(handle)).WillOnce(Return(expected_bi));
+  EXPECT_CALL(*mock_getter, GetBoInfo(handle)).WillOnce(Return(expected_bi));
 
-  cache_->HandleNextBuffer(handle, /*fence_fd=*/{}, /*slot_id=*/0);
+  cache->HandleNextBuffer(handle, /*fence_fd=*/{}, /*slot_id=*/0);
 
-  cache_->ClearSlot(0);
+  cache->ClearSlot(0);
 
-  auto result = cache_->HandleNextBuffer(std::nullopt, /*fence_fd=*/{},
-                                         /*slot_id=*/0);
+  auto result = cache->HandleNextBuffer(std::nullopt, /*fence_fd=*/{},
+                                        /*slot_id=*/0);
   EXPECT_FALSE(result.has_value());
 }
 

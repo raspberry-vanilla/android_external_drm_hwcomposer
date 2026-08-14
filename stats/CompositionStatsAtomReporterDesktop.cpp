@@ -135,7 +135,7 @@ class CompositionStatsReporterDesktop : public CompositionStatsAtomReporter {
 
     // The order of the arguments to createVendorAtom is determined by the
     // proto definition in libdesktopatoms.
-    const char* kDeprecatedReverseDomainName = "";
+    static constexpr const char* kDeprecatedReverseDomainName = "";
     const VendorAtom atom = DesktopAtoms::
         createVendorAtom(DesktopAtoms::HWC_COMPOSITION_STATS,
                          kDeprecatedReverseDomainName, display_handle,

@@ -14,17 +14,22 @@
  * limitations under the License.
  */
 
-#include <array>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <random>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <xf86drmMode.h>
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "compositor/PresentedCompositionCache.h"
 #include "compositor/ShortCircuitor.h"
 #include "drm/DrmTestUtils.h"
 
@@ -68,11 +73,6 @@ auto ToConstPtrList(const LayerList& layers) -> std::vector<const HwcLayer*> {
   return result;
 }
 
-auto CreateRequestContext(const ICompositorDisplay& display)
-    -> ValidationRequestContext {
-  return {display, display.GetOrderLayersByZPos()};
-}
-
 auto CreateCompositionTypeMap(const std::vector<const HwcLayer*>& layers)
     -> CompositionPlanner::CompositionTypeMap {
   CompositionPlanner::CompositionTypeMap type_map;
@@ -91,9 +91,9 @@ auto CreateValidatedComposition(const std::vector<const HwcLayer*>& layers)
 
 }  // namespace
 
-class ShortCircuitorTest : public ::testing::Test {
+struct ShortCircuitorTest : public ::testing::Test {
  protected:
-  enum class Expectation { FullValidation, ShortCircuited };
+  enum class Expectation { kFullValidation, kShortCircuited };
 
   using ReqCtxOverrideFunc = std::function<
       ValidationRequestContext(MockCompositorDisplay&, LayerList&)>;
@@ -103,13 +103,13 @@ class ShortCircuitorTest : public ::testing::Test {
   using ConfigOverrideFunc = std::function<ShortCircuitor::Config()>;
 
   void SetLastRequestOverride(ReqCtxOverrideFunc func) {
-    last_req_override_func_ = func;
+    last_req_override_func_ = std::move(func);
   }
   void SetCurrentRequestOverride(ReqCtxOverrideFunc func) {
-    curr_req_override_func_ = func;
+    curr_req_override_func_ = std::move(func);
   }
   void SetLastCompositionOverride(CompositionOverrideFunc func) {
-    last_composition_override_func_ = func;
+    last_composition_override_func_ = std::move(func);
   }
 
   static void SetUpDisplay(MockCompositorDisplay& display) {
@@ -121,8 +121,8 @@ class ShortCircuitorTest : public ::testing::Test {
                                FakeDrmDevice& drm_device,
                                DrmPlanePtr& cursor_plane) {
     cursor_plane = std::make_shared<FakeDrmPlane>(drm_device,
-                                                  DRM_PLANE_TYPE_CURSOR);
-    cursor_plane->is_valid_ = true;
+                                                  DRM_PLANE_TYPE_CURSOR,
+                                                  /*is_valid=*/true);
 
     // Expected to be called from ShortCircuitor::Check()
     EXPECT_CALL(display, GetCursorPlane())
@@ -175,8 +175,9 @@ class ShortCircuitorTest : public ::testing::Test {
         Get(config, composition_cache,
             curr_req_override_func_ ? curr_req_override_func_(display, layers)
                                     : last_request);
-    if (expectation == Expectation::ShortCircuited) {
+    if (expectation == Expectation::kShortCircuited) {
       EXPECT_TRUE(short_circuited.has_value());
+      // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
       EXPECT_EQ(*short_circuited, composition);
     } else {
       EXPECT_FALSE(short_circuited.has_value());
@@ -184,6 +185,7 @@ class ShortCircuitorTest : public ::testing::Test {
     }
   }
 
+ private:
   ReqCtxOverrideFunc last_req_override_func_;
   ReqCtxOverrideFunc curr_req_override_func_;
   CompositionOverrideFunc last_composition_override_func_;
@@ -194,7 +196,7 @@ class ShortCircuitorTest : public ::testing::Test {
 
 TEST_F(ShortCircuitorTest, SuccessfullyShortCircuited) {
   // No overrides, expect successful short circuiting.
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::ShortCircuited));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kShortCircuited));
 }
 
 TEST_F(ShortCircuitorTest, PreviouslyFlattened) {
@@ -208,7 +210,7 @@ TEST_F(ShortCircuitorTest, PreviouslyFlattened) {
         return flattened_composition;
       });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentDisplay) {
@@ -223,10 +225,10 @@ TEST_F(ShortCircuitorTest, DifferentDisplay) {
         EXPECT_CALL(other_display, GetColorTransformMatrix())
             .WillRepeatedly(Return(display.GetColorTransformMatrix()));
 
-        return ValidationRequestContext(other_display, ToConstPtrList(layers));
+        return ValidationRequestContext{other_display, ToConstPtrList(layers)};
       });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentColorMatrix) {
@@ -237,10 +239,10 @@ TEST_F(ShortCircuitorTest, DifferentColorMatrix) {
     EXPECT_CALL(display, GetColorTransformMatrix())
         .WillOnce(Return(std::make_shared<const HalColorTransformMatrix>()));
 
-    return ValidationRequestContext(display, ToConstPtrList(layers));
+    return ValidationRequestContext{display, ToConstPtrList(layers)};
   });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, OneLayerAdded) {
@@ -249,19 +251,19 @@ TEST_F(ShortCircuitorTest, OneLayerAdded) {
                             LayerList& layers) -> ValidationRequestContext {
     auto layer_ptrs = ToConstPtrList(layers);
     layer_ptrs.pop_back();
-    return ValidationRequestContext(display, layer_ptrs);
+    return ValidationRequestContext{display, layer_ptrs};
   });
 
   // Should still short circuit if only overriding the last request.
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::ShortCircuited));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kShortCircuited));
 
   // Override the current request to be the exact layers before layer removal.
   SetCurrentRequestOverride([](MockCompositorDisplay& display,
                                LayerList& layers) -> ValidationRequestContext {
-    return ValidationRequestContext(display, ToConstPtrList(layers));
+    return ValidationRequestContext{display, ToConstPtrList(layers)};
   });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, OneLayerRemoved) {
@@ -270,10 +272,10 @@ TEST_F(ShortCircuitorTest, OneLayerRemoved) {
                                LayerList& layers) -> ValidationRequestContext {
     auto layer_ptrs = ToConstPtrList(layers);
     layer_ptrs.pop_back();
-    return ValidationRequestContext(display, layer_ptrs);
+    return ValidationRequestContext{display, layer_ptrs};
   });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentCompositionTypes) {
@@ -285,15 +287,16 @@ TEST_F(ShortCircuitorTest, DifferentCompositionTypes) {
                               ? CompositionType::kClient
                               : CompositionType::kCursor;
     layers.back().SetLayerProperties({.composition_type = new_type});
-    return ValidationRequestContext(display, ToConstPtrList(layers));
+    return ValidationRequestContext{display, ToConstPtrList(layers)};
   });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentSourceRects) {
   // Generate a random FRect as source rect.
   std::mt19937 gen(std::random_device{}());
+  // NOLINTNEXTLINE(readability-magic-numbers)
   std::uniform_real_distribution<float> dist(0.F, 720.F);
   const auto src_rect = SrcRectInfo{.f_rect = FRect{.left = 0.F,
                                                     .top = 0.F,
@@ -306,15 +309,16 @@ TEST_F(ShortCircuitorTest, DifferentSourceRects) {
                   LayerList& layers) -> ValidationRequestContext {
         // Change the first layer's source rect.
         layers.front().SetLayerProperties({.source_crop = src_rect});
-        return ValidationRequestContext(display, ToConstPtrList(layers));
+        return ValidationRequestContext{display, ToConstPtrList(layers)};
       });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentDisplayRects) {
   // Generate a random IRect as display rect.
   std::mt19937 gen(std::random_device{}());
+  // NOLINTNEXTLINE(readability-magic-numbers)
   std::uniform_int_distribution<int> dist(0, 1080);
   const auto disp_rect = DstRectInfo{.i_rect = IRect{.left = 0,
                                                      .top = 0,
@@ -327,10 +331,10 @@ TEST_F(ShortCircuitorTest, DifferentDisplayRects) {
                    LayerList& layers) -> ValidationRequestContext {
         // Change the first layer's display rect.
         layers.front().SetLayerProperties({.display_frame = disp_rect});
-        return ValidationRequestContext(display, ToConstPtrList(layers));
+        return ValidationRequestContext{display, ToConstPtrList(layers)};
       });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 TEST_F(ShortCircuitorTest, DifferentAlphas) {
@@ -341,10 +345,10 @@ TEST_F(ShortCircuitorTest, DifferentAlphas) {
     const auto new_alpha = layers.front().GetLayerData().pi.alpha == 1.F ? 0.5F
                                                                          : 1.F;
     layers.front().SetLayerProperties({.alpha = new_alpha});
-    return ValidationRequestContext(display, ToConstPtrList(layers));
+    return ValidationRequestContext{display, ToConstPtrList(layers)};
   });
 
-  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(kDefaultConfig, Expectation::kFullValidation));
 }
 
 // ---------------------------------------------------------------------------
@@ -353,18 +357,20 @@ TEST_F(ShortCircuitorTest, DifferentAlphas) {
 TEST_F(ShortCircuitorTest, Disabled) {
   ShortCircuitor::Config config = kDefaultConfig;
   config.enabled = false;
-  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::FullValidation));
+  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::kFullValidation));
 }
 
 // See also ShortCircuitorTest#DifferentSourceRects and #DifferentDisplayRects
 TEST_F(ShortCircuitorTest, IgnoreGeometries) {
   // Generate random rects.
   std::mt19937 gen(std::random_device{}());
+  // NOLINTNEXTLINE(readability-magic-numbers)
   std::uniform_real_distribution<float> f_dist(0.F, 720.F);
   const auto src_rect = SrcRectInfo{.f_rect = FRect{.left = 0.F,
                                                     .top = 0.F,
                                                     .right = f_dist(gen),
                                                     .bottom = f_dist(gen)}};
+  // NOLINTNEXTLINE(readability-magic-numbers)
   std::uniform_int_distribution<int> i_dist(0, 1080);
   const auto disp_rect = DstRectInfo{.i_rect = IRect{.left = 0,
                                                      .top = 0,
@@ -377,13 +383,13 @@ TEST_F(ShortCircuitorTest, IgnoreGeometries) {
                               LayerList& layers) -> ValidationRequestContext {
         // Change the first layer's geometries.
         layers.front().SetLayerProperties(
-            {.source_crop = src_rect, .display_frame = disp_rect});
-        return ValidationRequestContext(display, ToConstPtrList(layers));
+            {.display_frame = disp_rect, .source_crop = src_rect});
+        return ValidationRequestContext{display, ToConstPtrList(layers)};
       });
 
   ShortCircuitor::Config config = kDefaultConfig;
   config.ignore_geometry = true;
-  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::ShortCircuited));
+  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::kShortCircuited));
 }
 
 // See also ShortCircuitorTest#DifferentColorMatrix
@@ -395,12 +401,12 @@ TEST_F(ShortCircuitorTest, IgnoreColorMatrix) {
     EXPECT_CALL(display, GetColorTransformMatrix())
         .WillOnce(Return(std::make_shared<const HalColorTransformMatrix>()));
 
-    return ValidationRequestContext(display, ToConstPtrList(layers));
+    return ValidationRequestContext{display, ToConstPtrList(layers)};
   });
 
   ShortCircuitor::Config config = kDefaultConfig;
   config.ignore_ctm = true;
-  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::ShortCircuited));
+  ASSERT_NO_FATAL_FAILURE(Test(config, Expectation::kShortCircuited));
 }
 
 }  // namespace android::drm_hwcomposer
