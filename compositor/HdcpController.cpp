@@ -81,9 +81,11 @@ void HdcpController::Requested() {
 void HdcpController::SetContentProtectionStatus() {
   auto* connector = pipeline_->connector->Get();
 
-  // Query connector outside of the lock to avoid blocking while holding the
-  // controller mutex.
-  const bool cp_enabled = connector->IsContentProtectionEnabled();
+  // Use QueryContentProtectionEnabled() instead of UpdateContentProtection()
+  // followed by IsContentProtectionEnabled() to avoid modifying shared cached
+  // state from the HDCP worker thread. Query outside the controller lock to
+  // avoid blocking while holding the mutex.
+  const bool cp_enabled = connector->QueryContentProtectionEnabled();
 
   // Decide new state and which callbacks to invoke, updating internal state
   // while holding the lock. Do not call callbacks while holding the lock.

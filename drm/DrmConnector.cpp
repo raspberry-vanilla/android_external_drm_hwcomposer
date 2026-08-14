@@ -353,6 +353,22 @@ bool DrmConnector::UpdateContentProtection() {
                                       &content_protection_property_);
 }
 
+bool DrmConnector::QueryContentProtectionEnabled() {
+  DrmProperty content_protection_property;
+  if (!GetOptionalConnectorProperty("Content Protection",
+                                    &content_protection_property)) {
+    ALOGE("Failed to query Content Protection property for connector %d",
+          GetId());
+    return false;
+  }
+
+  auto content_protection_property_value = content_protection_property
+                                               .GetValue();
+  return content_protection_property_value &&
+         (content_protection_property_value ==
+          DRM_MODE_CONTENT_PROTECTION_ENABLED);
+}
+
 bool DrmConnector::IsContentProtectionEnabled() const {
   auto content_protection_property_value = content_protection_property_
                                                .GetValue();

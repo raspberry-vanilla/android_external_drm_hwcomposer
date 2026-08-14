@@ -1557,7 +1557,12 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
             static_cast<int>(a_args.hdcp_content_type.value()),
             static_cast<int>(handle_));
     }
-    hdcpcon_->Requested();
+    if (hdcpcon_ == nullptr) {
+      ALOGE("HDCP commit completed without an HDCP controller for display %d",
+            static_cast<int>(handle_));
+    } else {
+      hdcpcon_->Requested();
+    }
   }
 }
 

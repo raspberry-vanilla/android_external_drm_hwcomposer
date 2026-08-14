@@ -83,8 +83,16 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsLinkStatusGood();
 
+  /** Refreshes the cached content protection property value. Returns whether
+   * the property was successfully read from DRM. */
   bool UpdateContentProtection();
 
+  /** Reads and returns the content protection property value from DRM. Returns
+   * false if the property could not be read. Does not update the cached value.
+   */
+  bool QueryContentProtectionEnabled();
+
+  /** Returns the cached content protection property value. */
   bool IsContentProtectionEnabled() const;
 
   auto &GetModes() const {
