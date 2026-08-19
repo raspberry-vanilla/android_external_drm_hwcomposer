@@ -19,6 +19,7 @@
 #include <drm/drm_mode.h>
 #include <math/mat3.h>
 #include <math/mat4.h>
+#include <ui/ColorSpace.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +35,8 @@
 
 namespace android::drm_hwcomposer {
 
+using ColorGamut = ::android::ColorSpace;
+
 template <typename T>
 using Lut1D = std::vector<T>;
 template <typename T>
@@ -41,6 +44,14 @@ using Lut1DCache = std::map<std::tuple<TransferFunction, size_t, float>,
                             Lut1D<T>>;
 using CscCache = std::map<std::tuple<HwcColorspace, HwcColorspace>,
                           const mat3d>;
+
+// Static ColorGamut instances avoid recomputing color space matrix inverses
+// and std::function binders on every invocation, and ensure transfer function
+// references never dangle.
+inline const ColorGamut kSrgbGamut = ColorGamut::sRGB();
+inline const ColorGamut kBt709Gamut = ColorGamut::BT709();
+inline const ColorGamut kDciP3Gamut = ColorGamut::DCIP3();
+inline const ColorGamut kBt2020Gamut = ColorGamut::BT2020();
 
 template <typename T>
 inline const Lut1D<T> kEmptyLut = {};
@@ -62,6 +73,12 @@ class ColorUtil {
    * https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/graphics/common/aidl/android/hardware/graphics/common/Dataspace.aidl;l=348;drc=dbf753b896a75f3e712bc362a01763d731e49f57
    */
   static double EvaluateHlgOetf(double l);
+
+  /**
+   * Detects non-zero translation offset components in Red (index 12), Green
+   * (index 13), and Blue (index 14) of a HAL 4x4 column-major matrix.
+   */
+  static bool TransformHasOffsetValue(const HalColorTransformMatrix &matrix);
 
   /* HAL provides a transposed 4x4 float type matrix:
    * | 0  1  2  3|
@@ -120,12 +137,12 @@ class ColorUtil {
     switch (mode) {
       case ColorMode::kNative:
         return HwcColorspace::kDefault;
-      case ColorMode::kSrgb:
       case ColorMode::kBt601_625:
       case ColorMode::kBt601_625Unadjusted:
       case ColorMode::kBt601_525:
       case ColorMode::kBt601_525Unadjusted:
         return HwcColorspace::kBt601;
+      case ColorMode::kSrgb:
       case ColorMode::kBt709:
         return HwcColorspace::kBt709;
       case ColorMode::kDciP3:
@@ -145,17 +162,25 @@ class ColorUtil {
   static DrmColorspace ToDrmColorspace(HwcColorspace colorspace) {
     switch (colorspace) {
       case HwcColorspace::kDefault:
-        return DrmColorspace::kDefault;
       case HwcColorspace::kBt601:
-        return DrmColorspace::kBt601Ycc;
       case HwcColorspace::kBt709:
-        return DrmColorspace::kBt709Ycc;
+        return DrmColorspace::kDefault;
       case HwcColorspace::kDciP3:
         return DrmColorspace::kDciP3RgbD65;
       case HwcColorspace::kBt2020:
         return DrmColorspace::kBt2020Rgb;
+      default:
+        ALOGW("Unknown HwcColorspace %d, falling back to kDefault",
+              static_cast<int>(colorspace));
+        return DrmColorspace::kDefault;
     }
   }
+
+  static const ColorGamut &ToColorGamut(HwcColorspace colorspace);
+
+  static const ColorGamut::transfer_function &GetEotf(ColorMode mode);
+
+  static uint64_t To3132FixPt(double in);
 
   /* Framework sends CTM assuming non-linear input. Transform must be converted
    * to a linear matrix to be applied correctly in the color pipeline.

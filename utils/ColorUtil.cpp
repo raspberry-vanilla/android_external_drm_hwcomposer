@@ -36,24 +36,12 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-using ColorGamut = android::ColorSpace;
-
 namespace android::drm_hwcomposer {
 
 namespace {
 
 // Normalize to the range [0, 12] rather than [0, 1]
 const double kHlgScale = 12.0;
-
-uint64_t To3132FixPt(double in) {
-  constexpr uint64_t kSignMask = (1ULL << 63);
-  constexpr uint64_t kValueMask = ~(1ULL << 63);
-  constexpr auto kValueScale = static_cast<double>(1ULL << 32);
-  const double in_scaled = in * kValueScale;
-  if (in < 0)
-    return (static_cast<uint64_t>(-in_scaled) & kValueMask) | kSignMask;
-  return static_cast<uint64_t>(in_scaled) & kValueMask;
-}
 
 template <typename T>
 std::shared_ptr<T> ToColorTransform(
@@ -69,7 +57,7 @@ std::shared_ptr<T> ToColorTransform(
   constexpr int kHalRows = 4;
   for (int i = 0; i < kCols; i++) {
     for (int j = 0; j < rows; j++) {
-      color_matrix->matrix[(i * rows) + j] = To3132FixPt(
+      color_matrix->matrix[(i * rows) + j] = ColorUtil::To3132FixPt(
           (*color_transform_matrix)[(j * kHalRows) + i]);
     }
   }
@@ -82,29 +70,13 @@ std::shared_ptr<drm_color_ctm> ToColorTransform3x3(
   constexpr int kDim = 3;
   for (int i = 0; i < kDim; i++) {
     for (int j = 0; j < kDim; j++) {
-      color_matrix->matrix[(i * kDim) + j] = To3132FixPt(
+      color_matrix->matrix[(i * kDim) + j] = ColorUtil::To3132FixPt(
           color_transform_matrix[j][i]);
     }
   }
   return color_matrix;
 }
 
-ColorGamut ToColorGamut(HwcColorspace colorspace) {
-  switch (colorspace) {
-    case HwcColorspace::kBt709:
-    case HwcColorspace::kDefault:
-      return ColorGamut::BT709();
-    case HwcColorspace::kBt2020:
-      return ColorGamut::BT2020();
-    case HwcColorspace::kDciP3:
-      return ColorGamut::DCIP3();
-    case HwcColorspace::kBt601:
-      return ColorGamut::sRGB();
-    default:
-      ALOGW("Unknown colorspace %d, falling back to sRGB", colorspace);
-      return ColorGamut::sRGB();
-  }
-}
 
 bool NeedsTonemapping(TransferFunction tf) {
   switch (tf) {
@@ -229,13 +201,13 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
         ALOGV("Unknown transfer function, falling back to sRGB");
         [[fallthrough]];
       case TransferFunction::kSrgb:
-        signal = is_degamma ? ColorGamut::sRGB().toLinear(signal)[0]
-                            : ColorGamut::sRGB().fromLinear(signal)[0];
+        signal = is_degamma ? kSrgbGamut.toLinear(signal)[0]
+                            : kSrgbGamut.fromLinear(signal)[0];
         break;
       case TransferFunction::kSmpte170M:
-        // ColorGamut::BT709 uses SMPTE 170M transfer parameters
-        signal = is_degamma ? ColorGamut::BT709().toLinear(signal)[0]
-                            : ColorGamut::BT709().fromLinear(signal)[0];
+        // BT.709 uses SMPTE 170M transfer parameters
+        signal = is_degamma ? kBt709Gamut.toLinear(signal)[0]
+                            : kBt709Gamut.fromLinear(signal)[0];
         break;
       default:
         break;
@@ -284,6 +256,45 @@ double ColorUtil::EvaluateHlgOetf(double l) {
   return (kHlg.a * log(l - kHlg.b)) + kHlg.c;
 }
 
+// Converts a double into DRM fixed point format (S31.32 sign-magnitude):
+// Bit 63: Sign bit (0 for positive, 1 for negative)
+// Bits 62-32: 31-bit integer magnitude
+// Bits 31-0: 32-bit fractional magnitude (1.0 == (1ULL << 32))
+uint64_t ColorUtil::To3132FixPt(double in) {
+  if (std::isnan(in)) {
+    return 0;
+  }
+
+  constexpr uint64_t kSignBit = 1ULL << 63;
+  constexpr uint64_t kValueMask = (1ULL << 63) - 1;
+  constexpr auto kFractionalScale = static_cast<double>(1ULL << 32);
+
+  const bool is_negative = std::signbit(in);
+  const double abs_in = std::abs(in);
+
+  const double scaled = std::round(abs_in * kFractionalScale);
+
+  uint64_t val = 0;
+  if (scaled >= static_cast<double>(kValueMask)) {
+    val = kValueMask;
+  } else {
+    val = static_cast<uint64_t>(scaled);
+  }
+
+  return is_negative ? (kSignBit | val) : val;
+}
+
+bool ColorUtil::TransformHasOffsetValue(const HalColorTransformMatrix &matrix) {
+  constexpr float kEpsilon = 0.001F;
+  constexpr size_t kRedOffsetIndex = 12;
+  constexpr size_t kGreenOffsetIndex = 13;
+  constexpr size_t kBlueOffsetIndex = 14;
+
+  return std::abs(matrix[kRedOffsetIndex]) >= kEpsilon ||
+         std::abs(matrix[kGreenOffsetIndex]) >= kEpsilon ||
+         std::abs(matrix[kBlueOffsetIndex]) >= kEpsilon;
+}
+
 std::shared_ptr<drm_color_ctm> ColorUtil::ToColorTransform3x3(
     const std::shared_ptr<const HalColorTransformMatrix>
         &color_transform_matrix) {
@@ -305,7 +316,7 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
   constexpr int kCols = 3;
   for (int i = 0; i < kCols; i++) {
     for (int j = 0; j < kRows; j++) {
-      color_matrix->matrix[(i * kRows) + j] = To3132FixPt(
+      color_matrix->matrix[(i * kRows) + j] = ColorUtil::To3132FixPt(
           color_transform_matrix[j][i]);
     }
   }
@@ -334,11 +345,49 @@ std::shared_ptr<const HalColorTransformMatrix> ColorUtil::Multiply(
   return out;
 }
 
+const ColorGamut &ColorUtil::ToColorGamut(HwcColorspace colorspace) {
+  switch (colorspace) {
+    case HwcColorspace::kBt709:
+    case HwcColorspace::kDefault:
+      return kBt709Gamut;
+    case HwcColorspace::kBt2020:
+      return kBt2020Gamut;
+    case HwcColorspace::kDciP3:
+      return kDciP3Gamut;
+    case HwcColorspace::kBt601:
+      return kSrgbGamut;
+    default:
+      ALOGW("Unknown colorspace %d, falling back to sRGB", colorspace);
+      return kSrgbGamut;
+  }
+}
+
+// Maps framework ColorMode to its corresponding EOTF transfer function curve.
+const ColorGamut::transfer_function &ColorUtil::GetEotf(ColorMode mode) {
+  switch (mode) {
+    case ColorMode::kSrgb:
+    case ColorMode::kBt601_625:
+    case ColorMode::kBt601_625Unadjusted:
+    case ColorMode::kBt601_525:
+    case ColorMode::kBt601_525Unadjusted:
+      return kSrgbGamut.getEOTF();
+    case ColorMode::kBt709:
+      return kBt709Gamut.getEOTF();
+    case ColorMode::kDciP3:
+    case ColorMode::kDisplayP3:
+      return kDciP3Gamut.getEOTF();
+    case ColorMode::kBt2020:
+    case ColorMode::kDisplayBt2020:
+      return kBt2020Gamut.getEOTF();
+    default:
+      return kSrgbGamut.getEOTF();
+  }
+}
+
 HalColorTransformMatrix ColorUtil::ToLinearCtm(
     const HalColorTransformMatrix ctm_in, ColorMode mode) {
   HalColorTransformMatrix ctm_out = kIdentityMatrix;
-  const ColorGamut::transfer_function
-      &tf = ToColorGamut(ColorUtil::ToHwcColorspace(mode)).getEOTF();
+  const ColorGamut::transfer_function &tf = GetEotf(mode);
   std::transform(ctm_in.begin(), ctm_in.end(), ctm_out.begin(),
                  [&tf](float val) { return tf(val); });
   return ctm_out;

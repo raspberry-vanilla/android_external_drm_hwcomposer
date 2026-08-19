@@ -69,7 +69,6 @@ struct CompositionStats;
 struct DrmDisplayPipeline;
 
 using EdidWrapperUnique = std::unique_ptr<EdidWrapper>;
-using ColorGamut = ::android::ColorSpace;
 
 class FrontendDisplayBase {
  public:
@@ -395,7 +394,7 @@ class HwcDisplay : public ICompositorDisplay {
   bool Init();
 
   void SetHdrHeadroom();
-  void SetHdrOutputMetadata(const ColorGamut &color_gamut,
+  void SetHdrOutputMetadata(const android::ColorSpace &color_gamut,
                             TransferFunction transfer_function);
   void SetOutputType(OutputType hdr_output_type);
 

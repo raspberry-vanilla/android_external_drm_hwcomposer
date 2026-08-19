@@ -19,7 +19,6 @@
 #include <cstdint>
 
 #include "bufferinfo/BufferInfo.h"
-#include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
 #include "drm/DrmDevice.h"
@@ -96,18 +95,14 @@ void HwcLayer::PopulateLayerData() {
   if (blend_mode_ != BufferBlendMode::kUndefined) {
     layer_data_.bi->blend_mode = blend_mode_;
   }
-  if (colorspace_ != HwcColorspace::kDefault) {
-    layer_data_.colorspace = colorspace_;
-  }
+  layer_data_.colorspace = colorspace_;
   if (color_encoding_ != BufferColorEncoding::kUndefined) {
     layer_data_.bi->color_encoding = color_encoding_;
   }
   if (sample_range_ != BufferSampleRange::kUndefined) {
     layer_data_.bi->sample_range = sample_range_;
   }
-  if (transfer_func_ != TransferFunction::kUnknown) {
-    layer_data_.transfer_func = transfer_func_;
-  }
+  layer_data_.transfer_func = transfer_func_;
   if (brightness_ >= 0.F) {
     layer_data_.brightness = brightness_;
   }

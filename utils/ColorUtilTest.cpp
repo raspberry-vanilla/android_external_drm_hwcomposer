@@ -23,10 +23,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "drm/DrmColorspace.h"
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
 
@@ -441,6 +443,200 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeCalculatesExpectedScale) {
                                                     1.0F);
 
   EXPECT_EQ(&lut_scaled, &lut_expected);
+}
+
+TEST(ColorUtilTest, ToColorGamutMappings) {
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kDefault).getName(),
+            android::ColorSpace::BT709().getName());
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt709).getName(),
+            android::ColorSpace::BT709().getName());
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt2020).getName(),
+            android::ColorSpace::BT2020().getName());
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kDciP3).getName(),
+            android::ColorSpace::DCIP3().getName());
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt601).getName(),
+            android::ColorSpace::sRGB().getName());
+}
+
+TEST(ColorUtilTest, ToHwcColorspaceManyToOneMappings) {
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kNative),
+            HwcColorspace::kDefault);
+
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt601_625),
+            HwcColorspace::kBt601);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt601_625Unadjusted),
+            HwcColorspace::kBt601);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt601_525),
+            HwcColorspace::kBt601);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt601_525Unadjusted),
+            HwcColorspace::kBt601);
+
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kSrgb),
+            HwcColorspace::kBt709);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt709),
+            HwcColorspace::kBt709);
+
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kDciP3),
+            HwcColorspace::kDciP3);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kDisplayP3),
+            HwcColorspace::kDciP3);
+
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt2020),
+            HwcColorspace::kBt2020);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kDisplayBt2020),
+            HwcColorspace::kBt2020);
+
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kAdobeRgb),
+            HwcColorspace::kDefault);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt2100Pq),
+            HwcColorspace::kDefault);
+  EXPECT_EQ(ColorUtil::ToHwcColorspace(ColorMode::kBt2100Hlg),
+            HwcColorspace::kDefault);
+}
+
+TEST(ColorUtilTest, GetEotfManyToOneMappings) {
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kSrgb)(0.5F),
+                  android::ColorSpace::sRGB().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt601_625)(0.5F),
+                  android::ColorSpace::sRGB().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt601_625Unadjusted)(0.5F),
+                  android::ColorSpace::sRGB().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt601_525)(0.5F),
+                  android::ColorSpace::sRGB().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt601_525Unadjusted)(0.5F),
+                  android::ColorSpace::sRGB().getEOTF()(0.5F));
+
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt709)(0.5F),
+                  android::ColorSpace::BT709().getEOTF()(0.5F));
+
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kDciP3)(0.5F),
+                  android::ColorSpace::DCIP3().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kDisplayP3)(0.5F),
+                  android::ColorSpace::DCIP3().getEOTF()(0.5F));
+
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kBt2020)(0.5F),
+                  android::ColorSpace::BT2020().getEOTF()(0.5F));
+  EXPECT_FLOAT_EQ(ColorUtil::GetEotf(ColorMode::kDisplayBt2020)(0.5F),
+                  android::ColorSpace::BT2020().getEOTF()(0.5F));
+}
+
+TEST(ColorUtilTest, ToLinearCtmManyToOneMappings) {
+  constexpr HalColorTransformMatrix kCtm = {
+      0.5F, 0.0F, 0.0F, 0.0F, 0.0F, 0.5F, 0.0F, 0.0F,
+      0.0F, 0.0F, 0.5F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+  };
+
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm, ColorMode::kBt601_625)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kSrgb)[0]);
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm,
+                                         ColorMode::kBt601_625Unadjusted)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kSrgb)[0]);
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm, ColorMode::kBt601_525)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kSrgb)[0]);
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm,
+                                         ColorMode::kBt601_525Unadjusted)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kSrgb)[0]);
+
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm, ColorMode::kDciP3)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kDisplayP3)[0]);
+
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(kCtm, ColorMode::kBt2020)[0],
+                  ColorUtil::ToLinearCtm(kCtm, ColorMode::kDisplayBt2020)[0]);
+}
+
+TEST(ColorUtilTest, To3132FixPtBasics) {
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.0), 0ULL);
+  EXPECT_EQ(ColorUtil::To3132FixPt(1.0), 1ULL << 32);
+  EXPECT_EQ(ColorUtil::To3132FixPt(2.0), 2ULL << 32);
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.5), 1ULL << 31);
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.25), 1ULL << 30);
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.125), 1ULL << 29);
+
+  constexpr uint64_t kSignBit = 1ULL << 63;
+  EXPECT_EQ(ColorUtil::To3132FixPt(-1.0), kSignBit | (1ULL << 32));
+  EXPECT_EQ(ColorUtil::To3132FixPt(-2.0), kSignBit | (2ULL << 32));
+  EXPECT_EQ(ColorUtil::To3132FixPt(-0.5), kSignBit | (1ULL << 31));
+
+  // Smallest representable non-zero step: 2^-32
+  constexpr double kQuantum = 1.0 / 4294967296.0;
+  EXPECT_EQ(ColorUtil::To3132FixPt(kQuantum), 1ULL);
+  EXPECT_EQ(ColorUtil::To3132FixPt(-kQuantum), kSignBit | 1ULL);
+}
+
+TEST(ColorUtilTest, To3132FixPtRounding) {
+  constexpr double kQuantum = 1.0 / 4294967296.0;
+
+  // 0.4 * quantum should round down to 0
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.4 * kQuantum), 0ULL);
+
+  // 0.6 * quantum should round up to 1
+  EXPECT_EQ(ColorUtil::To3132FixPt(0.6 * kQuantum), 1ULL);
+
+  // 1.4 * quantum should round to 1
+  EXPECT_EQ(ColorUtil::To3132FixPt(1.4 * kQuantum), 1ULL);
+
+  // 1.6 * quantum should round to 2
+  EXPECT_EQ(ColorUtil::To3132FixPt(1.6 * kQuantum), 2ULL);
+}
+
+TEST(ColorUtilTest, To3132FixPtSaturationAndSpecialValues) {
+  constexpr uint64_t kSignBit = 1ULL << 63;
+  constexpr uint64_t kValueMask = (1ULL << 63) - 1;
+
+  // Values exceeding (2^31 - 1) saturate at maximum magnitude
+  EXPECT_EQ(ColorUtil::To3132FixPt(3e9), kValueMask);
+  EXPECT_EQ(ColorUtil::To3132FixPt(-3e9), kSignBit | kValueMask);
+
+  // Large infinity saturates
+  EXPECT_EQ(ColorUtil::To3132FixPt(std::numeric_limits<double>::infinity()),
+            kValueMask);
+  EXPECT_EQ(ColorUtil::To3132FixPt(-std::numeric_limits<double>::infinity()),
+            kSignBit | kValueMask);
+
+  // NaN returns 0
+  EXPECT_EQ(ColorUtil::To3132FixPt(std::numeric_limits<double>::quiet_NaN()),
+            0ULL);
+
+  // Negative zero
+  EXPECT_EQ(ColorUtil::To3132FixPt(-0.0), kSignBit);
+}
+
+TEST(ColorUtilTest, TransformHasOffsetValueDetection) {
+  // Red offset at index 12
+  HalColorTransformMatrix matrix_r = kIdentityMatrix;
+  matrix_r[12] = 0.05F;
+  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_r));
+
+  // Green offset at index 13
+  HalColorTransformMatrix matrix_g = kIdentityMatrix;
+  matrix_g[13] = -0.05F;
+  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_g));
+
+  // Blue offset at index 14
+  HalColorTransformMatrix matrix_b = kIdentityMatrix;
+  matrix_b[14] = 0.1F;
+  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_b));
+
+  // Identity matrix has no offsets
+  EXPECT_FALSE(ColorUtil::TransformHasOffsetValue(kIdentityMatrix));
+
+  // Sub-epsilon offset (< 0.001F) is ignored as noise
+  HalColorTransformMatrix matrix_sub_eps = kIdentityMatrix;
+  matrix_sub_eps[12] = 0.0001F;
+  EXPECT_FALSE(ColorUtil::TransformHasOffsetValue(matrix_sub_eps));
+}
+
+TEST(ColorUtilTest, ToDrmColorspaceMappings) {
+  EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kDefault),
+            DrmColorspace::kDefault);
+  EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kBt601),
+            DrmColorspace::kDefault);
+  EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kBt709),
+            DrmColorspace::kDefault);
+  EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kDciP3),
+            DrmColorspace::kDciP3RgbD65);
+  EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kBt2020),
+            DrmColorspace::kBt2020Rgb);
 }
 
 }  // namespace android::drm_hwcomposer

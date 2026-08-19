@@ -144,8 +144,8 @@ struct LayerData {
   std::shared_ptr<IDrmFbIdHandle> fb;
   PresentInfo pi;
   SharedFd acquire_fence;
-  HwcColorspace colorspace;
-  TransferFunction transfer_func;
+  HwcColorspace colorspace{};
+  TransferFunction transfer_func{};
   FrameTimeHistory frame_time_history;
   std::optional<float> brightness;
 };
