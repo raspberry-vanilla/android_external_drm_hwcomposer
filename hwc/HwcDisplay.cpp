@@ -76,6 +76,7 @@
 #include "utils/SysfsBacklightController.h"
 #include "utils/fd.h"
 #include "utils/log.h"
+#include "utils/math.h"
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
@@ -88,11 +89,6 @@ namespace {
 constexpr auto kFlatteningTimeout = 1s;
 constexpr auto kHdcpRetryTimeout = 30s;
 // NOLINTEND(misc-include-cleaner)
-
-bool float_equals(float a, float b) {
-  const float epsilon = 0.001F;
-  return std::abs(a - b) < epsilon;
-}
 
 // Client target buffer may be updated since the composition was validated,
 // so get the latest LayerData.
@@ -146,13 +142,12 @@ void HwcDisplay::SetColorTransformMatrix(
       color_transform_is_identity = std::equal(color_transform_matrix.begin(),
                                                color_transform_matrix.end(),
                                                kIdentityMatrix.begin(),
-                                               float_equals);
+                                               FloatEquals);
   if (color_transform_is_identity) {
     client_color_matrix_ = GetIdentityCtmPtr();
     client_ctm_has_offset_ = false;
   } else {
-    client_ctm_has_offset_ = ColorUtil::TransformHasOffsetValue(
-        color_transform_matrix);
+    client_ctm_has_offset_ = ColorUtil::HasOffset(color_transform_matrix);
     client_color_matrix_ = std::make_shared<HalColorTransformMatrix>(
         ColorUtil::ToLinearCtm(color_transform_matrix, color_mode_));
   }
@@ -211,6 +206,9 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     hdr_metadata_ = std::make_shared<hdr_output_metadata>();
     min_bpc_ = 6;
     transfer_func_ = TransferFunction::kSrgb;
+    colorspace_ = forced_color_mode_
+                      ? ColorUtil::ToHwcColorspace(forced_color_mode_.value())
+                      : ColorUtil::ToHwcColorspace(color_mode_);
     return;
   }
 
@@ -219,6 +217,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       SetHdrHeadroom();
       SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kPq);
       min_bpc_ = 8;
+      colorspace_ = HwcColorspace::kBt2020;
       break;
     }
     case OutputType::kSystem: {
@@ -227,12 +226,14 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       if (hdr_types.empty() && !forced_color_mode_) {
         SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kSrgb);
         min_bpc_ = 6;
+        colorspace_ = HwcColorspace::kBt2020;
         break;
       }
 
       // TODO: pick appropriate HDR type
       SetHdrHeadroom();
       min_bpc_ = 8;
+      colorspace_ = HwcColorspace::kBt2020;
       auto type = (hdr_types.empty() && forced_color_mode_) ? ui::Hdr::HDR10
                                                             : hdr_types.front();
       switch (type) {
@@ -256,6 +257,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kSrgb;
+      colorspace_ = HwcColorspace::kDefault;
       break;
     case OutputType::kInvalid:
       [[fallthrough]];
@@ -264,6 +266,11 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       hdr_metadata_ = std::make_shared<hdr_output_metadata>();
       min_bpc_ = 6;
       transfer_func_ = TransferFunction::kUnknown;
+      colorspace_ = HwcColorspace::kDefault;
+  }
+
+  if (forced_color_mode_) {
+    colorspace_ = ColorUtil::ToHwcColorspace(forced_color_mode_.value());
   }
 }
 
@@ -1065,11 +1072,6 @@ auto HwcDisplay::GetRenderIntents(ColorMode /*color_mode*/) const
 void HwcDisplay::SetColorMode(ColorMode mode, ui::RenderIntent render_intent) {
   color_mode_ = mode;
 
-  // If force_color_mode is set, override the color modes.
-  colorspace_ = forced_color_mode_
-                    ? ColorUtil::ToHwcColorspace(forced_color_mode_.value())
-                    : ColorUtil::ToHwcColorspace(color_mode_);
-
   switch (render_intent) {
     case ui::RenderIntent::COLORIMETRIC:
     case ui::RenderIntent::TONE_MAP_COLORIMETRIC:
@@ -1379,14 +1381,14 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
                                  a_args.composition->plan.size() == 1;
   // When client CTM will be applied by the GPU, only apply render intent CTM
   // via DRM.
-  if (all_client_layers &&
+  if (all_client_layers && CtmByGpu() &&
       hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
     a_args.color_matrix = render_intent_matrix_;
   }
 
   // Client CTM with offset cannot be processed by CTM prop. Only apply render
   // intent CTM which will never have offset.
-  if (client_ctm_has_offset_ && !UseColorPipeline()) {
+  if (client_ctm_has_offset_ && !HasHardwareColorTransform()) {
     a_args.color_matrix = render_intent_matrix_;
   }
 
@@ -1570,11 +1572,20 @@ std::shared_ptr<BindingOwner<DrmPlane>> HwcDisplay::GetCursorPlane() const {
   return pipeline_->GetUsablePlanes().second;
 }
 
+bool HwcDisplay::HasHardwareColorTransform() const {
+  if (IsInHeadlessMode()) {
+    return false;
+  }
+  return UseColorPipeline() && GetPipe().crtc && GetPipe().crtc->Get() &&
+         GetPipe().crtc->Get()->GetCtmProperty() &&
+         GetPipe().crtc->Get()->GetCtmOffsetProperty();
+}
+
 bool HwcDisplay::CtmByGpu() const {
   if (client_color_matrix_ == GetIdentityCtmPtr())
     return false;
 
-  if (UseColorPipeline())
+  if (HasHardwareColorTransform())
     return false;
 
   if (GetPipe().crtc->Get()->GetCtmProperty() && !client_ctm_has_offset_)
@@ -1774,6 +1785,10 @@ void HwcDisplay::SetConfigGroupsForActiveConfig() {
   const std::optional<LayerData> modeset_layer_data = GetModesetLayerData(
       active_config);
   for (auto &[_, config] : configs_.hwc_configs) {
+    if (config.output_type != active_config->output_type) {
+      continue;
+    }
+
     AtomicCommitArgs commit_args = CreateModesetCommit(&config,
                                                        modeset_layer_data);
     commit_args.seamless = true;
@@ -1946,10 +1961,8 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
 
   const HwcColorspace cursor_colorspace = cursor_layer.GetLayerData()
                                               .colorspace;
-  CscCache cursor_color_map;
   auto cursor_matrix = ColorUtil::GamutAdjustIfNeeded<
-      drm_color_ctm_3x4>(cursor_colorspace, colorspace_, color_matrix_,
-                         cursor_color_map);
+      drm_color_ctm_3x4>(cursor_colorspace, colorspace_, color_matrix_);
 
   if (!cursor_matrix) {
     return false;
@@ -1960,6 +1973,13 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
 
   return (memcmp(cursor_matrix->matrix, identity_3x4->matrix,
                  sizeof(identity_3x4->matrix)) != 0);
+}
+
+std::string HwcDisplay::Dump() const {
+  if (pipeline_ && pipeline_->atomic_state_manager) {
+    return pipeline_->atomic_state_manager->DumpState();
+  }
+  return {};
 }
 
 }  // namespace android::drm_hwcomposer

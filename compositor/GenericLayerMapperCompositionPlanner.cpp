@@ -16,16 +16,13 @@
 #include "GenericLayerMapperCompositionPlanner.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"
-#include "compositor/DisplayInfo.h"
 #include "compositor/FlatteningController.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
@@ -34,6 +31,7 @@
 #include "compositor/mapper/MapperUtils.h"
 #include "drm/CommitStatus.h"
 #include "hwc/HwcLayer.h"
+#include "utils/ColorUtil.h"
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
@@ -167,23 +165,6 @@ CommitStatus TestLayerMappings(
   }
 
   return result;
-}
-
-bool HasOffset(const std::shared_ptr<const HalColorTransformMatrix>& matrix) {
-  if (!matrix) {
-    return false;
-  }
-
-  constexpr int kOffsetStart = 12;
-  constexpr int kOffsetEnd = 14;
-  for (int i = kOffsetStart; i < kOffsetEnd; i++) {
-    constexpr float kEpsilon = std::numeric_limits<float>::epsilon();
-    if (std::abs(matrix->at(i) - 0.F) > kEpsilon) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 }  // namespace
@@ -324,11 +305,21 @@ CompositionType GenericLayerMapperCompositionPlanner::GetCursorCompositionType(
     const ICompositorDisplay* display,
     const std::vector<LayerMapping>& layers) const {
   if (Properties::BugfixCursorCtmOffset() &&
-      HasOffset(display->GetColorTransformMatrix())) {
+      display->GetColorTransformMatrix() &&
+      ColorUtil::HasOffset(*display->GetColorTransformMatrix())) {
     return CompositionType::kClient;
   }
 
-  if (DisplayCanUseCursorPlane(display, GetCursorLayer(layers))) {
+  // We ideally set the fallback type to kDevice, but if SF has already reserved
+  // it as kClient, we must respect that.
+  const auto* cursor_layer = GetCursorLayer(layers);
+  auto fallback_type = CompositionType::kClient;
+  if (cursor_layer != nullptr &&
+      cursor_layer->GetSfType() != CompositionType::kClient) {
+    fallback_type = CompositionType::kDevice;
+  }
+
+  if (DisplayCanUseCursorPlane(display, cursor_layer)) {
     // Create and test a composition using only cursor plane and all other
     // layers client-composited to infer whether the cursor plane can be used.
     auto test_mappings = force_client_composition_mapper_
@@ -339,10 +330,10 @@ CompositionType GenericLayerMapperCompositionPlanner::GetCursorCompositionType(
         .composition_types = ToCompositionTypes(test_mappings)};
     return display->TestComposition(cursor_composition).success
                ? CompositionType::kCursor
-               : CompositionType::kDevice;
+               : fallback_type;
   }
 
-  return CompositionType::kDevice;
+  return fallback_type;
 }
 
 std::vector<LayerMapping>

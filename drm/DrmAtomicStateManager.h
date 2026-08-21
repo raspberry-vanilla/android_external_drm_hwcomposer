@@ -24,14 +24,18 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
+#include <tuple>
+#include <variant>
 #include <vector>
 
+#include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmUnique.h"
-#include "utils/ColorUtil.h"
+#include "utils/SlruCache.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -57,6 +61,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
      * otherwise picture will blink */
     std::vector<std::shared_ptr<IDrmFbIdHandle>> framebuffers;
     std::vector<DrmModeUserPropertyBlobUnique> blobs;
+    std::vector<std::shared_ptr<DrmModeUserPropertyBlobUnique>> cached_blobs;
   };
 
   // State of the driver after a commit.
@@ -102,6 +107,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
       const AtomicCommitArgs &args, std::unique_ptr<AtomicRequest> request);
   bool IsActive() const override;
   void WaitLastFrame() override;
+  std::string DumpState() const override;
 
   auto GetDevice() const {
     return pipe_->device;
@@ -163,11 +169,80 @@ class DrmAtomicStateManager : public AtomicStateManager {
   int frames_staged_ GUARDED_BY(mutex_){};
   int frames_tracked_ GUARDED_BY(mutex_){};
 
-  // Cached gamut mappings
-  CscCache color_transform_map_;
-  // Cached 1D LUTs
-  Lut1DCache<drm_color_lut32> degamma_lut_1d_map_;
-  Lut1DCache<drm_color_lut> gamma_lut_1d_map_;
+  struct DegammaBlobKey {
+    TransferFunction tf;
+    size_t size;
+    float scale;
+    bool operator<(const DegammaBlobKey &o) const {
+      return std::tie(tf, size, scale) < std::tie(o.tf, o.size, o.scale);
+    }
+  };
+
+  struct GammaBlobKey {
+    TransferFunction tf;
+    size_t size;
+    float scale;
+    bool operator<(const GammaBlobKey &o) const {
+      return std::tie(tf, size, scale) < std::tie(o.tf, o.size, o.scale);
+    }
+  };
+
+  struct CtmBlobKey {
+    enum class Kind { kCtm3x3, kCtm3x4, kOffset } kind;
+    HwcColorspace src;
+    HwcColorspace dest;
+    HalColorTransformMatrix matrix;
+    bool operator<(const CtmBlobKey &o) const {
+      return std::tie(kind, src, dest, matrix) <
+             std::tie(o.kind, o.src, o.dest, o.matrix);
+    }
+  };
+
+  struct HdrMetadataBlobKey {
+    hdr_output_metadata data;
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access)
+    // Compare semantic fields explicitly rather than using memcmp to avoid
+    // strict weak ordering footguns caused by uninitialized struct padding
+    // bytes.
+    bool operator<(const HdrMetadataBlobKey &o) const {
+      const auto &a = data.hdmi_metadata_type1;
+      const auto &b = o.data.hdmi_metadata_type1;
+      return std::tie(data.metadata_type, a.eotf, a.metadata_type,
+                      a.display_primaries[0].x, a.display_primaries[0].y,
+                      a.display_primaries[1].x, a.display_primaries[1].y,
+                      a.display_primaries[2].x, a.display_primaries[2].y,
+                      a.white_point.x, a.white_point.y,
+                      a.max_display_mastering_luminance,
+                      a.min_display_mastering_luminance, a.max_cll,
+                      a.max_fall) <
+             std::tie(o.data.metadata_type, b.eotf, b.metadata_type,
+                      b.display_primaries[0].x, b.display_primaries[0].y,
+                      b.display_primaries[1].x, b.display_primaries[1].y,
+                      b.display_primaries[2].x, b.display_primaries[2].y,
+                      b.white_point.x, b.white_point.y,
+                      b.max_display_mastering_luminance,
+                      b.min_display_mastering_luminance, b.max_cll, b.max_fall);
+    }
+    // NOLINTEND(cppcoreguidelines-pro-type-union-access)
+  };
+
+  using BlobKey = std::variant<DegammaBlobKey, GammaBlobKey, CtmBlobKey,
+                               HdrMetadataBlobKey>;
+
+  static constexpr size_t kMaxProbationaryBlobs = 16;
+  static constexpr size_t kMaxProtectedBlobs = 48;
+
+  // Segmented LRU cache for DRM property blobs (16 probationary, 48 protected)
+  SlruCache<BlobKey, std::shared_ptr<DrmModeUserPropertyBlobUnique>,
+            /*MaxProbationary=*/kMaxProbationaryBlobs,
+            /*MaxProtected=*/kMaxProtectedBlobs>
+      blob_cache_;
+
+  // Looks up a property blob in the cache or lazily creates, registers, and
+  // caches it via the provided generator callback on a cache miss.
+  template <typename Key, typename Generator>
+  auto GetOrCreateBlob(const Key &key, Generator &&generate_fn)
+      -> std::shared_ptr<DrmModeUserPropertyBlobUnique>;
 
   // Cached color pipeline property
   // TODO: Remove after investigating resource manager initialization bug.

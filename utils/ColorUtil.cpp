@@ -20,21 +20,29 @@
 #include <math/TMatHelpers.h>
 #include <math/mat3.h>
 #include <math/mat4.h>
+#include <math/vec3.h>
 #include <ui/ColorSpace.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
-#include <tuple>
+#include <optional>
 #include <type_traits>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "utils/log.h"
+#include "utils/math.h"
 #include "utils/properties.h"
+
+using ColorGamut = android::ColorSpace;
+
+constexpr int kOffsetRedIndex = 12;
+constexpr int kOffsetGreenIndex = 13;
+constexpr int kOffsetBlueIndex = 14;
 
 namespace android::drm_hwcomposer {
 
@@ -77,6 +85,11 @@ std::shared_ptr<drm_color_ctm> ToColorTransform3x3(
   return color_matrix;
 }
 
+mat3d GetGamutTransform(HwcColorspace src, HwcColorspace dest) {
+  return mat3d(ColorSpaceConnector(ColorUtil::ToColorGamut(src),
+                                   ColorUtil::ToColorGamut(dest))
+                   .getTransform());
+}
 
 bool NeedsTonemapping(TransferFunction tf) {
   switch (tf) {
@@ -181,6 +194,10 @@ uint16_t SignalToUint16(double signal) {
 template <typename T>
 Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
                    const double lut_scale, bool is_degamma) {
+  if (lut_size < 2) {
+    ALOGE("Bad LUT size requested: %u", lut_size);
+    return {};
+  }
   const double scaled_step = 1.0 / (static_cast<double>(lut_size) - 1.0);
   Lut1D<T> lut(lut_size);
   for (size_t i = 0; i < lut_size; ++i) {
@@ -228,22 +245,6 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
 }
 // NOLINTEND(readability-magic-numbers)
 
-template <typename T>
-const Lut1D<T> &Get1DLut(TransferFunction tf, const size_t lut_size,
-                         Lut1DCache<T> &lut_1d_map, const float lut_scale,
-                         bool is_degamma) {
-  if (lut_size < 2) {
-    ALOGE("Bad LUT size requested: %zu", lut_size);
-    return kEmptyLut<T>;
-  }
-
-  auto key = std::tie(tf, lut_size, lut_scale);
-  if (lut_1d_map.count(key) == 0) {
-    lut_1d_map.emplace(key, CreateLut<T>(tf, lut_size, lut_scale, is_degamma));
-  }
-  return lut_1d_map.at(key);
-}
-
 }  // namespace
 
 double ColorUtil::EvaluateHlgOetf(double l) {
@@ -284,17 +285,6 @@ uint64_t ColorUtil::To3132FixPt(double in) {
   return is_negative ? (kSignBit | val) : val;
 }
 
-bool ColorUtil::TransformHasOffsetValue(const HalColorTransformMatrix &matrix) {
-  constexpr float kEpsilon = 0.001F;
-  constexpr size_t kRedOffsetIndex = 12;
-  constexpr size_t kGreenOffsetIndex = 13;
-  constexpr size_t kBlueOffsetIndex = 14;
-
-  return std::abs(matrix[kRedOffsetIndex]) >= kEpsilon ||
-         std::abs(matrix[kGreenOffsetIndex]) >= kEpsilon ||
-         std::abs(matrix[kBlueOffsetIndex]) >= kEpsilon;
-}
-
 std::shared_ptr<drm_color_ctm> ColorUtil::ToColorTransform3x3(
     const std::shared_ptr<const HalColorTransformMatrix>
         &color_transform_matrix) {
@@ -321,6 +311,49 @@ std::shared_ptr<drm_color_ctm_3x4> ColorUtil::ToColorTransform3x4(
     }
   }
   return color_matrix;
+}
+
+bool ColorUtil::HasOffset(const HalColorTransformMatrix &matrix) {
+  return !FloatEquals(matrix[kOffsetRedIndex], 0.F) ||
+         !FloatEquals(matrix[kOffsetGreenIndex], 0.F) ||
+         !FloatEquals(matrix[kOffsetBlueIndex], 0.F);
+}
+
+std::shared_ptr<std::array<uint64_t, 3>> ColorUtil::ToColorOffset(
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix) {
+  if (!color_transform_matrix)
+    return nullptr;
+
+  auto offsets = std::make_shared<std::array<uint64_t, 3>>();
+  (*offsets)[0] = To3132FixPt((*color_transform_matrix)[kOffsetRedIndex]);
+  (*offsets)[1] = To3132FixPt((*color_transform_matrix)[kOffsetGreenIndex]);
+  (*offsets)[2] = To3132FixPt((*color_transform_matrix)[kOffsetBlueIndex]);
+  return offsets;
+}
+
+std::shared_ptr<std::array<uint64_t, 3>> ColorUtil::ToColorOffset(
+    HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
+    const std::shared_ptr<const HalColorTransformMatrix>
+        &color_transform_matrix) {
+  if (!color_transform_matrix)
+    return nullptr;
+
+  if (src_colorspace == dest_colorspace) {
+    return ToColorOffset(color_transform_matrix);
+  }
+
+  const HalColorTransformMatrix &ctm_in = *color_transform_matrix;
+  mat3d gamut_transform = GetGamutTransform(src_colorspace, dest_colorspace);
+  double3 offset = gamut_transform * double3(ctm_in[kOffsetRedIndex],
+                                             ctm_in[kOffsetGreenIndex],
+                                             ctm_in[kOffsetBlueIndex]);
+
+  auto offsets = std::make_shared<std::array<uint64_t, 3>>();
+  (*offsets)[0] = To3132FixPt(offset[0]);
+  (*offsets)[1] = To3132FixPt(offset[1]);
+  (*offsets)[2] = To3132FixPt(offset[2]);
+  return offsets;
 }
 
 std::shared_ptr<const HalColorTransformMatrix> ColorUtil::Multiply(
@@ -386,6 +419,29 @@ const ColorGamut::transfer_function &ColorUtil::GetEotf(ColorMode mode) {
 
 HalColorTransformMatrix ColorUtil::ToLinearCtm(
     const HalColorTransformMatrix ctm_in, ColorMode mode) {
+  // EOTF element-wise conversion is only valid for non-negative diagonal
+  // scaling matrices (such as Night Light). For CTMs with offsets,
+  // negative values, or cross-talk (e.g. Color Inversion), return the
+  // matrix untouched.
+  const bool is_diagonal = FloatEquals(ctm_in[1], 0.F) &&
+                           FloatEquals(ctm_in[2], 0.F) &&
+                           FloatEquals(ctm_in[3], 0.F) &&
+                           FloatEquals(ctm_in[4], 0.F) &&
+                           FloatEquals(ctm_in[6], 0.F) &&
+                           FloatEquals(ctm_in[7], 0.F) &&
+                           FloatEquals(ctm_in[8], 0.F) &&
+                           FloatEquals(ctm_in[9], 0.F) &&
+                           FloatEquals(ctm_in[11], 0.F) &&
+                           FloatEquals(ctm_in[12], 0.F) &&
+                           FloatEquals(ctm_in[13], 0.F) &&
+                           FloatEquals(ctm_in[14], 0.F);
+  const bool has_negative = std::any_of(ctm_in.begin(), ctm_in.end(),
+                                        [](float val) { return val < 0.F; });
+
+  if (!is_diagonal || has_negative) {
+    return ctm_in;
+  }
+
   HalColorTransformMatrix ctm_out = kIdentityMatrix;
   const ColorGamut::transfer_function &tf = GetEotf(mode);
   std::transform(ctm_in.begin(), ctm_in.end(), ctm_out.begin(),
@@ -397,8 +453,7 @@ template <typename T>
 std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
     const std::shared_ptr<const HalColorTransformMatrix>
-        &color_transform_matrix,
-    CscCache &color_transform_cache) {
+        &color_transform_matrix) {
   if (src_colorspace == dest_colorspace) {
     if constexpr (std::is_same_v<T, drm_color_ctm>) {
       return ColorUtil::ToColorTransform3x3(color_transform_matrix);
@@ -422,18 +477,18 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
   // NOLINTEND(readability-magic-numbers)
 
   // Combine the gamut mapping with 3x3 CTM
-  auto cache_key = std::tie(src_colorspace, dest_colorspace);
-  if (color_transform_cache.count(cache_key) == 0) {
-    color_transform_cache
-        .emplace(cache_key, ColorSpaceConnector(ToColorGamut(src_colorspace),
-                                                ToColorGamut(dest_colorspace))
-                                .getTransform());
-  }
-  ctm3 = color_transform_cache.at(cache_key) * ctm3;
+  mat3d gamut_transform = GetGamutTransform(src_colorspace, dest_colorspace);
+  ctm3 = gamut_transform * ctm3;
 
   if constexpr (std::is_same_v<T, drm_color_ctm>) {
     return android::drm_hwcomposer::ToColorTransform3x3(ctm3);
   } else if constexpr (std::is_same_v<T, drm_color_ctm_3x4>) {
+    // Transform 3x4 offset translation vector into destination gamut (O_dest =
+    // G * O_src)
+    double3 offset = gamut_transform * double3(ctm_in[kOffsetRedIndex],
+                                               ctm_in[kOffsetGreenIndex],
+                                               ctm_in[kOffsetBlueIndex]);
+
     // Insert the new 3x3 matrix back into the 4x4 CTM
     // NOLINTBEGIN(readability-magic-numbers)
     // clang-format off
@@ -441,7 +496,7 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
       ctm3[0][0], ctm3[0][1], ctm3[0][2], ctm_in[3],
       ctm3[1][0], ctm3[1][1], ctm3[1][2], ctm_in[7],
       ctm3[2][0], ctm3[2][1], ctm3[2][2], ctm_in[11],
-      ctm_in[12], ctm_in[13], ctm_in[14], ctm_in[15]
+      offset[0], offset[1], offset[2], ctm_in[15]
     );
     // clang-format on
     // NOLINTEND(readability-magic-numbers)
@@ -450,33 +505,21 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
   }
 }
 
-const Lut1D<drm_color_lut32> &ColorUtil::GetDegammaLut(
+Lut1D<drm_color_lut32> ColorUtil::CreateDegammaLut(
     TransferFunction tf, const size_t lut_size,
-    Lut1DCache<drm_color_lut32> &lut_1d_map, const float layer_brightness) {
-  // Validate layer brightness
-  auto lut_scale = (float)kSignalMax;
-  if (layer_brightness > kSignalMin && layer_brightness < kSignalMax) {
-    lut_scale = layer_brightness;
-  }
-  return Get1DLut<drm_color_lut32>(tf, lut_size, lut_1d_map, lut_scale,
-                                   /*is_degamma=*/true);
+    const std::optional<float> layer_brightness) {
+  float lut_scale = CalculateDegammaScale(layer_brightness);
+  return CreateLut<drm_color_lut32>(tf, lut_size, lut_scale,
+                                    /*is_degamma=*/true);
 }
 
-const Lut1D<drm_color_lut> &ColorUtil::GetGammaLut(
+Lut1D<drm_color_lut> ColorUtil::CreateGammaLut(
     TransferFunction tf, const size_t lut_size,
-    Lut1DCache<drm_color_lut> &lut_1d_map, const float display_brightness,
-    const float hdr_headroom) {
-  // Validate display brightness
-  auto lut_scale = (float)kSignalMax;
-  if (display_brightness >= kSignalMin && display_brightness < kSignalMax) {
-    lut_scale = display_brightness;
-  }
-  // Validate HDR headroom
-  if (hdr_headroom > kSignalMin && hdr_headroom < kSignalMax) {
-    lut_scale *= hdr_headroom;
-  }
-  return Get1DLut<drm_color_lut>(tf, lut_size, lut_1d_map, lut_scale,
-                                 /*is_degamma=*/false);
+    const std::optional<float> display_brightness,
+    const std::optional<float> hdr_headroom) {
+  float lut_scale = CalculateGammaScale(display_brightness, hdr_headroom);
+  return CreateLut<drm_color_lut>(tf, lut_size, lut_scale,
+                                  /*is_degamma=*/false);
 }
 
 auto ColorUtil::ScaleBrightnessIfNeeded(float display_brightness) -> float {
@@ -497,13 +540,11 @@ auto ColorUtil::ScaleBrightnessIfNeeded(float display_brightness) -> float {
 }
 
 // Tell the compiler explicitly to build these versions
-template std::shared_ptr<drm_color_ctm>
-ColorUtil::GamutAdjustIfNeeded<drm_color_ctm>(
-    HwcColorspace, HwcColorspace,
-    const std::shared_ptr<const HalColorTransformMatrix> &, CscCache &);
-template std::shared_ptr<drm_color_ctm_3x4>
-ColorUtil::GamutAdjustIfNeeded<drm_color_ctm_3x4>(
-    HwcColorspace, HwcColorspace,
-    const std::shared_ptr<const HalColorTransformMatrix> &, CscCache &);
+template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<
+    drm_color_ctm>(HwcColorspace, HwcColorspace,
+                   const std::shared_ptr<const HalColorTransformMatrix> &);
+template std::shared_ptr<drm_color_ctm_3x4> ColorUtil::GamutAdjustIfNeeded<
+    drm_color_ctm_3x4>(HwcColorspace, HwcColorspace,
+                       const std::shared_ptr<const HalColorTransformMatrix> &);
 
 }  // namespace android::drm_hwcomposer

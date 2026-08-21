@@ -19,12 +19,16 @@
 #include <gtest/gtest.h>
 
 #include <drm/drm_mode.h>
+#include <math/mat3.h>
+#include <math/vec3.h>
+#include <ui/ColorSpace.h>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
@@ -32,8 +36,20 @@
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
 
+using ColorGamut = android::ColorSpace;
+
 namespace android::drm_hwcomposer {
 
+namespace {
+
+inline double From3132FixPt(uint64_t val) {
+  constexpr uint64_t kSignMask = 1ULL << 63;
+  double res = static_cast<double>(val & ~kSignMask) /
+               static_cast<double>(1ULL << 32);
+  return (val & kSignMask) != 0U ? -res : res;
+}
+
+}  // namespace
 // Tests for EvaluateHlgOetf
 TEST(ColorUtilTest, EvaluateHlgOetfNegativeAndZero) {
   EXPECT_DOUBLE_EQ(ColorUtil::EvaluateHlgOetf(-0.5), 0.0);
@@ -197,70 +213,206 @@ TEST(ColorUtilTest, ToColorTransform3x4ValuesAndSigns) {
 TEST(ColorUtilTest, GamutAdjustIfNeededSameColorspace) {
   auto hal_matrix = std::make_shared<const HalColorTransformMatrix>(
       kIdentityMatrix);
-  CscCache cache;
 
   auto ctm3x3 = ColorUtil::GamutAdjustIfNeeded<
-      drm_color_ctm>(HwcColorspace::kBt709, HwcColorspace::kBt709, hal_matrix,
-                     cache);
+      drm_color_ctm>(HwcColorspace::kBt709, HwcColorspace::kBt709, hal_matrix);
   ASSERT_NE(ctm3x3, nullptr);
-  EXPECT_TRUE(cache.empty());
 
   auto ctm3x4 = ColorUtil::GamutAdjustIfNeeded<
       drm_color_ctm_3x4>(HwcColorspace::kBt709, HwcColorspace::kBt709,
-                         hal_matrix, cache);
+                         hal_matrix);
   ASSERT_NE(ctm3x4, nullptr);
-  EXPECT_TRUE(cache.empty());
 }
 
-TEST(ColorUtilTest, GamutAdjustIfNeededDifferentColorspaceAndCaching) {
+TEST(ColorUtilTest, GamutAdjustIfNeededDifferentColorspace) {
   auto hal_matrix = std::make_shared<const HalColorTransformMatrix>(
       kIdentityMatrix);
-  CscCache cache;
 
   auto ctm3x3 = ColorUtil::GamutAdjustIfNeeded<
-      drm_color_ctm>(HwcColorspace::kBt709, HwcColorspace::kDciP3, hal_matrix,
-                     cache);
+      drm_color_ctm>(HwcColorspace::kBt709, HwcColorspace::kDciP3, hal_matrix);
   ASSERT_NE(ctm3x3, nullptr);
-  EXPECT_EQ(cache.size(), 1U);
-
-  // Second call with same parameters should reuse cache entry
-  auto ctm3x3_cached = ColorUtil::GamutAdjustIfNeeded<
-      drm_color_ctm>(HwcColorspace::kBt709, HwcColorspace::kDciP3, hal_matrix,
-                     cache);
-  ASSERT_NE(ctm3x3_cached, nullptr);
-  EXPECT_EQ(cache.size(), 1U);
 
   // Test 3x4 overload with different colorspaces
   auto ctm3x4 = ColorUtil::GamutAdjustIfNeeded<
       drm_color_ctm_3x4>(HwcColorspace::kBt709, HwcColorspace::kBt2020,
-                         hal_matrix, cache);
+                         hal_matrix);
   ASSERT_NE(ctm3x4, nullptr);
-  EXPECT_EQ(cache.size(), 2U);
 }
 
-// Tests for GetDegammaLut
-TEST(ColorUtilTest, GetDegammaLutInvalidLutSize) {
-  Lut1DCache<drm_color_lut32> cache;
+TEST(ColorUtilTest, GamutAdjust3x4OffsetVectorRotation) {
+  HalColorTransformMatrix matrix = {
+      1.0F, 0.0F, 0.0F, 0.0F,  //
+      0.0F, 1.0F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 1.0F, 0.0F,  //
+      0.1F, 0.2F, 0.3F, 1.0F,  // Offsets O_src = [0.1, 0.2, 0.3]^T
+  };
+  auto hal_matrix = std::make_shared<const HalColorTransformMatrix>(matrix);
 
+  auto ctm3x4 = ColorUtil::GamutAdjustIfNeeded<
+      drm_color_ctm_3x4>(HwcColorspace::kBt709, HwcColorspace::kBt2020,
+                         hal_matrix);
+  ASSERT_NE(ctm3x4, nullptr);
+
+  mat3d gamut_transform(
+      ColorSpaceConnector(ColorGamut::BT709(), ColorGamut::BT2020())
+          .getTransform());
+  double3 expected_o = gamut_transform * double3(0.1, 0.2, 0.3);
+
+  double actual_o_r = From3132FixPt(ctm3x4->matrix[3]);
+  double actual_o_g = From3132FixPt(ctm3x4->matrix[7]);
+  double actual_o_b = From3132FixPt(ctm3x4->matrix[11]);
+
+  EXPECT_NEAR(actual_o_r, expected_o[0], 1e-4);
+  EXPECT_NEAR(actual_o_g, expected_o[1], 1e-4);
+  EXPECT_NEAR(actual_o_b, expected_o[2], 1e-4);
+}
+
+TEST(ColorUtilTest, HasOffsetDetection) {
+  EXPECT_FALSE(ColorUtil::HasOffset(kIdentityMatrix));
+
+  HalColorTransformMatrix offset_r = kIdentityMatrix;
+  offset_r[12] = 0.05F;
+  EXPECT_TRUE(ColorUtil::HasOffset(offset_r));
+
+  HalColorTransformMatrix offset_g = kIdentityMatrix;
+  offset_g[13] = -0.05F;
+  EXPECT_TRUE(ColorUtil::HasOffset(offset_g));
+
+  HalColorTransformMatrix offset_b = kIdentityMatrix;
+  offset_b[14] = 0.1F;
+  EXPECT_TRUE(ColorUtil::HasOffset(offset_b));
+
+  // Sub-epsilon offset (< std::numeric_limits<float>::epsilon()) is ignored as
+  // noise
+  HalColorTransformMatrix matrix_sub_eps = kIdentityMatrix;
+  matrix_sub_eps[12] = 1e-8F;
+  EXPECT_FALSE(ColorUtil::HasOffset(matrix_sub_eps));
+}
+
+TEST(ColorUtilTest, ToColorOffsetNullptrAndBasic) {
+  EXPECT_EQ(ColorUtil::ToColorOffset(nullptr), nullptr);
+
+  HalColorTransformMatrix matrix = {
+      1.0F,  0.0F, 0.0F,  0.0F,  //
+      0.0F,  1.0F, 0.0F,  0.0F,  //
+      0.0F,  0.0F, 1.0F,  0.0F,  //
+      0.25F, 0.5F, 0.75F, 1.0F,  //
+  };
+  auto hal_matrix = std::make_shared<const HalColorTransformMatrix>(matrix);
+  auto offsets = ColorUtil::ToColorOffset(hal_matrix);
+  ASSERT_NE(offsets, nullptr);
+
+  EXPECT_NEAR(From3132FixPt((*offsets)[0]), 0.25, 1e-4);
+  EXPECT_NEAR(From3132FixPt((*offsets)[1]), 0.5, 1e-4);
+  EXPECT_NEAR(From3132FixPt((*offsets)[2]), 0.75, 1e-4);
+}
+
+TEST(ColorUtilTest, ToColorOffsetGamutRotation) {
+  HalColorTransformMatrix matrix = {
+      1.0F, 0.0F, 0.0F, 0.0F,  //
+      0.0F, 1.0F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 1.0F, 0.0F,  //
+      0.1F, 0.2F, 0.3F, 1.0F,  //
+  };
+  auto hal_matrix = std::make_shared<const HalColorTransformMatrix>(matrix);
+
+  auto offsets = ColorUtil::ToColorOffset(HwcColorspace::kBt709,
+                                          HwcColorspace::kBt2020, hal_matrix);
+  ASSERT_NE(offsets, nullptr);
+
+  mat3d gamut_transform(
+      ColorSpaceConnector(ColorGamut::BT709(), ColorGamut::BT2020())
+          .getTransform());
+  double3 expected_o = gamut_transform * double3(0.1, 0.2, 0.3);
+
+  EXPECT_NEAR(From3132FixPt((*offsets)[0]), expected_o[0], 1e-4);
+  EXPECT_NEAR(From3132FixPt((*offsets)[1]), expected_o[1], 1e-4);
+  EXPECT_NEAR(From3132FixPt((*offsets)[2]), expected_o[2], 1e-4);
+}
+
+TEST(ColorUtilTest, ToLinearCtmDiagonalScaling) {
+  HalColorTransformMatrix night_light = {
+      0.9F, 0.0F, 0.0F, 0.0F,  //
+      0.0F, 0.7F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 0.4F, 0.0F,  //
+      0.0F, 0.0F, 0.0F, 1.0F,  //
+  };
+
+  auto linear_ctm = ColorUtil::ToLinearCtm(night_light, ColorMode::kSrgb);
+  // Linearized diagonal values should differ from original (EOTF applied)
+  EXPECT_NE(linear_ctm[0], night_light[0]);
+  EXPECT_NE(linear_ctm[5], night_light[5]);
+  EXPECT_NE(linear_ctm[10], night_light[10]);
+  EXPECT_FLOAT_EQ(linear_ctm[15], 1.0F);
+
+  // All off-diagonals should remain 0
+  EXPECT_FLOAT_EQ(linear_ctm[1], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[2], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[3], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[4], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[6], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[7], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[8], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[9], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[11], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[12], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[13], 0.0F);
+  EXPECT_FLOAT_EQ(linear_ctm[14], 0.0F);
+}
+TEST(ColorUtilTest, ToLinearCtmBypassesNonDiagonalAndPerspective) {
+  // 1. Matrix with off-diagonal color cross-talk
+  HalColorTransformMatrix cross_talk = {
+      0.9F, 0.1F, 0.0F, 0.0F,  //
+      0.1F, 0.8F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 0.7F, 0.0F,  //
+      0.0F, 0.0F, 0.0F, 1.0F,  //
+  };
+  EXPECT_EQ(ColorUtil::ToLinearCtm(cross_talk, ColorMode::kSrgb), cross_talk);
+
+  // 2. Matrix with translation offsets (e.g. Invert Colors Y = 1 - X)
+  HalColorTransformMatrix invert = {
+      -1.0F, 0.0F,  0.0F,  0.0F,  //
+      0.0F,  -1.0F, 0.0F,  0.0F,  //
+      0.0F,  0.0F,  -1.0F, 0.0F,  //
+      1.0F,  1.0F,  1.0F,  1.0F,  //
+  };
+  EXPECT_EQ(ColorUtil::ToLinearCtm(invert, ColorMode::kSrgb), invert);
+
+  // 3. Matrix with non-zero perspective row entries (indices 3, 7, 11)
+  HalColorTransformMatrix perspective = {
+      1.0F, 0.0F, 0.0F, 0.1F,  // m[3] is non-zero
+      0.0F, 1.0F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 1.0F, 0.0F,  //
+      0.0F, 0.0F, 0.0F, 1.0F,  //
+  };
+  EXPECT_EQ(ColorUtil::ToLinearCtm(perspective, ColorMode::kSrgb), perspective);
+
+  // 4. Matrix with positive translation offsets (indices 12, 13, 14) without
+  // negative values
+  HalColorTransformMatrix translation = {
+      1.0F, 0.0F, 0.0F, 0.0F,  //
+      0.0F, 1.0F, 0.0F, 0.0F,  //
+      0.0F, 0.0F, 1.0F, 0.0F,  //
+      0.5F, 0.2F, 0.1F, 1.0F,  //
+  };
+  EXPECT_EQ(ColorUtil::ToLinearCtm(translation, ColorMode::kSrgb), translation);
+}
+// Tests for CreateDegammaLut
+TEST(ColorUtilTest, CreateDegammaLutInvalidLutSize) {
   // Invalid size < 2
-  const auto &lut0 = ColorUtil::GetDegammaLut(TransferFunction::kPq, 0, cache,
-                                              1.0F);
+  const auto lut0 = ColorUtil::CreateDegammaLut(TransferFunction::kPq, 0, 1.0F);
   EXPECT_TRUE(lut0.empty());
 
-  const auto &lut1 = ColorUtil::GetDegammaLut(TransferFunction::kPq, 1, cache,
-                                              1.0F);
+  const auto lut1 = ColorUtil::CreateDegammaLut(TransferFunction::kPq, 1, 1.0F);
   EXPECT_TRUE(lut1.empty());
 }
 
-TEST(ColorUtilTest, GetDegammaLutValidAndCaching) {
-  Lut1DCache<drm_color_lut32> cache;
-
+TEST(ColorUtilTest, CreateDegammaLutValid) {
   static constexpr size_t kLutSize = 256;
-  const auto &lut = ColorUtil::GetDegammaLut(TransferFunction::kPq, kLutSize,
-                                             cache, 1.0F);
+  const auto lut = ColorUtil::CreateDegammaLut(TransferFunction::kPq, kLutSize,
+                                               1.0F);
 
   ASSERT_EQ(lut.size(), kLutSize);
-  EXPECT_EQ(cache.size(), 1U);
 
   // Check initial and final values (linear / EOTF mapping)
   EXPECT_EQ(lut[0].red, 0U);
@@ -268,54 +420,37 @@ TEST(ColorUtilTest, GetDegammaLutValidAndCaching) {
   EXPECT_EQ(lut[0].blue, 0U);
 
   EXPECT_GT(lut[kLutSize - 1].red, 0U);
-
-  // Second call with identical arguments should return exact cached reference
-  const auto &lut_cached = ColorUtil::GetDegammaLut(TransferFunction::kPq,
-                                                    kLutSize, cache, 1.0F);
-  EXPECT_EQ(&lut, &lut_cached);
 }
 
-// Tests for GetGammaLut
-TEST(ColorUtilTest, GetGammaLutInvalidLutSize) {
-  Lut1DCache<drm_color_lut> cache;
-
-  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, 1, cache,
-                                           1.0F, 1.0F);
+// Tests for CreateGammaLut
+TEST(ColorUtilTest, CreateGammaLutInvalidLutSize) {
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, 1, 1.0F,
+                                             1.0F);
   EXPECT_TRUE(lut.empty());
 }
 
-TEST(ColorUtilTest, GetGammaLutValidAndCaching) {
-  Lut1DCache<drm_color_lut> cache;
-
+TEST(ColorUtilTest, CreateGammaLutValid) {
   static constexpr size_t kLutSize = 512;
-  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
-                                           cache, 1.0F, 1.0F);
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
+                                             1.0F, 1.0F);
 
   ASSERT_EQ(lut.size(), kLutSize);
-  EXPECT_EQ(cache.size(), 1U);
 
   EXPECT_EQ(lut[0].red, 0U);
   EXPECT_EQ(lut[0].green, 0U);
   EXPECT_EQ(lut[0].blue, 0U);
 
   EXPECT_GT(lut[kLutSize - 1].red, 0U);
-
-  // Second call with identical arguments should return exact cached reference
-  const auto &lut_cached = ColorUtil::GetGammaLut(TransferFunction::kHlg,
-                                                  kLutSize, cache, 1.0F, 1.0F);
-  EXPECT_EQ(&lut, &lut_cached);
 }
 
-TEST(ColorUtilTest, GetGammaLutHdrClampsToMinFloorAtZeroDisplayBrightness) {
-  Lut1DCache<drm_color_lut> cache;
+TEST(ColorUtilTest, CreateGammaLutHdrClampsToMinFloorAtZeroDisplayBrightness) {
   ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.01");
 
   static constexpr size_t kLutSize = 512;
-  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
-                                           cache,
-                                           ColorUtil::ScaleBrightnessIfNeeded(
-                                               0.0F),
-                                           1.0F);
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
+                                             ColorUtil::ScaleBrightnessIfNeeded(
+                                                 0.0F),
+                                             1.0F);
 
   ASSERT_EQ(lut.size(), kLutSize);
   EXPECT_GT(lut[kLutSize - 1].red, 0U);
@@ -385,18 +520,16 @@ TEST(ColorUtilTest, ScaleBrightnessIfNeededRangeScaleCalculatesExpectedScale) {
   EXPECT_FLOAT_EQ(ColorUtil::ScaleBrightnessIfNeeded(1.0F), 1.0F);
 }
 
-TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNoopWhenMinZero) {
-  Lut1DCache<drm_color_lut> cache;
+TEST(ColorUtilTest, CreateGammaLutHdrScaleRangeNoopWhenMinZero) {
   ScopedTestProperty
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
   static constexpr size_t kLutSize = 512;
-  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
-                                           cache,
-                                           ColorUtil::ScaleBrightnessIfNeeded(
-                                               0.0F),
-                                           1.0F);
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
+                                             ColorUtil::ScaleBrightnessIfNeeded(
+                                                 0.0F),
+                                             1.0F);
 
   ASSERT_EQ(lut.size(), kLutSize);
   EXPECT_EQ(lut[kLutSize - 1].red, 0U);
@@ -404,19 +537,17 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNoopWhenMinZero) {
   EXPECT_EQ(lut[kLutSize - 1].blue, 0U);
 }
 
-TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNonZeroAtZero) {
-  Lut1DCache<drm_color_lut> cache;
+TEST(ColorUtilTest, CreateGammaLutHdrScaleRangeNonZeroAtZero) {
   ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
   ScopedTestProperty
       scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                  "true");
 
   static constexpr size_t kLutSize = 512;
-  const auto &lut = ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize,
-                                           cache,
-                                           ColorUtil::ScaleBrightnessIfNeeded(
-                                               0.0F),
-                                           1.0F);
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
+                                             ColorUtil::ScaleBrightnessIfNeeded(
+                                                 0.0F),
+                                             1.0F);
 
   ASSERT_EQ(lut.size(), kLutSize);
   EXPECT_GT(lut[kLutSize - 1].red, 0U);
@@ -424,25 +555,47 @@ TEST(ColorUtilTest, GetGammaLutHdrScaleRangeNonZeroAtZero) {
   EXPECT_GT(lut[kLutSize - 1].blue, 0U);
 }
 
-TEST(ColorUtilTest, GetGammaLutHdrScaleRangeCalculatesExpectedScale) {
-  Lut1DCache<drm_color_lut> cache;
+TEST(ColorUtilTest, CreateGammaLutHdrScaleRangeCalculatesExpectedScale) {
   static constexpr size_t kLutSize = 512;
 
-  const auto &lut_scaled = [&]() -> const auto & {
+  const auto lut_scaled = [&]() {
     ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.1");
     ScopedTestProperty
         scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
                    "true");
-    return ColorUtil::GetGammaLut(TransferFunction::kHlg, kLutSize, cache,
-                                  ColorUtil::ScaleBrightnessIfNeeded(0.5F),
-                                  1.0F);
+    return ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
+                                     ColorUtil::ScaleBrightnessIfNeeded(0.5F),
+                                     1.0F);
   }();
 
-  const auto &lut_expected = ColorUtil::GetGammaLut(TransferFunction::kHlg,
-                                                    kLutSize, cache, 0.55F,
-                                                    1.0F);
+  const auto lut_expected = ColorUtil::CreateGammaLut(TransferFunction::kHlg,
+                                                      kLutSize, 0.55F, 1.0F);
 
-  EXPECT_EQ(&lut_scaled, &lut_expected);
+  EXPECT_EQ(lut_scaled.size(), lut_expected.size());
+  for (size_t i = 0; i < kLutSize; ++i) {
+    EXPECT_EQ(lut_scaled[i].red, lut_expected[i].red);
+    EXPECT_EQ(lut_scaled[i].green, lut_expected[i].green);
+    EXPECT_EQ(lut_scaled[i].blue, lut_expected[i].blue);
+  }
+}
+
+TEST(ColorUtilTest, CalculateDegammaScale) {
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(std::nullopt), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(0.0F), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(1.0F), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(-0.5F), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(1.5F), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(0.42F), 0.42F);
+}
+
+TEST(ColorUtilTest, CalculateGammaScale) {
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(std::nullopt, std::nullopt),
+                  1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.0F, 1.0F), 0.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 1.0F), 0.5F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 0.8F), 0.4F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(1.0F, 1.0F), 1.0F);
+  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 1.5F), 0.5F);
 }
 
 TEST(ColorUtilTest, ToColorGamutMappings) {
@@ -599,31 +752,6 @@ TEST(ColorUtilTest, To3132FixPtSaturationAndSpecialValues) {
 
   // Negative zero
   EXPECT_EQ(ColorUtil::To3132FixPt(-0.0), kSignBit);
-}
-
-TEST(ColorUtilTest, TransformHasOffsetValueDetection) {
-  // Red offset at index 12
-  HalColorTransformMatrix matrix_r = kIdentityMatrix;
-  matrix_r[12] = 0.05F;
-  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_r));
-
-  // Green offset at index 13
-  HalColorTransformMatrix matrix_g = kIdentityMatrix;
-  matrix_g[13] = -0.05F;
-  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_g));
-
-  // Blue offset at index 14
-  HalColorTransformMatrix matrix_b = kIdentityMatrix;
-  matrix_b[14] = 0.1F;
-  EXPECT_TRUE(ColorUtil::TransformHasOffsetValue(matrix_b));
-
-  // Identity matrix has no offsets
-  EXPECT_FALSE(ColorUtil::TransformHasOffsetValue(kIdentityMatrix));
-
-  // Sub-epsilon offset (< 0.001F) is ignored as noise
-  HalColorTransformMatrix matrix_sub_eps = kIdentityMatrix;
-  matrix_sub_eps[12] = 0.0001F;
-  EXPECT_FALSE(ColorUtil::TransformHasOffsetValue(matrix_sub_eps));
 }
 
 TEST(ColorUtilTest, ToDrmColorspaceMappings) {

@@ -77,6 +77,10 @@ std::string DumpDisplayStats(const HwcDisplay *display,
      << DumpStats(stats) << "\n\n"
      << "Statistics since last dumpsys request:\n"
      << DumpStats(delta) << "\n\n";
+  auto dump_state = display->Dump();
+  if (!dump_state.empty()) {
+    ss << dump_state << "\n";
+  }
   return ss.str();
 }
 }  // namespace

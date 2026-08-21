@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmMode.h"
@@ -90,6 +91,9 @@ class AtomicStateManager {
       AtomicCommitArgs &args) = 0;
   virtual bool IsActive() const = 0;
   virtual void WaitLastFrame() = 0;
+  virtual std::string DumpState() const {
+    return {};
+  }
 };
 
 }  // namespace android::drm_hwcomposer

@@ -390,9 +390,11 @@ ndk::ScopedAStatus ComposerClient::getDisplayCapabilities(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  // Skip color transform altogether if device/drm cannot support it.
-  if (hwc_->GetResMan().GetCtmHandling() ==
-      ::android::drm_hwcomposer::CtmHandling::kDrmOrIgnore) {
+  // Skip color transform altogether if device/drm cannot support it, or if
+  // hardware can fully process it.
+  if (display->HasHardwareColorTransform() ||
+      hwc_->GetResMan().GetCtmHandling() ==
+          ::android::drm_hwcomposer::CtmHandling::kDrmOrIgnore) {
     caps->emplace_back(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
   }
   if (display->HasBacklight()) {

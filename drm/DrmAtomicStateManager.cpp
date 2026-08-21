@@ -29,11 +29,16 @@
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
@@ -53,6 +58,41 @@
 
 namespace android::drm_hwcomposer {
 
+namespace {
+
+inline uint32_t GetBlobId(
+    const std::shared_ptr<DrmModeUserPropertyBlobUnique> &blob) {
+  return (blob && *blob) ? **blob : 0;
+}
+
+// Non-owning view of blob data across different payload types (shared_ptr,
+// vector, raw structs). This allows generator lambdas to return whatever type
+// they naturally produce without boilerplate size/pointer extraction.
+struct BlobData {
+  const void *data = nullptr;
+  size_t size = 0;
+
+  template <typename T>
+  BlobData(const std::shared_ptr<T> &p)  // NOLINT(google-explicit-constructor)
+      : data(p ? p.get() : nullptr), size(p ? sizeof(T) : 0) {
+  }
+
+  template <typename T>
+  BlobData(const std::vector<T> &v)  // NOLINT(google-explicit-constructor)
+      : data(!v.empty() ? v.data() : nullptr), size(v.size() * sizeof(T)) {
+  }
+
+  BlobData(const void *d, size_t s) : data(d), size(s) {
+  }
+  BlobData() = default;
+
+  explicit operator bool() const {
+    return data != nullptr && size > 0;
+  }
+};
+
+}  // namespace
+
 auto DrmAtomicStateManager::CreateInstance(DrmDisplayPipeline *pipe)
     -> std::unique_ptr<DrmAtomicStateManager> {
   auto dasm = std::unique_ptr<DrmAtomicStateManager>(
@@ -63,6 +103,33 @@ auto DrmAtomicStateManager::CreateInstance(DrmDisplayPipeline *pipe)
   dasm->use_color_pipeline_ = Properties::UseColorPipeline();
 
   return dasm;
+}
+
+// We pass a generator lambda rather than pre-computed blob data so we only
+// pay the CPU cost of calculating LUTs or color matrices on a cache miss.
+template <typename Key, typename Generator>
+auto DrmAtomicStateManager::GetOrCreateBlob(const Key &key,
+                                            Generator &&generate_fn)
+    -> std::shared_ptr<DrmModeUserPropertyBlobUnique> {
+  if (auto cached = blob_cache_.Find(key)) {
+    return cached;
+  }
+
+  BlobData blob_data = std::forward<Generator>(generate_fn)();
+  if (!blob_data) {
+    return nullptr;
+  }
+
+  auto blob = pipe_->device->RegisterUserPropertyBlob(blob_data.data,
+                                                      blob_data.size);
+  if (!blob) {
+    return nullptr;
+  }
+
+  auto shared_blob = std::make_shared<DrmModeUserPropertyBlobUnique>(
+      std::move(blob));
+  blob_cache_.Insert(key, shared_blob);
+  return shared_blob;
 }
 
 DrmAtomicStateManager::~DrmAtomicStateManager() {
@@ -221,15 +288,15 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  auto *drm = pipe_->device;
-  if (use_color_pipeline_) {
+  if (use_color_pipeline_ || !args.color_matrix || !args.colorspace) {
+    if (crtc->GetCtmOffsetProperty() &&
+        !crtc->GetCtmOffsetProperty().AtomicSet(*request.property_set, 0)) {
+      // Clear the CTM even if clearing CTM offset fails
+      std::ignore = crtc->GetCtmProperty().AtomicSet(*request.property_set, 0);
+      return false;
+    }
     return crtc->GetCtmProperty().AtomicSet(*request.property_set, 0);
   }
-
-  if (!args.color_matrix || !args.colorspace) {
-    return true;
-  }
-
   HwcColorspace colorspace = HwcColorspace::kDefault;
   if (!args.composition || args.composition->plan.empty()) {
     ALOGW(
@@ -241,27 +308,53 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
     // layer's colorspace for the entire CRTC.
     colorspace = args.composition->plan.front().layer.colorspace;
   }
-  auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
-      drm_color_ctm>(colorspace,
-                     args.colorspace.value_or(HwcColorspace::kDefault),
-                     args.color_matrix, color_transform_map_);
+  HalColorTransformMatrix ctm_matrix = *args.color_matrix;
+  HwcColorspace dest_colorspace = args.colorspace.value_or(
+      HwcColorspace::kDefault);
+  CtmBlobKey key{CtmBlobKey::Kind::kCtm3x3, colorspace, dest_colorspace,
+                 ctm_matrix};
 
-  DrmModeUserPropertyBlobUnique ctm_blob;
-  if (drm_color_matrix) {
-    ctm_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
-                                             sizeof(drm_color_ctm));
-  }
+  auto ctm_blob = GetOrCreateBlob(key, [&] {
+    return ColorUtil::GamutAdjustIfNeeded<drm_color_ctm>(colorspace,
+                                                         dest_colorspace,
+                                                         args.color_matrix);
+  });
 
   if (!ctm_blob) {
     ALOGE("Failed to create CTM blob");
     return false;
   }
 
-  if (!crtc->GetCtmProperty().AtomicSet(*request.property_set, *ctm_blob)) {
+  if (!crtc->GetCtmProperty().AtomicSet(*request.property_set,
+                                        GetBlobId(ctm_blob))) {
     return false;
   }
 
-  request.used_kms_objects.blobs.emplace_back(std::move(ctm_blob));
+  request.used_kms_objects.cached_blobs.emplace_back(ctm_blob);
+
+  if (crtc->GetCtmOffsetProperty()) {
+    uint32_t offset_blob_id = 0;
+    if (ColorUtil::HasOffset(ctm_matrix)) {
+      CtmBlobKey offset_key{CtmBlobKey::Kind::kOffset, colorspace,
+                            dest_colorspace, ctm_matrix};
+      auto offset_blob = GetOrCreateBlob(offset_key, [&] {
+        return ColorUtil::ToColorOffset(colorspace, dest_colorspace,
+                                        args.color_matrix);
+      });
+      if (!offset_blob) {
+        ALOGE("Failed to create CTM_OFFSET blob");
+        return false;
+      }
+      offset_blob_id = GetBlobId(offset_blob);
+      request.used_kms_objects.cached_blobs.emplace_back(offset_blob);
+    }
+
+    if (!crtc->GetCtmOffsetProperty().AtomicSet(*request.property_set,
+                                                offset_blob_id)) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -282,29 +375,22 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  constexpr float kDefaultSignal = 1.F;
-  const auto &gamma_lut = ColorUtil::GetGammaLut(args.transfer_func.value(),
-                                                 lut_size.value(),
-                                                 gamma_lut_1d_map_,
-                                                 args.brightness.value_or(
-                                                     kDefaultSignal),
-                                                 args.hdr_headroom.value_or(
-                                                     kDefaultSignal));
+  float lut_scale = ColorUtil::CalculateGammaScale(args.brightness,
+                                                   args.hdr_headroom);
 
-  auto *drm = pipe_->device;
-  DrmModeUserPropertyBlobUnique gamma_lut_blob;
+  GammaBlobKey key{args.transfer_func.value(), lut_size.value(), lut_scale};
+  auto gamma_blob = GetOrCreateBlob(key, [&] {
+    return ColorUtil::CreateGammaLut(args.transfer_func.value(),
+                                     lut_size.value(), args.brightness,
+                                     args.hdr_headroom);
+  });
 
-  if (!gamma_lut.empty()) {
-    gamma_lut_blob = drm->RegisterUserPropertyBlob(gamma_lut.data(),
-                                                   sizeof(drm_color_lut) *
-                                                       lut_size.value());
-  }
-  if (gamma_lut_blob) {
+  if (gamma_blob) {
     if (!crtc->GetGammaLutProperty().AtomicSet(*request.property_set,
-                                               *gamma_lut_blob)) {
+                                               GetBlobId(gamma_blob))) {
       return false;
     }
-    request.used_kms_objects.blobs.emplace_back(std::move(gamma_lut_blob));
+    request.used_kms_objects.cached_blobs.emplace_back(gamma_blob);
   }
 
   return true;
@@ -360,9 +446,12 @@ bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  auto *drm = pipe_->device;
-  auto hdr_metadata_blob = drm->RegisterUserPropertyBlob(
-      args.hdr_metadata.get(), sizeof(hdr_output_metadata));
+  const hdr_output_metadata &metadata = *args.hdr_metadata;
+  HdrMetadataBlobKey key{metadata};
+  auto hdr_metadata_blob = GetOrCreateBlob(key, [&] {
+    return BlobData(&metadata, sizeof(metadata));
+  });
+
   if (!hdr_metadata_blob) {
     ALOGE("Failed to create %s blob",
           connector->GetHdrOutputMetadataProperty().GetName().c_str());
@@ -370,10 +459,10 @@ bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
   }
 
   if (!connector->GetHdrOutputMetadataProperty()
-           .AtomicSet(*request.property_set, *hdr_metadata_blob)) {
+           .AtomicSet(*request.property_set, GetBlobId(hdr_metadata_blob))) {
     return false;
   }
-  request.used_kms_objects.blobs.emplace_back(std::move(hdr_metadata_blob));
+  request.used_kms_objects.cached_blobs.emplace_back(hdr_metadata_blob);
 
   return true;
 }
@@ -445,39 +534,58 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
     }
     request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
 
-    auto *drm = pipe_->device;
     if (use_color_pipeline_ && plane->HasColorPipeline()) {
-      auto drm_color_matrix = ColorUtil::GamutAdjustIfNeeded<
-          drm_color_ctm_3x4>(layer.colorspace,
-                             args.colorspace.value_or(HwcColorspace::kDefault),
-                             args.color_matrix, color_transform_map_);
-      DrmModeUserPropertyBlobUnique ctm_3x4_blob;
-      if (drm_color_matrix) {
-        ctm_3x4_blob = drm->RegisterUserPropertyBlob(drm_color_matrix.get(),
-                                                     sizeof(drm_color_ctm_3x4));
+      uint32_t ctm_3x4_blob_id = 0;
+      HwcColorspace dest_colorspace = args.colorspace.value_or(
+          HwcColorspace::kDefault);
+      if (args.color_matrix || layer.colorspace != dest_colorspace) {
+        HalColorTransformMatrix ctm_matrix = args.color_matrix
+                                                 ? *args.color_matrix
+                                                 : kIdentityMatrix;
+        CtmBlobKey ctm_3x4_key{CtmBlobKey::Kind::kCtm3x4, layer.colorspace,
+                               dest_colorspace, ctm_matrix};
+        auto ctm_blob = GetOrCreateBlob(ctm_3x4_key, [&] {
+          return ColorUtil::GamutAdjustIfNeeded<
+              drm_color_ctm_3x4>(layer.colorspace, dest_colorspace,
+                                 args.color_matrix);
+        });
+
+        if (ctm_blob) {
+          ctm_3x4_blob_id = GetBlobId(ctm_blob);
+          request.used_kms_objects.cached_blobs.emplace_back(ctm_blob);
+        }
       }
 
-      constexpr float kDefaultSignal = 1.F;
-      const auto
-          &degamma_lut = ColorUtil::GetDegammaLut(layer.transfer_func,
-                                                  plane->GetDegamma1DLutSize(),
-                                                  degamma_lut_1d_map_,
-                                                  layer.brightness.value_or(
-                                                      kDefaultSignal));
-      DrmModeUserPropertyBlobUnique degamma_lut_blob;
-      DrmModeUserPropertyBlobUnique gamma_lut_blob;
-      if (!degamma_lut.empty()) {
-        degamma_lut_blob = drm->RegisterUserPropertyBlob(
-            degamma_lut.data(),
-            sizeof(drm_color_lut32) * plane->GetDegamma1DLutSize());
+      // CTMs with offsets (such as Color Inversion: Y = 1.0 - X) are designed
+      // to operate on gamma encoded values. Inverting linear signals
+      // (1.0 - X^gamma) severely distorts the contrast curve, blowing
+      // midtones and darks into near-white. Bypass Plane Degamma so the
+      // 3x4 matrix inverts gamma values directly.
+      uint32_t degamma_lut_blob_id = 0;
+      const bool has_translation_offset = args.color_matrix &&
+                                          ColorUtil::HasOffset(
+                                              *args.color_matrix);
+      if (!has_translation_offset) {
+        float lut_scale = ColorUtil::CalculateDegammaScale(layer.brightness);
+        DegammaBlobKey degamma_key{layer.transfer_func,
+                                   plane->GetDegamma1DLutSize(), lut_scale};
+        auto degamma_blob = GetOrCreateBlob(degamma_key, [&] {
+          return ColorUtil::CreateDegammaLut(layer.transfer_func,
+                                             plane->GetDegamma1DLutSize(),
+                                             layer.brightness);
+        });
+
+        if (degamma_blob) {
+          degamma_lut_blob_id = GetBlobId(degamma_blob);
+          request.used_kms_objects.cached_blobs.emplace_back(degamma_blob);
+        }
       }
-      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob,
-                                        degamma_lut_blob,
-                                        gamma_lut_blob) != 0) {
+
+      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob_id,
+                                        degamma_lut_blob_id,
+                                        /*gamma_lut_blob_id=*/0) != 0) {
         return false;
       }
-      request.used_kms_objects.blobs.emplace_back(std::move(ctm_3x4_blob));
-      request.used_kms_objects.blobs.emplace_back(std::move(degamma_lut_blob));
     }
   }
 
@@ -706,6 +814,45 @@ void DrmAtomicStateManager::CleanupPriorFrameResources() {
 
 bool DrmAtomicStateManager::IsActive() const {
   return committed_frame_state_.crtc_active_state;
+}
+
+std::string DrmAtomicStateManager::DumpState() const {
+  auto format_key =
+      [](const BlobKey &key,
+         const std::shared_ptr<DrmModeUserPropertyBlobUnique> &blob) {
+        std::stringstream ss;
+        uint32_t blob_id = GetBlobId(blob);
+        std::visit(
+            [&ss, blob_id](const auto &k) {
+              using T = std::decay_t<decltype(k)>;
+              if constexpr (std::is_same_v<T, DegammaBlobKey>) {
+                ss << "Degamma: tf=" << ColorUtil::ToString(k.tf)
+                   << " size=" << k.size << " scale=" << k.scale
+                   << " (blob_id=" << blob_id << ")";
+              } else if constexpr (std::is_same_v<T, GammaBlobKey>) {
+                ss << "Gamma: tf=" << ColorUtil::ToString(k.tf)
+                   << " size=" << k.size << " scale=" << k.scale
+                   << " (blob_id=" << blob_id << ")";
+              } else if constexpr (std::is_same_v<T, CtmBlobKey>) {
+                const char *kind_str = "3x3";
+                if (k.kind == CtmBlobKey::Kind::kCtm3x4) {
+                  kind_str = "3x4";
+                } else if (k.kind == CtmBlobKey::Kind::kOffset) {
+                  kind_str = "Offset";
+                }
+                ss << "Ctm: kind=" << kind_str
+                   << " src=" << ColorUtil::ToString(k.src)
+                   << " dest=" << ColorUtil::ToString(k.dest)
+                   << " (blob_id=" << blob_id << ")";
+              } else if constexpr (std::is_same_v<T, HdrMetadataBlobKey>) {
+                ss << "HdrMetadata: (blob_id=" << blob_id << ")";
+              }
+            },
+            key);
+        return ss.str();
+      };
+
+  return blob_cache_.Dump(format_key, "DRM Property Blob Cache");
 }
 
 }  // namespace android::drm_hwcomposer

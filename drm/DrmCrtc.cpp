@@ -69,6 +69,11 @@ auto DrmCrtc::CreateInstance(DrmDevice &dev, uint32_t crtc_id, uint32_t index)
     ALOGV("Missing optional CTM property");
   }
 
+  ret = GetCrtcProperty(dev, *c, "CTM_OFFSET", &c->ctm_offset_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional CTM_OFFSET property");
+  }
+
   ret = GetCrtcProperty(dev, *c, "DEGAMMA_LUT", &c->degamma_lut_property_);
   if (ret != 0) {
     ALOGV("Missing optional DEGAMMA_LUT property");

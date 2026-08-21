@@ -557,10 +557,10 @@ auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
   return 0;
 }
 
-auto DrmPlane::AtomicSetColorPipeline(
-    drmModeAtomicReq &pset, DrmModeUserPropertyBlobUnique &ctm_blob,
-    DrmModeUserPropertyBlobUnique &degamma_lut_blob,
-    DrmModeUserPropertyBlobUnique &gamma_lut_blob) const -> int {
+auto DrmPlane::AtomicSetColorPipeline(drmModeAtomicReq &pset,
+                                      uint32_t ctm_blob_id,
+                                      uint32_t degamma_lut_blob_id,
+                                      uint32_t gamma_lut_blob_id) const -> int {
   // Clear incompatible properties
   if (color_encoding_property_ &&
       !color_encoding_property_.AtomicSet(pset, 0)) {
@@ -600,13 +600,13 @@ auto DrmPlane::AtomicSetColorPipeline(
             : ColorOpType::kUnknown;
     switch (color_op_type) {
       case ColorOpType::kMatrix3x4:
-        if (ctm_blob) {  // Set 3x4 CTM
+        if (ctm_blob_id != 0) {  // Set 3x4 CTM
           if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
             ALOGE("Failed to set BYPASS property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
-          if (!color_op->GetDataProperty().AtomicSet(pset, *ctm_blob)) {
+          if (!color_op->GetDataProperty().AtomicSet(pset, ctm_blob_id)) {
             ALOGE("Failed to set DATA property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
@@ -614,30 +614,38 @@ auto DrmPlane::AtomicSetColorPipeline(
         } else {  // Bypass
           if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
             ALOGE("Failed to set BYPASS property on %s",
+                  color_op->DumpState().c_str());
+            return -EINVAL;
+          }
+          if (color_op->GetDataProperty() &&
+              !color_op->GetDataProperty().AtomicSet(pset, 0)) {
+            ALOGE("Failed to clear DATA property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
         }
         break;
       case ColorOpType::k1DLut:
-        if (is_degamma_color_op && degamma_lut_blob) {  // Set Degamma
+        if (is_degamma_color_op && degamma_lut_blob_id != 0) {  // Set Degamma
           if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
             ALOGE("Failed to set BYPASS property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
-          if (!color_op->GetDataProperty().AtomicSet(pset, *degamma_lut_blob)) {
+          if (!color_op->GetDataProperty().AtomicSet(pset,
+                                                     degamma_lut_blob_id)) {
             ALOGE("Failed to set DATA property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
-        } else if (!is_degamma_color_op && gamma_lut_blob) {  // Set Gamma
+        } else if (!is_degamma_color_op &&
+                   gamma_lut_blob_id != 0) {  // Set Gamma
           if (!color_op->SetBypassValue(pset, /*bypass=*/false)) {
             ALOGE("Failed to set BYPASS property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
-          if (!color_op->GetDataProperty().AtomicSet(pset, *gamma_lut_blob)) {
+          if (!color_op->GetDataProperty().AtomicSet(pset, gamma_lut_blob_id)) {
             ALOGE("Failed to set DATA property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
@@ -645,6 +653,12 @@ auto DrmPlane::AtomicSetColorPipeline(
         } else {  // Bypass
           if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
             ALOGE("Failed to set BYPASS property on %s",
+                  color_op->DumpState().c_str());
+            return -EINVAL;
+          }
+          if (color_op->GetDataProperty() &&
+              !color_op->GetDataProperty().AtomicSet(pset, 0)) {
+            ALOGE("Failed to clear DATA property on %s",
                   color_op->DumpState().c_str());
             return -EINVAL;
           }
@@ -658,6 +672,12 @@ auto DrmPlane::AtomicSetColorPipeline(
               color_op->DumpState().c_str());
         if (!color_op->SetBypassValue(pset, /*bypass=*/true)) {
           ALOGE("Failed to set BYPASS property on %s",
+                color_op->DumpState().c_str());
+          return -EINVAL;
+        }
+        if (color_op->GetDataProperty() &&
+            !color_op->GetDataProperty().AtomicSet(pset, 0)) {
+          ALOGE("Failed to clear DATA property on %s",
                 color_op->DumpState().c_str());
           return -EINVAL;
         }
