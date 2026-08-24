@@ -19,6 +19,7 @@
 #include "HwcDisplay.h"
 
 #include <cutils/trace.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
 #include <linux/time.h>
 #include <ui/ColorSpace.h>
@@ -952,7 +953,7 @@ bool HwcDisplay::Init() {
     active_config_id_ = configs_.preferred_config_id;
 
     auto *connector = pipeline_->connector->Get();
-    auto ret = connector->UpdateModes();
+    auto ret = connector->UpdateModesAndProperties();
     if (ret != 0) {
       ALOGE("Failed to update display modes with error: %d", ret);
       return false;
@@ -979,6 +980,9 @@ bool HwcDisplay::Init() {
   InitUseColorPipeline();
   InitWcgSupported();
   InitHdrSupported();
+
+  static constexpr ColorMode kDefaultColorMode = ColorMode::kSrgb;
+  SetColorMode(kDefaultColorMode, ui::RenderIntent::COLORIMETRIC);
 
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
@@ -1757,8 +1761,8 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
 
   ALOGV("Allocate modeset buffer.");
   std::optional<BufferInfo>
-      modeset_buffer = GetPipe().device->CreateBufferForModeset(new_width,
-                                                                new_height);
+      modeset_buffer = GetPipe().device->CreateDumbBuffer(new_width, new_height,
+                                                          DRM_FORMAT_XRGB8888);
   if (!modeset_buffer)
     return std::nullopt;
 

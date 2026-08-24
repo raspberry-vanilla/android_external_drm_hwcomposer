@@ -45,9 +45,12 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   explicit DrmHwcThree() = default;
   ~DrmHwcThree() override;
 
-  void Init(std::shared_ptr<IComposerCallback> callback);
+  void SetCallback(std::shared_ptr<IComposerCallback> callback);
 
   // DrmHwcInterface
+  [[nodiscard]] bool HasCallback() const override {
+    return composer_callback_ != nullptr;
+  }
   void SendVsyncEventToClient(
       ::android::drm_hwcomposer::DisplayHandle display_handle,
       int64_t timestamp, uint32_t vsync_period) const override;

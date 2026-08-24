@@ -85,7 +85,7 @@ class DrmHwcThree;
 
 class ComposerClient : public BnComposerClient {
  public:
-  ComposerClient();
+  explicit ComposerClient(std::shared_ptr<DrmHwcThree> hwc);
   ~ComposerClient() override;
 
   void Init();
@@ -211,7 +211,7 @@ class ComposerClient : public BnComposerClient {
 
   ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
 
-  std::unique_ptr<DrmHwcThree> hwc_;
+  std::shared_ptr<DrmHwcThree> hwc_;
 
   std::unique_ptr<::android::drm_hwcomposer::StatsPoller> stats_poller_;
 };

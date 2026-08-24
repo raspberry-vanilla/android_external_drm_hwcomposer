@@ -66,6 +66,34 @@ class Properties {
    * brightness range into [min_display_brightness, 1.0] instead of clamping.
    */
   static auto ScaleBrightnessRangeToMinBrightness() -> bool;
+
+  /**
+   * Retrieves the filesystem path to the early boot animation package file
+   * from the ro.vendor.hwc.bootanim.path system property.
+   *
+   * Default: "/vendor/etc/bootanim.raw"
+   */
+  static auto BootAnimationPath() -> std::string;
+
+  /**
+   * Signals whether the early boot animation has completed playback and
+   * hold by setting the vendor.hwc.bootanim.completed system property.
+   */
+  static void SetBootAnimationCompleted(bool completed);
+
+  /**
+   * Retrieves the physical hardware hold time in milliseconds for the first
+   * frame of the early boot animation via debug.hwc.early_boot_hold_ms.
+   */
+  static auto EarlyBootHoldMs() -> int;
+
+  /**
+   * Determines whether the early boot animation is enabled via the
+   * vendor.hwc.drm.bootanim.enable system property.
+   *
+   * Default: false.
+   */
+  static auto BootAnimationEnabled() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

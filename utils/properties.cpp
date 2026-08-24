@@ -46,6 +46,12 @@ auto inline property_get(const char *name, char *value,
   return static_cast<int>(strlen(value));
 }
 
+// NOLINTNEXTLINE(readability-identifier-naming)
+auto inline property_set(const char *key, const char *value) -> int {
+  // NOLINTNEXTLINE (concurrency-mt-unsafe)
+  return setenv(key, value, 1);
+}
+
 /**
  * Bluntly copied from system/core/libcutils/properties.cpp,
  * which is part of the Android Project and licensed under Apache 2.
@@ -303,6 +309,26 @@ auto Properties::FlatteningEnabled() -> bool {
   // Default off, this needs tweaking/validation
   constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.flattening", kDefault) != 0);
+}
+
+auto Properties::BootAnimationPath() -> std::string {
+  char path[PROPERTY_VALUE_MAX] = {};
+  property_get("ro.vendor.hwc.bootanim.path", path, "/vendor/etc/bootanim.raw");
+  return path;
+}
+
+void Properties::SetBootAnimationCompleted(bool completed) {
+  property_set("vendor.hwc.bootanim.completed", completed ? "1" : "0");
+}
+
+auto Properties::BootAnimationEnabled() -> bool {
+  return (property_get_bool("vendor.hwc.drm.bootanim.enable", 0) != 0);
+}
+
+auto Properties::EarlyBootHoldMs() -> int {
+  constexpr int kDefaultEarlyBootHoldMs = 1000;
+  return property_get_int32("debug.hwc.early_boot_hold_ms",
+                            kDefaultEarlyBootHoldMs);
 }
 
 }  // namespace android::drm_hwcomposer

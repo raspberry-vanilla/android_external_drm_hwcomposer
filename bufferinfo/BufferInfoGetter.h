@@ -41,6 +41,8 @@ class BufferInfoGetter {
  public:
   virtual ~BufferInfoGetter() = default;
 
+  [[nodiscard]] static uint32_t DrmFormatToBpp(uint32_t format);
+
   // Import the buffer_handle_t into this process. The imported buffer_handle_t
   // will be released when the GrallocBufferHandle is destructed.
   virtual std::shared_ptr<GrallocBufferHandle> Import(buffer_handle_t handle);

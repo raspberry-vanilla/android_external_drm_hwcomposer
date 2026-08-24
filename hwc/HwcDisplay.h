@@ -26,7 +26,6 @@
 #include <vector>
 
 #include <ui/ColorSpace.h>
-#include <ui/GraphicTypes.h>
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
@@ -41,12 +40,17 @@
 #include "utils/EdidWrapper.h"
 #include "utils/fd.h"
 
+namespace android::hardware::graphics::common::V1_1 {
+enum class RenderIntent;
+}  // namespace android::hardware::graphics::common::V1_1
+
 namespace aidl::android::hardware::graphics::common {
 enum class Hdr;
 }  // namespace aidl::android::hardware::graphics::common
 
 namespace android::ui {
 using aidl::android::hardware::graphics::common::Hdr;
+using android::hardware::graphics::common::V1_1::RenderIntent;
 }  // namespace android::ui
 
 namespace android::drm_hwcomposer {
@@ -211,6 +215,13 @@ class HwcDisplay : public ICompositorDisplay {
   // Physical displays are either internal or external.
   auto GetDisplayType() const -> DisplayType;
 
+  CommitStatusOr<AtomicCommitResult> ExecuteAtomicCommit(
+      AtomicCommitArgs &a_args) const;
+
+  AtomicCommitArgs CreateModesetCommit(
+      const HwcDisplayConfig *config,
+      const std::optional<LayerData> &modeset_layer);
+
   // Enable or disable vsync callbacks.
   void SetVsyncCallbacksEnabled(bool enabled);
 
@@ -368,13 +379,6 @@ class HwcDisplay : public ICompositorDisplay {
   // This should be called after a successful commit.
   void ApplyCommitChanges(const AtomicCommitArgs &a_args,
                           const AtomicCommitResult &result);
-
-  AtomicCommitArgs CreateModesetCommit(
-      const HwcDisplayConfig *config,
-      const std::optional<LayerData> &modeset_layer);
-
-  CommitStatusOr<AtomicCommitResult> ExecuteAtomicCommit(
-      AtomicCommitArgs &a_args) const;
 
   // Sleep the current thread until |present_time| is closest to the next
   // expected vsync time.

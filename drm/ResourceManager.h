@@ -64,6 +64,10 @@ class ResourceManager {
 
   void DeInit();
 
+  [[nodiscard]] bool IsInitialized() const {
+    return initialized_;
+  }
+
   bool ForcedScalingWithGpu() const {
     return scale_with_gpu_;
   }

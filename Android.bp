@@ -33,6 +33,7 @@ cc_defaults {
         "libhardware",
         "libhidlbase",
         "liblog",
+        "liblz4",
         "libsync",
         "libui",
         "libutils",
@@ -55,6 +56,7 @@ cc_defaults {
 
     cppflags: [
         "-DHAS_LIBDISPLAY_INFO",
+        "-DHAS_LZ4",
         "-DLOG_TAG=\"drmhwc\"",
     ],
 
@@ -114,6 +116,8 @@ filegroup {
         "backend/ClientBackend.cpp",
         "backend/GenericBackend.cpp",
         "backend/IntelBackend.cpp",
+
+        "early_animation/EarlyBootAnimation.cpp",
 
         "hwc/HwcBufferCache.cpp",
         "hwc/HwcDisplay.cpp",
@@ -292,6 +296,7 @@ cc_test_host {
     name: "drm_hwcomposer_unittests",
     srcs: [
         "bufferinfo/BufferInfoGetter.cpp",
+        "bufferinfo/BufferInfoGetterTest.cpp",
         "bufferinfo/GrallocBufferCache.cpp",
         "bufferinfo/GrallocBufferCacheTest.cpp",
         "compositor/CompositionPlanner.cpp",
@@ -330,6 +335,8 @@ cc_test_host {
         "drm/DrmMode.cpp",
         "drm/DrmPlane.cpp",
         "drm/DrmProperty.cpp",
+        "early_animation/EarlyBootAnimation.cpp",
+        "early_animation/EarlyBootAnimationTest.cpp",
         "hwc/HwcBufferCache.cpp",
         "hwc/HwcBufferCacheTest.cpp",
         "hwc/HwcDisplayConfigs.cpp",
@@ -357,11 +364,15 @@ cc_test_host {
         "libgmock",
         "libgtest",
         "liblog",
+        "liblz4",
         "libmath",
         "libui-types",
     ],
     shared_libs: [
         "libhardware",
+    ],
+    cppflags: [
+        "-DHAS_LZ4",
     ],
     target: {
         host: {

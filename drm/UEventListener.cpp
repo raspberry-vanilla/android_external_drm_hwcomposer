@@ -75,8 +75,9 @@ void UEventListener::ThreadFn() {
 
     if (drm_event && hotplug_event) {
       constexpr useconds_t kDelayAfterUeventUs = 200000;
-      /* We need some delay to ensure DrmConnector::UpdateModes() will query
-       * correct modes list, otherwise at least RPI4 board may report 0 modes */
+      /* We need some delay to ensure DrmConnector::UpdateModesAndProperties()
+       * will query correct modes list, otherwise at least RPI4 board may report
+       * 0 modes */
       usleep(kDelayAfterUeventUs);
       if (exit_) {
         break;

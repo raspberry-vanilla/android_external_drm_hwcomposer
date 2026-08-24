@@ -44,6 +44,32 @@ BufferInfoGetter *BufferInfoGetter::GetInstance() {
   return g_buffer_info_getter.get();
 }
 
+// NOLINTBEGIN(readability-magic-numbers)
+uint32_t BufferInfoGetter::DrmFormatToBpp(uint32_t format) {
+  switch (format) {
+    case DRM_FORMAT_XRGB8888:
+    case DRM_FORMAT_ARGB8888:
+    case DRM_FORMAT_XBGR8888:
+    case DRM_FORMAT_ABGR8888:
+    case DRM_FORMAT_RGBA8888:
+    case DRM_FORMAT_RGBX8888:
+    case DRM_FORMAT_XRGB2101010:
+    case DRM_FORMAT_ARGB2101010:
+    case DRM_FORMAT_XBGR2101010:
+    case DRM_FORMAT_ABGR2101010:
+    case DRM_FORMAT_RGBA1010102:
+    case DRM_FORMAT_RGBX1010102:
+      return 32;
+    case DRM_FORMAT_RGB565:
+    case DRM_FORMAT_BGR565:
+      return 16;
+    default:
+      ALOGE("Unsupported format for buffer: 0x%08x", format);
+      return 0;
+  }
+}
+// NOLINTEND(readability-magic-numbers)
+
 std::shared_ptr<GrallocBufferHandle> BufferInfoGetter::Import(
     buffer_handle_t handle) {
   return GrallocBufferHandle::Create(handle);

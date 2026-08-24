@@ -29,10 +29,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include "hwc3/ComposerClient.h"
+#include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
 #include "utils/properties.h"
 
@@ -40,15 +43,46 @@ using ::android::drm_hwcomposer::Properties;
 
 namespace aidl::android::hardware::graphics::composer3::impl {
 
+Composer::Composer()
+    : early_hwc_(std::make_shared<DrmHwcThree>()), weak_hwc_(early_hwc_) {
+  early_hwc_->GetResMan().Init();
+  early_hwc_->StartBootAnimation();
+  boot_thread_ = std::thread([this]() {
+    if (auto hwc = weak_hwc_.lock()) {
+      hwc->WaitForCompletionAndStopBootAnimation();
+    }
+  });
+}
+
+Composer::~Composer() {
+  if (auto hwc = weak_hwc_.lock()) {
+    hwc->StopBootAnimation();
+  }
+  if (boot_thread_.joinable()) {
+    boot_thread_.join();
+  }
+}
+
 ndk::ScopedAStatus Composer::createClient(
     std::shared_ptr<IComposerClient>* out_client) {
   DEBUG_FUNC();
 
+  std::scoped_lock lock(client_mutex_);
   if (!client_.expired()) {
     return ToBinderStatus(hwc3::Error::kNoResources);
   }
 
-  auto client = ndk::SharedRefBase::make<ComposerClient>();
+  // Hand over the early-initialized DrmHwcThree instance to the first client
+  // (SurfaceFlinger). For subsequent client connections (e.g. VTS tests or
+  // SurfaceFlinger restarts), instantiate a fresh DrmHwcThree instance.
+  std::shared_ptr<DrmHwcThree> hwc;
+  if (early_hwc_) {
+    hwc = std::move(early_hwc_);
+  } else {
+    hwc = std::make_shared<DrmHwcThree>();
+  }
+
+  auto client = ndk::SharedRefBase::make<ComposerClient>(std::move(hwc));
   if (!client) {
     *out_client = nullptr;
     return ToBinderStatus(hwc3::Error::kNoResources);

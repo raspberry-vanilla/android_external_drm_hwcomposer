@@ -79,7 +79,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   std::string GetName() const;
 
-  int UpdateModes();
+  int UpdateModesAndProperties();
 
   bool IsLinkStatusGood();
 
@@ -178,6 +178,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   DrmDevice *const drm_;
 
   auto Init() -> bool;
+  auto UpdateColorspaceProperty() -> void;
   auto GetConnectorProperty(const char *prop_name, DrmProperty *property,
                             bool is_optional = false) -> bool;
   auto GetOptionalConnectorProperty(const char *prop_name,

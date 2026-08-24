@@ -43,6 +43,7 @@
 
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
+#include "bufferinfo/BufferInfoGetter.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmEncoder.h"
@@ -462,23 +463,27 @@ class DumbBufferFd : public PrimeFdsSharedBase {
 };
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-goto)
-auto DrmDevice::CreateBufferForModeset(uint32_t width, uint32_t height)
+auto DrmDevice::CreateDumbBuffer(uint32_t width, uint32_t height,
+                                 uint32_t format, uint32_t prime_fd_flags)
     -> std::optional<BufferInfo> {
-  constexpr uint32_t kDumbBufferFormat = DRM_FORMAT_XRGB8888;
-  constexpr uint32_t kDumbBufferBpp = 32;
+  uint32_t bpp = BufferInfoGetter::DrmFormatToBpp(format);
+  if (bpp == 0) {
+    ALOGE("CreateDumbBuffer: Unsupported format %u", format);
+    return {};
+  }
 
   std::optional<BufferInfo> result;
   void *ptr = MAP_FAILED;
   struct drm_mode_create_dumb create = {
       .height = height,
       .width = width,
-      .bpp = kDumbBufferBpp,
+      .bpp = bpp,
       .flags = 0,
   };
 
   int ret = drmIoctl(*fd_, DRM_IOCTL_MODE_CREATE_DUMB, &create);
   if (ret != 0) {
-    ALOGE("Failed to DRM_IOCTL_MODE_CREATE_DUMB %d", errno);
+    ALOGE("Failed to DRM_IOCTL_MODE_CREATE_DUMB %d", ret);
     return {};
   }
 
@@ -492,8 +497,9 @@ auto DrmDevice::CreateBufferForModeset(uint32_t width, uint32_t height)
       .width = width,
       .height = height,
 
-      .format = kDumbBufferFormat,
+      .format = format,
       .pitches = {create.pitch},
+      .sizes = {static_cast<uint32_t>(create.size)},
       .prime_fds = {-1, -1, -1, -1},
       .modifiers = {DRM_FORMAT_MOD_NONE},
 
@@ -524,7 +530,8 @@ auto DrmDevice::CreateBufferForModeset(uint32_t width, uint32_t height)
     ALOGE("Failed to unmap dumb buffer: %d", errno);
   }
 
-  ret = drmPrimeHandleToFD(*fd_, create.handle, 0, &buffer_info.prime_fds[0]);
+  ret = drmPrimeHandleToFD(*fd_, create.handle, prime_fd_flags,
+                           &buffer_info.prime_fds[0]);
   if (ret != 0) {
     ALOGE("Failed to export dumb buffer as FD: %d", errno);
     goto done;

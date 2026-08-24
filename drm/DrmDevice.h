@@ -99,7 +99,8 @@ class DrmDevice {
     return HasAddFb2ModifiersSupport_;
   }
 
-  auto CreateBufferForModeset(uint32_t width, uint32_t height)
+  auto CreateDumbBuffer(uint32_t width, uint32_t height, uint32_t format,
+                        uint32_t prime_fd_flags = 0)
       -> std::optional<BufferInfo>;
 
   auto &GetDefaultFbImporter() {

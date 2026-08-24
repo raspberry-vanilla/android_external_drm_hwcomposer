@@ -45,18 +45,21 @@ auto DrmHwcThree::GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
 }
 
 DrmHwcThree::~DrmHwcThree() {
+  DeinitDisplays();
   /* Display deinit routine is handled by resource manager */
   GetResMan().DeInit();
 }
 
-void DrmHwcThree::Init(std::shared_ptr<IComposerCallback> callback) {
+void DrmHwcThree::SetCallback(std::shared_ptr<IComposerCallback> callback) {
   composer_callback_ = std::move(callback);
-  GetResMan().Init();
 }
 
 void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle,
     int64_t timestamp) const {
+  if (!composer_callback_) {
+    return;
+  }
   VsyncPeriodChangeTimeline timeline;
   timeline.newVsyncAppliedTimeNanos = timestamp;
   timeline.refreshRequired = false;
@@ -73,12 +76,18 @@ void DrmHwcThree::SendRefreshEventToClient(
     const std::scoped_lock lock(must_validate_lock_);
     must_validate_.insert(display_handle);
   }
+  if (!composer_callback_) {
+    return;
+  }
   composer_callback_->onRefresh(static_cast<int64_t>(display_handle));
 }
 
 void DrmHwcThree::SendVsyncEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle, int64_t timestamp,
     uint32_t vsync_period) const {
+  if (!composer_callback_) {
+    return;
+  }
   composer_callback_->onVsync(static_cast<int64_t>(display_handle), timestamp,
                               static_cast<int32_t>(vsync_period));
 }
@@ -101,6 +110,9 @@ void DrmHwcThree::SendHotplugEventToClient(
   if (event == common::DisplayHotplugEvent::DISCONNECTED) {
     ClearMustValidateDisplay(display_handle);
   }
+  if (!composer_callback_) {
+    return;
+  }
   composer_callback_->onHotplugEvent(static_cast<int64_t>(display_handle),
                                      event);
 }
@@ -109,6 +121,9 @@ void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle,
     std::optional<enum ::android::drm_hwcomposer::HdcpContentType>
         current_hdcp_level) {
+  if (!composer_callback_) {
+    return;
+  }
   drm::HdcpLevels hdcplevel;
   // Set the maxLevel as set in SurfaceFlinger for Highest HDCP level
   hdcplevel.maxLevel = drm::HdcpLevel::HDCP_V2_3;
