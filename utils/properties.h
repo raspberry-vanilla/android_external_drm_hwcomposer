@@ -76,28 +76,30 @@ class Properties {
    *
    * Default: "/vendor/etc/bootanim.raw"
    */
-  static auto BootAnimationPath() -> std::string;
+  static auto EarlyBootAnimationPath() -> std::string;
 
   /**
    * Signals whether the early boot animation has completed playback and
    * hold by setting the vendor.hwc.bootanim.completed system property.
    */
-  static void SetBootAnimationCompleted(bool completed);
+  static void SetEarlyBootAnimationCompleted(bool completed);
 
   /**
    * Retrieves the physical hardware hold time in milliseconds for the first
-   * frame of the early boot animation via debug.hwc.early_boot_hold_ms.
+   * frame of the early boot animation via vendor.hwc.drm.early_boot_hold_ms.
    */
-  static auto EarlyBootHoldMs() -> int;
+  static auto EarlyBootAnimationHoldMs() -> int;
 
   /**
    * Determines whether the early boot animation is enabled via the
    * vendor.hwc.drm.bootanim.enable system property.
-   *
-   * Default: false.
    */
-  static auto BootAnimationEnabled() -> bool;
+  static auto EarlyBootAnimationEnabled() -> bool;
 
+  /**
+   * Whether the standalone boot animation has completed. Does not refer to
+   * early boot animation.
+   */
   static auto BootAnimationCompleted() -> bool;
 
   static auto IgnoreDrmMasterFailure() -> bool;

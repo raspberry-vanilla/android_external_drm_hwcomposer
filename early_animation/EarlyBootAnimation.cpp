@@ -84,8 +84,8 @@ constexpr bool IsHdrFormat(uint32_t format) {
 }  // namespace
 
 EarlyBootAnimation::EarlyBootAnimation(HwcDisplay* display)
-    : display_(display), animation_path_(Properties::BootAnimationPath()) {
-  Properties::SetBootAnimationCompleted(false);
+    : display_(display), animation_path_(Properties::EarlyBootAnimationPath()) {
+  Properties::SetEarlyBootAnimationCompleted(false);
 }
 
 EarlyBootAnimation::~EarlyBootAnimation() {
@@ -306,7 +306,7 @@ void EarlyBootAnimation::WaitForCompletion() {
   // with an added 3-second safety watchdog buffer to prevent false timeouts.
   const auto expected_duration = (header_.num_frames * frame_duration_) +
                                  std::chrono::milliseconds(
-                                     Properties::EarlyBootHoldMs()) +
+                                     Properties::EarlyBootAnimationHoldMs()) +
                                  std::chrono::milliseconds(
                                      header_.hold_duration_ms);
   static constexpr auto kWatchdogBuffer = std::chrono::seconds(3);
@@ -348,7 +348,7 @@ void EarlyBootAnimation::Stop() {
     }
 
     FreeBuffers();
-    Properties::SetBootAnimationCompleted(true);
+    Properties::SetEarlyBootAnimationCompleted(true);
     ALOGD("EarlyBootAnimation: Stopped");
   });
 }
@@ -437,7 +437,7 @@ void EarlyBootAnimation::Loop(UniqueFd fd) {
 
     if (frame_count == 0) {
       const auto first_frame_hold = std::chrono::milliseconds(
-          Properties::EarlyBootHoldMs());
+          Properties::EarlyBootAnimationHoldMs());
       ALOGD("EarlyBootAnimation: First frame committed, holding for %lldms",
             static_cast<long long>(first_frame_hold.count()));
       {
