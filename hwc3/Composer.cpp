@@ -45,7 +45,10 @@ namespace aidl::android::hardware::graphics::composer3::impl {
 
 Composer::Composer()
     : early_hwc_(std::make_shared<DrmHwcThree>()), weak_hwc_(early_hwc_) {
-  early_hwc_->GetResMan().Init();
+  {
+    std::scoped_lock lock(early_hwc_->GetResMan().GetMainLock());
+    early_hwc_->GetResMan().Init();
+  }
   early_hwc_->StartBootAnimation();
   boot_thread_ = std::thread([this]() {
     if (auto hwc = weak_hwc_.lock()) {

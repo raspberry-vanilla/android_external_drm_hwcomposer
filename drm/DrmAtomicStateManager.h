@@ -21,6 +21,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -171,7 +172,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
 
   struct DegammaBlobKey {
     TransferFunction tf;
-    size_t size;
+    uint64_t size;
     float scale;
     bool operator<(const DegammaBlobKey &o) const {
       return std::tie(tf, size, scale) < std::tie(o.tf, o.size, o.scale);
@@ -180,7 +181,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
 
   struct GammaBlobKey {
     TransferFunction tf;
-    size_t size;
+    uint64_t size;
     float scale;
     bool operator<(const GammaBlobKey &o) const {
       return std::tie(tf, size, scale) < std::tie(o.tf, o.size, o.scale);

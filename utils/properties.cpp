@@ -311,6 +311,10 @@ auto Properties::FlatteningEnabled() -> bool {
   return (property_get_bool("vendor.hwc.drm.flattening", kDefault) != 0);
 }
 
+auto Properties::UseLogGammaLut() -> bool {
+  return (property_get_bool("vendor.hwc.use_log_gamma_lut", 0) != 0);
+}
+
 auto Properties::BootAnimationPath() -> std::string {
   char path[PROPERTY_VALUE_MAX] = {};
   property_get("ro.vendor.hwc.bootanim.path", path, "/vendor/etc/bootanim.raw");

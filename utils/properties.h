@@ -54,6 +54,7 @@ class Properties {
   static auto ExternalHdrEnabled() -> bool;
   static auto SkipPlaneDamageClips() -> bool;
   static auto FlatteningEnabled() -> bool;
+  static auto UseLogGammaLut() -> bool;
 
   /**
    * Minimum display brightness floor in the range [0.0, 1.0].

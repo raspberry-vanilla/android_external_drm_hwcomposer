@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -115,7 +116,8 @@ auto DrmAtomicStateManager::GetOrCreateBlob(const Key &key,
     return cached;
   }
 
-  BlobData blob_data = std::forward<Generator>(generate_fn)();
+  auto generated = std::forward<Generator>(generate_fn)();
+  BlobData blob_data(generated);
   if (!blob_data) {
     return nullptr;
   }
@@ -361,14 +363,35 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
                                              DrmAtomicRequest &request) {
   auto *crtc = pipe_->crtc->Get();
+  bool use_log_gamma = Properties::UseLogGammaLut();
   auto lut_size = crtc->GetGammaLutSizeProperty().GetValue();
-  if (!crtc->GetGammaLutProperty() || !lut_size.has_value()) {
+
+  const auto &gamma_lut_prop = crtc->GetGammaLutProperty();
+  const auto &log_gamma_lut_prop = crtc->GetLogGammaLutProperty();
+
+  if (use_log_gamma && !log_gamma_lut_prop) {
+    // Fall back to regular gamma.
+    ALOGV("Missing optional LOG_GAMMA_LUT property, falling back to GAMMA_LUT");
+    use_log_gamma = false;
+  }
+
+  if (!use_log_gamma && (!gamma_lut_prop || !lut_size.has_value())) {
     return true;
   }
 
-  // Must be used with corresponding plane degamma LUT
+  // If the pipeline is disabled, clear the gamma LUTs
   if (!use_color_pipeline_) {
-    return crtc->GetGammaLutProperty().AtomicSet(*request.property_set, 0);
+    bool ret = true;
+    if (gamma_lut_prop && !gamma_lut_prop.AtomicSet(*request.property_set, 0)) {
+      ALOGW("Failed to clear GAMMA_LUT");
+      ret = false;
+    }
+    if (log_gamma_lut_prop &&
+        !log_gamma_lut_prop.AtomicSet(*request.property_set, 0)) {
+      ALOGW("Failed to clear LOG_GAMMA_LUT");
+      ret = false;
+    }
+    return ret;
   }
 
   if (!args.transfer_func) {
@@ -378,19 +401,35 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
   float lut_scale = ColorUtil::CalculateGammaScale(args.brightness,
                                                    args.hdr_headroom);
 
-  GammaBlobKey key{args.transfer_func.value(), lut_size.value(), lut_scale};
-  auto gamma_blob = GetOrCreateBlob(key, [&] {
-    return ColorUtil::CreateGammaLut(args.transfer_func.value(),
-                                     lut_size.value(), args.brightness,
-                                     args.hdr_headroom);
-  });
+  std::shared_ptr<DrmModeUserPropertyBlobUnique> gamma_blob;
+  if (use_log_gamma) {
+    GammaBlobKey key{args.transfer_func.value(), 0, lut_scale};
+    gamma_blob = GetOrCreateBlob(key, [&] {
+      return ColorUtil::GetLogGammaLut(args.transfer_func.value(), lut_scale);
+    });
+  } else {
+    GammaBlobKey key{args.transfer_func.value(), lut_size.value(), lut_scale};
+    gamma_blob = GetOrCreateBlob(key, [&] {
+      return ColorUtil::CreateGammaLut(args.transfer_func.value(),
+                                       lut_size.value(), lut_scale);
+    });
+  }
 
   if (gamma_blob) {
-    if (!crtc->GetGammaLutProperty().AtomicSet(*request.property_set,
-                                               GetBlobId(gamma_blob))) {
-      return false;
+    const auto &active = use_log_gamma ? log_gamma_lut_prop : gamma_lut_prop;
+    const auto &inactive = use_log_gamma ? gamma_lut_prop : log_gamma_lut_prop;
+
+    bool ret = true;
+    if (!active.AtomicSet(*request.property_set, GetBlobId(gamma_blob))) {
+      ALOGW("Failed to set gamma blob");
+      ret = false;
+    }
+    if (inactive && !inactive.AtomicSet(*request.property_set, 0)) {
+      ALOGW("Failed to clear inactive gamma blob");
+      ret = false;
     }
     request.used_kms_objects.cached_blobs.emplace_back(gamma_blob);
+    return ret;
   }
 
   return true;

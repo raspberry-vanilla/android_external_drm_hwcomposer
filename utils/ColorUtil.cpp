@@ -31,6 +31,7 @@
 #include <memory>
 #include <optional>
 #include <type_traits>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
@@ -89,23 +90,6 @@ mat3d GetGamutTransform(HwcColorspace src, HwcColorspace dest) {
   return mat3d(ColorSpaceConnector(ColorUtil::ToColorGamut(src),
                                    ColorUtil::ToColorGamut(dest))
                    .getTransform());
-}
-
-bool NeedsTonemapping(TransferFunction tf) {
-  switch (tf) {
-    case TransferFunction::kPq:
-      [[fallthrough]];
-    case TransferFunction::kHlg:
-      return true;
-    case TransferFunction::kSmpte170M:
-      [[fallthrough]];
-    case TransferFunction::kSrgb:
-      [[fallthrough]];
-    case TransferFunction::kUnknown:
-      [[fallthrough]];
-    default:
-      return false;
-  }
 }
 
 /**
@@ -191,6 +175,42 @@ uint16_t SignalToUint16(double signal) {
   return static_cast<uint16_t>(signal);
 }
 
+double EvaluateOetf(TransferFunction tf, double signal) {
+  switch (tf) {
+    case TransferFunction::kPq:
+      return EvaluatePqOetf(signal);
+    case TransferFunction::kHlg:
+      return ColorUtil::EvaluateHlgOetf(signal);
+    case TransferFunction::kUnknown:
+      ALOGV("Unknown transfer function, falling back to sRGB");
+      [[fallthrough]];
+    case TransferFunction::kSrgb:
+      return kSrgbGamut.fromLinear(signal)[0];
+    case TransferFunction::kSmpte170M:
+      return kBt709Gamut.fromLinear(signal)[0];
+    default:
+      return signal;
+  }
+}
+
+double EvaluateEotf(TransferFunction tf, double signal) {
+  switch (tf) {
+    case TransferFunction::kPq:
+      return EvaluatePqEotf(signal);
+    case TransferFunction::kHlg:
+      return EvaluateHlgEotf(signal);
+    case TransferFunction::kUnknown:
+      ALOGV("Unknown transfer function, falling back to sRGB");
+      [[fallthrough]];
+    case TransferFunction::kSrgb:
+      return kSrgbGamut.toLinear(signal)[0];
+    case TransferFunction::kSmpte170M:
+      return kBt709Gamut.toLinear(signal)[0];
+    default:
+      return signal;
+  }
+}
+
 template <typename T>
 Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
                    const double lut_scale, bool is_degamma) {
@@ -202,37 +222,12 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
   Lut1D<T> lut(lut_size);
   for (size_t i = 0; i < lut_size; ++i) {
     double signal = static_cast<double>(i) * scaled_step;
-    if (!is_degamma && NeedsTonemapping(tf)) {
+    if (!is_degamma && ColorUtil::NeedsTonemapping(tf)) {
       signal *= std::clamp(lut_scale, kSignalMin, kSignalMax);
     }
 
-    switch (tf) {
-      case TransferFunction::kPq:
-        signal = is_degamma ? EvaluatePqEotf(signal) : EvaluatePqOetf(signal);
-        break;
-      case TransferFunction::kHlg:
-        signal = is_degamma ? EvaluateHlgEotf(signal)
-                            : ColorUtil::EvaluateHlgOetf(signal);
-        break;
-      case TransferFunction::kUnknown:
-        ALOGV("Unknown transfer function, falling back to sRGB");
-        [[fallthrough]];
-      case TransferFunction::kSrgb:
-        signal = is_degamma ? kSrgbGamut.toLinear(signal)[0]
-                            : kSrgbGamut.fromLinear(signal)[0];
-        break;
-      case TransferFunction::kSmpte170M:
-        // BT.709 uses SMPTE 170M transfer parameters
-        signal = is_degamma ? kBt709Gamut.toLinear(signal)[0]
-                            : kBt709Gamut.fromLinear(signal)[0];
-        break;
-      default:
-        break;
-    }
+    signal = is_degamma ? EvaluateEotf(tf, signal) : EvaluateOetf(tf, signal);
 
-    if (is_degamma && NeedsTonemapping(tf)) {
-      signal /= std::clamp(lut_scale, kSignalMin, kSignalMax);
-    }
     if constexpr (std::is_same_v<T, drm_color_lut32>) {
       lut[i].red = lut[i].green = lut[i].blue = SignalToUint32(signal);
     } else {
@@ -246,6 +241,19 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
 // NOLINTEND(readability-magic-numbers)
 
 }  // namespace
+
+bool ColorUtil::NeedsTonemapping(TransferFunction tf) {
+  switch (tf) {
+    case TransferFunction::kPq:
+    case TransferFunction::kHlg:
+      return true;
+    case TransferFunction::kSmpte170M:
+    case TransferFunction::kSrgb:
+    case TransferFunction::kUnknown:
+    default:
+      return false;
+  }
+}
 
 double ColorUtil::EvaluateHlgOetf(double l) {
   const double gamma_threshold = 1.0;
@@ -488,15 +496,17 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     double3 offset = gamut_transform * double3(ctm_in[kOffsetRedIndex],
                                                ctm_in[kOffsetGreenIndex],
                                                ctm_in[kOffsetBlueIndex]);
+    // NOLINTNEXTLINE(readability-magic-numbers)
+    double3 alpha(ctm_in[3], ctm_in[7], ctm_in[11]);
 
     // Insert the new 3x3 matrix back into the 4x4 CTM
     // NOLINTBEGIN(readability-magic-numbers)
     // clang-format off
     mat4d ctm4 = mat4d(
-      ctm3[0][0], ctm3[0][1], ctm3[0][2], ctm_in[3],
-      ctm3[1][0], ctm3[1][1], ctm3[1][2], ctm_in[7],
-      ctm3[2][0], ctm3[2][1], ctm3[2][2], ctm_in[11],
-      offset[0], offset[1], offset[2], ctm_in[15]
+      ctm3[0][0], ctm3[0][1], ctm3[0][2], alpha[0],
+      ctm3[1][0], ctm3[1][1], ctm3[1][2], alpha[1],
+      ctm3[2][0], ctm3[2][1], ctm3[2][2], alpha[2],
+      offset[0],  offset[1],  offset[2],  ctm_in[15]
     );
     // clang-format on
     // NOLINTEND(readability-magic-numbers)
@@ -538,6 +548,119 @@ auto ColorUtil::ScaleBrightnessIfNeeded(float display_brightness) -> float {
 
   return std::max(display_brightness, min_brightness);
 }
+
+// NOLINTBEGIN(readability-magic-numbers)
+std::vector<drm_color_lut32> ColorUtil::GetLogGammaLut(
+    TransferFunction tf, const std::optional<float> display_brightness,
+    const std::optional<float> hdr_headroom) {
+  std::vector<drm_color_lut32> lut;
+
+  // Number of entries in the multi-seg LUT: 510 standard + 3 boost/max
+  // registers
+  constexpr size_t kLogGammaLutEntries = 513;
+  lut.resize(kLogGammaLutEntries);
+
+  // Standard 1D LUT entries (0..509) in Intel logarithmic gamma mode use 16-bit
+  // unsigned integer values [0, 65535] (0xFFFF), matching standard DRM LUT
+  // channels.
+  constexpr double kMaxStd = 65535.0;
+
+  // The logarithmic gamma hardware domain is 23-bit fixed point (U0.23), where
+  // full scale 1.0 corresponds to 2^23 (8,388,608) steps. Each octave segment
+  // is specified in fixed point coordinates and normalized by dividing by 2^23.
+  const auto total_steps = static_cast<double>(1 << 23);
+
+  auto set_lut_entry = [&](size_t idx, double in_signal) {
+    double out_signal = EvaluateOetf(tf, in_signal);
+    uint32_t val = static_cast<uint32_t>(
+        std::clamp(std::round(out_signal * kMaxStd), 0.0, kMaxStd));
+    lut[idx].red = val;
+    lut[idx].green = val;
+    lut[idx].blue = val;
+    lut[idx].reserved = 0;
+  };
+
+  float lut_scale = CalculateGammaScale(display_brightness, hdr_headroom);
+
+  // First two discrete points: 0.0 and 1 / 2^24
+  set_lut_entry(0, 0.0);
+  set_lut_entry(1, 1.0 / total_steps * lut_scale);
+
+  // Each segment represents one power-of-two octave in the logarithmic gamma
+  // LUT. Darker regions have higher sample density to provide better resolution
+  // where contrast is most critical. Matches d13_logarithmic_gamma hardware
+  // specification.
+  struct LogSegment {
+    int offset;
+    int samples;
+  };
+
+  // clang-format off
+  constexpr LogSegment kLogSegments[] = {
+    {0, 2},   {1, 2},   {2, 2}, {3, 2},
+    {4, 4},   {5, 4},   {6, 4},
+    {7, 8},   {8, 8},   {9, 8},
+    {10, 16}, {11, 16}, {12, 16},
+    {13, 32}, {14, 32},
+    {15, 64}, {16, 64}, {17, 64},
+    {18, 32}, {19, 32}, {20, 32},
+    {21, 32}, {22, 32}};
+  // clang-format on
+
+  size_t out_idx = 2;
+  for (const auto &seg : kLogSegments) {
+    auto start_pos = static_cast<double>(1 << seg.offset);
+    auto end_pos = static_cast<double>(1 << (seg.offset + 1));
+    double step = (end_pos - start_pos) / static_cast<double>(seg.samples);
+
+    for (int i = 0; i < seg.samples; ++i) {
+      double signal = (start_pos + ((i + 1) * step)) / total_steps;
+      set_lut_entry(out_idx, signal * lut_scale);
+      ++out_idx;
+    }
+  }
+
+  // Extended Elements for hardware boost / endpoint registers:
+  // - lut[510] -> PREC_PAL_GC_MAX: u1.16 fixed-point format (scale 65536.0,
+  // input X = 1.0)
+  // - lut[511] -> PREC_PAL_EXT_GC_MAX: u3.16 fixed-point format (scale 65536.0,
+  // input X = 3.0)
+  // - lut[512] -> PREC_PAL_EXT2_GC_MAX: u3.16 fixed-point format (scale
+  // 65536.0, input X = 7.0)
+  constexpr double kFixedPoint16Scale = 65536.0;
+  constexpr auto kGcMax = static_cast<double>((1 << 17) - 1);     // 0x1FFFF
+  constexpr auto kExtGcMax = static_cast<double>((1 << 19) - 1);  // 0x7FFFF
+
+  // 1. PREC_PAL_GC_MAX (u1.16) at X = 1.0
+  double sig_1_0 = EvaluateOetf(tf, 1.0 * lut_scale);
+  uint32_t gc_max = static_cast<uint32_t>(
+      std::clamp(std::round(sig_1_0 * kFixedPoint16Scale), 0.0, kGcMax));
+  lut[510].red = gc_max;
+  lut[510].green = gc_max;
+  lut[510].blue = gc_max;
+  lut[510].reserved = 0;
+
+  // 2. PREC_PAL_EXT_GC_MAX (u3.16) at X = 3.0
+  double sig_3_0 = EvaluateOetf(tf, 3.0 * lut_scale);
+  uint32_t ext_gc_max = static_cast<uint32_t>(
+      std::clamp(std::round(sig_3_0 * kFixedPoint16Scale), 0.0, kExtGcMax));
+  lut[511].red = ext_gc_max;
+  lut[511].green = ext_gc_max;
+  lut[511].blue = ext_gc_max;
+  lut[511].reserved = 0;
+
+  // 3. PREC_PAL_EXT2_GC_MAX (u3.16) at X = 7.0
+  double sig_7_0 = EvaluateOetf(tf, 7.0 * lut_scale);
+  uint32_t ext2_gc_max = static_cast<uint32_t>(
+      std::clamp(std::round(sig_7_0 * kFixedPoint16Scale), 0.0, kExtGcMax));
+  lut[512].red = ext2_gc_max;
+  lut[512].green = ext2_gc_max;
+  lut[512].blue = ext2_gc_max;
+  lut[512].reserved = 0;
+
+  return lut;
+}
+// NOLINTEND(readability-magic-numbers)
 
 // Tell the compiler explicitly to build these versions
 template std::shared_ptr<drm_color_ctm> ColorUtil::GamutAdjustIfNeeded<

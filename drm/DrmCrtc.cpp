@@ -90,6 +90,11 @@ auto DrmCrtc::CreateInstance(DrmDevice &dev, uint32_t crtc_id, uint32_t index)
     ALOGV("Missing optional GAMMA_LUT property");
   }
 
+  ret = GetCrtcProperty(dev, *c, "LOG_GAMMA_LUT", &c->log_gamma_lut_property_);
+  if (ret != 0) {
+    ALOGV("Missing optional LOG_GAMMA_LUT property");
+  }
+
   ret = GetCrtcProperty(dev, *c, "GAMMA_LUT_SIZE",
                         &c->gamma_lut_size_property_);
   if (ret != 0) {

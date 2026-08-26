@@ -238,15 +238,14 @@ class ColorUtil {
   static float CalculateGammaScale(
       std::optional<float> display_brightness = std::nullopt,
       std::optional<float> hdr_headroom = std::nullopt) {
-    constexpr float kDefaultSignal = 1.F;
-    float brightness = display_brightness.value_or(kDefaultSignal);
-    float headroom = hdr_headroom.value_or(kDefaultSignal);
     auto lut_scale = static_cast<float>(kSignalMax);
-    if (brightness >= kSignalMin && brightness < kSignalMax) {
-      lut_scale = brightness;
+    if (display_brightness.has_value() && *display_brightness >= kSignalMin &&
+        *display_brightness < kSignalMax) {
+      lut_scale = *display_brightness;
     }
-    if (headroom > kSignalMin && headroom < kSignalMax) {
-      lut_scale *= headroom;
+    if (hdr_headroom.has_value() && *hdr_headroom > kSignalMin &&
+        *hdr_headroom < kSignalMax) {
+      lut_scale *= *hdr_headroom;
     }
     return lut_scale;
   }
@@ -262,11 +261,17 @@ class ColorUtil {
       TransferFunction tf, size_t lut_size,
       std::optional<float> display_brightness = std::nullopt,
       std::optional<float> hdr_headroom = std::nullopt);
-
   /**
    * Applies the minimum display brightness floor.
    */
   static auto ScaleBrightnessIfNeeded(float display_brightness) -> float;
+
+  static bool NeedsTonemapping(TransferFunction tf);
+
+  static std::vector<drm_color_lut32> GetLogGammaLut(
+      TransferFunction tf,
+      std::optional<float> display_brightness = std::nullopt,
+      std::optional<float> hdr_headroom = std::nullopt);
 
  private:
   /* Converts a column-major 4x4 float type flat array matrix into

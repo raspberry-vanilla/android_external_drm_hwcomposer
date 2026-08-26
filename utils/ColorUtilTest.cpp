@@ -35,6 +35,7 @@
 #include "drm/DrmColorspace.h"
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
+#include "utils/properties.h"
 
 using ColorGamut = android::ColorSpace;
 
@@ -424,15 +425,14 @@ TEST(ColorUtilTest, CreateDegammaLutValid) {
 
 // Tests for CreateGammaLut
 TEST(ColorUtilTest, CreateGammaLutInvalidLutSize) {
-  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, 1, 1.0F,
-                                             1.0F);
+  const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, 1, 1.F);
   EXPECT_TRUE(lut.empty());
 }
 
 TEST(ColorUtilTest, CreateGammaLutValid) {
   static constexpr size_t kLutSize = 512;
   const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, kLutSize,
-                                             1.0F, 1.0F);
+                                             1.F);
 
   ASSERT_EQ(lut.size(), kLutSize);
 
@@ -765,6 +765,101 @@ TEST(ColorUtilTest, ToDrmColorspaceMappings) {
             DrmColorspace::kDciP3RgbD65);
   EXPECT_EQ(ColorUtil::ToDrmColorspace(HwcColorspace::kBt2020),
             DrmColorspace::kBt2020Rgb);
+}
+
+TEST(ColorUtilTest, NeedsTonemapping) {
+  EXPECT_TRUE(ColorUtil::NeedsTonemapping(TransferFunction::kPq));
+  EXPECT_TRUE(ColorUtil::NeedsTonemapping(TransferFunction::kHlg));
+  EXPECT_FALSE(ColorUtil::NeedsTonemapping(TransferFunction::kSrgb));
+  EXPECT_FALSE(ColorUtil::NeedsTonemapping(TransferFunction::kSmpte170M));
+  EXPECT_FALSE(ColorUtil::NeedsTonemapping(TransferFunction::kUnknown));
+}
+
+TEST(ColorUtilTest, GetLogGammaLutSizeAndRange) {
+  const auto lut = ColorUtil::GetLogGammaLut(TransferFunction::kSrgb);
+  ASSERT_EQ(lut.size(), 513U);
+
+  // Check that standard table entries 0..509 are within [0, 65535]
+  EXPECT_EQ(lut[0].red, 0U);
+  EXPECT_EQ(lut[0].green, 0U);
+  EXPECT_EQ(lut[0].blue, 0U);
+
+  for (size_t i = 0; i < 510; ++i) {
+    EXPECT_LE(lut[i].red, 65535U);
+    EXPECT_LE(lut[i].green, 65535U);
+    EXPECT_LE(lut[i].blue, 65535U);
+  }
+
+  // Segment 22 endpoint (entry 509) reaches full scale (1.0)
+  EXPECT_EQ(lut[509].red, 65535U);
+  EXPECT_EQ(lut[509].green, 65535U);
+  EXPECT_EQ(lut[509].blue, 65535U);
+}
+
+TEST(ColorUtilTest, GetLogGammaLutMonotonicityAndChannelEquality) {
+  for (auto tf : {TransferFunction::kPq, TransferFunction::kHlg,
+                  TransferFunction::kSrgb, TransferFunction::kSmpte170M}) {
+    const auto lut = ColorUtil::GetLogGammaLut(tf);
+    ASSERT_EQ(lut.size(), 513U);
+
+    for (size_t i = 0; i < 513; ++i) {
+      EXPECT_EQ(lut[i].red, lut[i].green);
+      EXPECT_EQ(lut[i].red, lut[i].blue);
+      EXPECT_EQ(lut[i].reserved, 0U);
+    }
+
+    // Standard entries 0..509 must be monotonically non-decreasing
+    for (size_t i = 0; i < 509; ++i) {
+      EXPECT_LE(lut[i].red, lut[i + 1].red);
+    }
+  }
+}
+
+TEST(ColorUtilTest, GetLogGammaLutBoostRegistersEncoding) {
+  const auto lut_srgb = ColorUtil::GetLogGammaLut(TransferFunction::kSrgb);
+  ASSERT_EQ(lut_srgb.size(), 513U);
+
+  // lut[510] is PREC_PAL_GC_MAX (u1.16 format): 1.0 is exactly 1 << 16 (65536)
+  EXPECT_EQ(lut_srgb[510].red, 65536U);
+  EXPECT_EQ(lut_srgb[510].green, 65536U);
+  EXPECT_EQ(lut_srgb[510].blue, 65536U);
+
+  // lut[511] is PREC_PAL_EXT_GC_MAX (u3.16 format for X = 3.0): must be > 1.0 (> 65536)
+  EXPECT_GT(lut_srgb[511].red, 65536U);
+  EXPECT_EQ(lut_srgb[511].red, lut_srgb[511].green);
+  EXPECT_EQ(lut_srgb[511].red, lut_srgb[511].blue);
+
+  // lut[512] is PREC_PAL_EXT2_GC_MAX (u3.16 format for X = 7.0): must be > lut[511]
+  EXPECT_GT(lut_srgb[512].red, lut_srgb[511].red);
+  EXPECT_EQ(lut_srgb[512].red, lut_srgb[512].green);
+  EXPECT_EQ(lut_srgb[512].red, lut_srgb[512].blue);
+
+  // Test PQ
+  const auto lut_pq = ColorUtil::GetLogGammaLut(TransferFunction::kPq);
+  ASSERT_EQ(lut_pq.size(), 513U);
+  EXPECT_EQ(lut_pq[510].red, 65536U);
+  EXPECT_GT(lut_pq[511].red, 65536U);
+  EXPECT_GT(lut_pq[512].red, lut_pq[511].red);
+
+  // Test HLG
+  const auto lut_hlg = ColorUtil::GetLogGammaLut(TransferFunction::kHlg);
+  ASSERT_EQ(lut_hlg.size(), 513U);
+  EXPECT_GT(lut_hlg[510].red, 0U);
+  EXPECT_GT(lut_hlg[511].red, lut_hlg[510].red);
+  EXPECT_GT(lut_hlg[512].red, lut_hlg[511].red);
+}
+
+TEST(ColorUtilTest, UseLogGammaLutSysprop) {
+  EXPECT_FALSE(Properties::UseLogGammaLut());
+
+  {
+    ScopedTestProperty prop("vendor.hwc.use_log_gamma_lut", "true");
+    EXPECT_TRUE(Properties::UseLogGammaLut());
+  }
+  {
+    ScopedTestProperty prop("vendor.hwc.use_log_gamma_lut", "false");
+    EXPECT_FALSE(Properties::UseLogGammaLut());
+  }
 }
 
 }  // namespace android::drm_hwcomposer

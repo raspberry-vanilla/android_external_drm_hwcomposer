@@ -83,6 +83,10 @@ class DrmCrtc : public PipelineBindable<DrmCrtc> {
     return gamma_lut_property_;
   }
 
+  auto &GetLogGammaLutProperty() const {
+    return log_gamma_lut_property_;
+  }
+
   auto &GetGammaLutSizeProperty() const {
     return gamma_lut_size_property_;
   }
@@ -101,6 +105,7 @@ class DrmCrtc : public PipelineBindable<DrmCrtc> {
   DrmProperty degamma_lut_size_property_;
   DrmProperty gamma_lut_property_;
   DrmProperty gamma_lut_size_property_;
+  DrmProperty log_gamma_lut_property_;
 
   DrmProperty active_property_;
   DrmProperty mode_property_;
