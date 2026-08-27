@@ -103,6 +103,12 @@ class HwcDisplay : public ICompositorDisplay {
   };
 
   enum DisplayType { kInternal, kExternal, kVirtual };
+ 
+  enum class BootAnimationState {
+    kActive,
+    kCleanup,
+    kInactive,
+  };
 
   using PowerMode = android::drm_hwcomposer::PowerMode;
 
@@ -433,6 +439,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   const DisplayHandle handle_;
   bool is_virtual_;
+  BootAnimationState boot_animation_state_ = BootAnimationState::kInactive;
 
   std::map<ILayerId, HwcLayer> layers_;
   HwcLayer client_layer_;

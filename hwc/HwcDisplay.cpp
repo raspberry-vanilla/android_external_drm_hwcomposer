@@ -231,6 +231,15 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         break;
       }
 
+      // TODO(b/553171429): Clean up sentinel once early boot animation is active.
+      if (boot_animation_state_ == BootAnimationState::kActive) {
+        hdr_headroom_ = {};
+        SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kSmpte170M);
+        min_bpc_ = 8;
+        colorspace_ = HwcColorspace::kBt2020;
+        break;
+      }
+
       // TODO: pick appropriate HDR type
       SetHdrHeadroom();
       min_bpc_ = 8;
@@ -373,6 +382,13 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
   for (auto &l : layers_) {
     l.second.SetPriorBufferScanOutFlag(l.second.GetValidatedType() !=
                                        CompositionType::kClient);
+  }
+
+  if (boot_animation_state_ == BootAnimationState::kCleanup) {
+    boot_animation_state_ = BootAnimationState::kInactive;
+    if (has_hdr_support_) {
+      SetOutputType(OutputType::kSystem);
+    }
   }
 
   // Notify the flattening controller of a new frame.
@@ -881,6 +897,8 @@ void HwcDisplay::InitHdrSupported() {
 }
 
 bool HwcDisplay::Init() {
+  boot_animation_state_ = BootAnimationState::kActive;
+
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
     if (!vsync_worker_) {
@@ -1024,6 +1042,12 @@ auto HwcDisplay::CreateLayer(ILayerId new_layer_id) -> bool {
 }
 
 auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
+  // TODO(b/553171429): Clean up sentinel once early boot animation is active.
+  // BootAnimation creates a single surface for its entire lifecycle and drops
+  // it on exit. Use the first layer destruction as the completion signal.
+  if (boot_animation_state_ == BootAnimationState::kActive) {
+    boot_animation_state_ = BootAnimationState::kCleanup;
+  }
   auto count = layers_.erase(layer_id);
   return count != 0;
 }
