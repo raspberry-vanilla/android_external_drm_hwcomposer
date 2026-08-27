@@ -1187,16 +1187,20 @@ auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
 }
 
 auto HwcDisplay::StartHdcp() -> bool {
-  /*
-   * Hdcp will be enabled on hotplug or client can request to start Hdcp
-   * With requests to start Hdcp, internal state is set to kDesired
-   * else the state stays as Undesired
-   * Since the HDCP Content and Content Protection prop are optional
-   * We need to make sure the connector has these properties else
-   * return a false to indicate that the request to start/stop
-   * HDCP cannot be completed.
-   */
   if (hdcpcon_ == nullptr) {
+    const int forced_level = Properties::ForceHdcpLevel();
+    if (forced_level == 0) {
+      ALOGI("HDCP requested to start (forced kType0)");
+      hwc_->SendHdcpLevelsChangedEventToClient(handle_,
+                                               HdcpContentType::kType0);
+      return true;
+    }
+    if (forced_level == 1) {
+      ALOGI("HDCP requested to start (forced kType1)");
+      hwc_->SendHdcpLevelsChangedEventToClient(handle_,
+                                               HdcpContentType::kType1);
+      return true;
+    }
     // Virtual emulators lack physical HDCP hardware. Advertise HDCP_V1
     // so secure content and lockscreen bouncers render on external displays.
     if (Properties::IsEmulator()) {

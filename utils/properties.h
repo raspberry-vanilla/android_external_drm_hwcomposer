@@ -46,6 +46,7 @@ class Properties {
   static auto MaxRefreshRate() -> std::optional<int>;
   static auto SkipInternalDisplayReset() -> bool;
   static auto ForceColorMode() -> int;
+  static auto ForceHdcpLevel() -> int;
   static auto PersistentHdrEnabled() -> bool;
   static auto ValidationShortCircuiting() -> bool;
   static auto ShortCircuitIgnoreGeometry() -> bool;

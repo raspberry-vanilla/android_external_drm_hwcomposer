@@ -129,6 +129,16 @@ auto Properties::ForceColorMode() -> int {
 }
 
 /**
+ * Force an HDCP level for displays without HDCP properties.
+ * Negative (< 0): do nothing / default.
+ * 0: force kType0.
+ * 1: force kType1.
+ */
+auto Properties::ForceHdcpLevel() -> int {
+  return property_get_int32("vendor.hwc.drm.force_hdcp_level", -1);
+}
+
+/**
  * Determine if color pipeline feature is enabled. This uses the color pipeline
  * plane property to configure color settings instead of color_encoding etc.
  */
