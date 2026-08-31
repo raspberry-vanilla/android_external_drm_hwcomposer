@@ -1766,6 +1766,19 @@ bool HwcDisplay::NeedsClientLayerUpdate() const {
   });
 }
 
+auto HwcDisplay::GetWritebackBufferFormat() const -> BufferFormat {
+  const bool has_hdr_layer = std::any_of(layers_.begin(), layers_.end(),
+                                         [](const auto &pair) {
+                                           const auto tf = pair.second
+                                                               .GetLayerData()
+                                                               .transfer_func;
+                                           return tf == TransferFunction::kPq ||
+                                                  tf == TransferFunction::kHlg;
+                                         });
+  return (has_hdr_support_ && has_hdr_layer) ? BufferFormat::kRgbaFp16
+                                             : BufferFormat::kRgba8888;
+}
+
 std::optional<LayerData> HwcDisplay::GetModesetLayerData(
     const HwcDisplayConfig *new_config) {
   const uint32_t new_width = new_config->mode.GetRawMode().hdisplay;

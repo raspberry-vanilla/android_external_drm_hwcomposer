@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "bufferinfo/GrallocBufferHandle.h"
+#include "drm_fourcc.h"
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
@@ -47,6 +48,15 @@ BufferInfoGetter *BufferInfoGetter::GetInstance() {
 // NOLINTBEGIN(readability-magic-numbers)
 uint32_t BufferInfoGetter::DrmFormatToBpp(uint32_t format) {
   switch (format) {
+    case DRM_FORMAT_XRGB16161616:
+    case DRM_FORMAT_XBGR16161616:
+    case DRM_FORMAT_ARGB16161616:
+    case DRM_FORMAT_ABGR16161616:
+    case DRM_FORMAT_XRGB16161616F:
+    case DRM_FORMAT_XBGR16161616F:
+    case DRM_FORMAT_ARGB16161616F:
+    case DRM_FORMAT_ABGR16161616F:
+      return 64;
     case DRM_FORMAT_XRGB8888:
     case DRM_FORMAT_ARGB8888:
     case DRM_FORMAT_XBGR8888:
@@ -64,8 +74,8 @@ uint32_t BufferInfoGetter::DrmFormatToBpp(uint32_t format) {
     case DRM_FORMAT_BGR565:
       return 16;
     default:
-      ALOGE("Unsupported format for buffer: 0x%08x", format);
-      return 0;
+      ALOGE("Unsupported format for buffer: 0x%08x, using 32 instead.", format);
+      return 32;
   }
 }
 // NOLINTEND(readability-magic-numbers)
@@ -121,6 +131,8 @@ uint32_t LegacyBufferInfoGetter::ConvertHalFormatToDrm(uint32_t hal_format) {
       return DRM_FORMAT_YVU420;
     case HAL_PIXEL_FORMAT_RGBA_1010102:
       return DRM_FORMAT_ABGR2101010;
+    case HAL_PIXEL_FORMAT_RGBA_FP16:
+      return DRM_FORMAT_ABGR16161616F;
     default:
       ALOGE("Cannot convert hal format to drm format %u", hal_format);
       return DRM_FORMAT_INVALID;
@@ -135,6 +147,7 @@ bool BufferInfoGetter::IsDrmFormatRgb(uint32_t drm_format) {
     case DRM_FORMAT_BGR888:
     case DRM_FORMAT_BGR565:
     case DRM_FORMAT_ABGR2101010:
+    case DRM_FORMAT_ABGR16161616F:
       return true;
     default:
       return false;

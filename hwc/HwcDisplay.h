@@ -27,6 +27,7 @@
 
 #include <ui/ColorSpace.h>
 
+#include "bufferinfo/BufferInfo.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/ICompositorDisplay.h"
@@ -115,6 +116,8 @@ class HwcDisplay : public ICompositorDisplay {
   HwcDisplay(DisplayHandle handle, bool is_virtual, DrmHwc *hwc);
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay() override;
+
+  auto GetWritebackBufferFormat() const -> BufferFormat;
 
   auto GetColorTransformMatrix() const
       -> std::shared_ptr<const HalColorTransformMatrix> override {

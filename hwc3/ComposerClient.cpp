@@ -20,7 +20,6 @@
 
 #include <aidl/android/hardware/graphics/common/Dataspace.h>
 #include <aidl/android/hardware/graphics/common/HdrConversionStrategy.h>
-#include <aidl/android/hardware/graphics/common/PixelFormat.h>
 #include <aidl/android/hardware/graphics/common/Transform.h>
 #include <aidl/android/hardware/graphics/composer3/BnComposerClient.h>
 #include <aidl/android/hardware/graphics/composer3/ClientTarget.h>
@@ -608,13 +607,11 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferAttributes(
 
     if (!display->IsWritebackSupported())
       return ToBinderStatus(hwc3::Error::kUnsupported);
+
+    attrs->format = ToPixelFormat(display->GetWritebackBufferFormat());
+    attrs->dataspace = ToDataspace(display->GetWritebackBufferFormat());
   }
 
-  // TODO(markyacoub): Query the writeback connector to determine the supported
-  // readback buffer attributes (format, dataspace, etc.) Currently, default
-  // values are used.
-  attrs->format = common::PixelFormat::RGBA_8888;
-  attrs->dataspace = common::Dataspace::SRGB;
   return ndk::ScopedAStatus::ok();
 }
 

@@ -20,6 +20,7 @@
 #include <math/mat4.h>
 #include <ui/ColorSpace.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,7 @@ inline const ColorGamut kBt709Gamut = ColorGamut::BT709();
 inline const ColorGamut kDciP3Gamut = ColorGamut::DCIP3();
 inline const ColorGamut kBt2020Gamut = ColorGamut::BT2020();
 
+inline constexpr float kSdrReferenceWhiteLevel = 203.F;
 inline constexpr float kHdrReferenceLuminance = 10000.F;
 inline constexpr float kDefaultMaxLuminance = 500.F;
 
@@ -56,8 +58,41 @@ inline constexpr double kSignalMax = 1.0;
 inline constexpr float kMinBrightness = 0.0F;
 inline constexpr float kMaxBrightness = 1.0F;
 
+static constexpr size_t kHdrBoostLutSize = 2048;
+
 class ColorUtil {
  public:
+  /* Evaluates the tone-mapping multiplier for a linear signal level. */
+  // NOLINTBEGIN(readability-magic-numbers)
+  static constexpr double BoostHdrMultiplier(double signal) {
+    constexpr double kShadowBoost = 3.0;
+    constexpr double kShadowLimit = kSdrReferenceWhiteLevel /
+                                    kHdrReferenceLuminance;
+    constexpr double kHighlightBaseline = 0.32 / kShadowLimit;
+    double shadow_fraction = std::clamp(1.0 - (signal / kShadowLimit), 0.0,
+                                        1.0);
+    double multiplier = 1.0 +
+                        (kShadowBoost * shadow_fraction * shadow_fraction *
+                         shadow_fraction * shadow_fraction);
+    return multiplier * kHighlightBaseline;
+  }
+  // NOLINTEND(readability-magic-numbers)
+
+  /* Generator for the 1D HDR Highlight & Shadow Tone-Mapping Boost LUT. */
+  static constexpr std::array<float, kHdrBoostLutSize> GenerateHdrBoostLut() {
+    std::array<float, kHdrBoostLutSize> lut{};
+    for (size_t i = 0; i < kHdrBoostLutSize; ++i) {
+      auto signal = static_cast<double>(i) /
+                    static_cast<double>(kHdrBoostLutSize - 1);
+      lut[i] = static_cast<float>(BoostHdrMultiplier(signal));
+    }
+    return lut;
+  }
+
+  /* Precomputed 2048-entry table stored in read-only memory */
+  static inline const std::array<float, kHdrBoostLutSize>
+      kHdrBoostLut = ColorUtil::GenerateHdrBoostLut();
+
   /**
    * Keep in sync with the Dataspace.aidl ARIB STD-B67 Hybrid Log Gamma (HLG)
    * definition

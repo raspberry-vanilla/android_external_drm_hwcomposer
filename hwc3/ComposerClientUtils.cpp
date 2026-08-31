@@ -23,9 +23,12 @@
 #include <aidl/android/hardware/graphics/composer3/Composition.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/DisplayCommand.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayLuts.h>
 #include <aidl/android/hardware/graphics/composer3/LayerBrightness.h>
 #include <aidl/android/hardware/graphics/composer3/LayerCommand.h>
 #include <aidl/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.h>
+#include <aidl/android/hardware/graphics/composer3/LutProperties.h>
+#include <aidl/android/hardware/graphics/composer3/Luts.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableBlendMode.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableComposition.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableDataspace.h>
@@ -35,17 +38,22 @@
 #include <aidl/android/hardware/graphics/composer3/ZOrder.h>
 #include <aidlcommonsupport/NativeHandle.h>
 #include <android-base/unique_fd.h>
+#include <cutils/ashmem.h>
 #include <cutils/native_handle.h>
+#include <sys/mman.h>  // IWYU pragma: keep
 #include <utils/Trace.h>
 
 #include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "bufferinfo/BufferInfo.h"
@@ -59,6 +67,7 @@
 #include "hwc3/CommandResultWriter.h"
 #include "hwc3/DrmHwcThree.h"
 #include "hwc3/Utils.h"
+#include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -66,6 +75,7 @@ using ::android::drm_hwcomposer::BufferBlendMode;
 using ::android::drm_hwcomposer::BufferColorEncoding;
 using ::android::drm_hwcomposer::BufferInfo;
 using ::android::drm_hwcomposer::BufferSampleRange;
+using ::android::drm_hwcomposer::ColorUtil;
 using ::android::drm_hwcomposer::CompositionType;
 using ::android::drm_hwcomposer::DamageInfo;
 using ::android::drm_hwcomposer::DrmFbIdHandle;
@@ -79,6 +89,7 @@ using ::android::drm_hwcomposer::HwcLayer;
 using ::android::drm_hwcomposer::IRect;
 using ::android::drm_hwcomposer::LayerTransform;
 using ::android::drm_hwcomposer::MakeSharedFd;
+using ::android::drm_hwcomposer::SharedFd;
 using ::android::drm_hwcomposer::SrcRectInfo;
 using ::android::drm_hwcomposer::TransferFunction;
 
@@ -181,6 +192,9 @@ std::optional<BufferSampleRange> AidlToSampleRange(
   int32_t sample_range = static_cast<int32_t>(dataspace) &
                          static_cast<int32_t>(common::Dataspace::RANGE_MASK);
   switch (sample_range) {
+    case static_cast<int32_t>(common::Dataspace::RANGE_EXTENDED):
+      // Extended implies full + headroom
+      [[fallthrough]];
     case static_cast<int32_t>(common::Dataspace::RANGE_FULL):
       return BufferSampleRange::kFullRange;
     case static_cast<int32_t>(common::Dataspace::RANGE_LIMITED):
@@ -639,6 +653,32 @@ void ExecuteSetDisplayOutputBuffer(DrmHwc& hwc, int64_t display_handle,
   writeback_layer->SetLayerProperties(properties);
 }
 
+const SharedFd& GetCachedHdrBoostLutFd() {
+  static const SharedFd kLutFd = []() -> SharedFd {
+    constexpr size_t kBufferSize = ColorUtil::kHdrBoostLut.size() *
+                                   sizeof(float);
+    ::android::base::unique_fd fd(
+        ashmem_create_region("hwc_layer_lut", kBufferSize));
+    if (fd < 0) {
+      ALOGE("Failed to create ashmem region for hwc_layer_lut: %d", fd.get());
+      return nullptr;
+    }
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    void* ptr = mmap(nullptr, kBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED,
+                     fd.get(), 0);
+    if (ptr == MAP_FAILED) {
+      ALOGE("Failed to mmap ashmem for hwc_layer_lut");
+      return nullptr;
+    }
+    std::memcpy(ptr, ColorUtil::kHdrBoostLut.data(), kBufferSize);
+    munmap(ptr, kBufferSize);
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    ashmem_set_prot_region(fd.get(), PROT_READ);
+    return MakeSharedFd(fd.release());
+  }();
+  return kLutFd;
+}
+
 }  // namespace
 
 void NativeHandleDeleter::operator()(const native_handle_t* h) const {
@@ -736,6 +776,45 @@ void ExecuteDisplayCommand(DrmHwcThree& hwc, const DisplayCommand& command,
       changes.AddLayerClearRequest(command.display, layer_id);
     }
     cmd_result_writer.AddChanges(changes);
+
+    auto buffer_format = display->GetWritebackBufferFormat();
+    if (buffer_format == ::android::drm_hwcomposer::BufferFormat::kRgbaFp16) {
+      std::vector<DisplayLuts::LayerLut> layer_luts;
+      constexpr int32_t kLutSize = ColorUtil::kHdrBoostLut.size();
+      const SharedFd& lut_fd = GetCachedHdrBoostLutFd();
+      if (lut_fd) {
+        for (auto& [layer_id, layer] : display->layers()) {
+          if (layer.GetLayerData().transfer_func == TransferFunction::kPq) {
+            int dup_fd = DupFd(lut_fd);
+            if (dup_fd >= 0) {
+              Luts layer_lut;
+              layer_lut.pfd = ndk::ScopedFileDescriptor(dup_fd);
+              layer_lut.offsets = std::vector<int32_t>{0};
+              layer_lut.lutProperties = {
+                  LutProperties{
+                      .dimension = LutProperties::Dimension::ONE_D,
+                      .size = kLutSize,
+                      .samplingKeys = {LutProperties::SamplingKey::MAX_RGB},
+                  },
+              };
+              layer_luts.push_back(DisplayLuts::LayerLut{
+                  .layer = layer_id,
+                  .luts = std::move(layer_lut),
+              });
+            }
+          }
+        }
+
+        if (!layer_luts.empty()) {
+          cmd_result_writer.AddDisplayLuts(display_handle,
+                                           std::move(layer_luts));
+        }
+      }
+    }
+
+    cmd_result_writer.AddClientTarget(display_handle,
+                                      ToDataspace(buffer_format),
+                                      ToPixelFormat(buffer_format));
     auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
     hwc.ClearMustValidateDisplay(display_handle);
     hwc3_display->desired_present_time = AidlToPresentTimeNs(
@@ -783,6 +862,42 @@ void ExecuteDisplayCommand(DrmHwcThree& hwc, const DisplayCommand& command,
       hal_release_fences[layer_id] = unique_fd(DupFd(release_fence));
     }
     cmd_result_writer.AddReleaseFence(display_handle, hal_release_fences);
+  }
+}
+
+auto ToPixelFormat(::android::drm_hwcomposer::BufferFormat format)
+    -> common::PixelFormat {
+  switch (format) {
+    case ::android::drm_hwcomposer::BufferFormat::kRgba8888:
+      return common::PixelFormat::RGBA_8888;
+    case ::android::drm_hwcomposer::BufferFormat::kXrgb8888:
+      return common::PixelFormat::RGBX_8888;
+    case ::android::drm_hwcomposer::BufferFormat::kRgbaFp16:
+      return common::PixelFormat::RGBA_FP16;
+    case ::android::drm_hwcomposer::BufferFormat::kRgba1010102:
+      return common::PixelFormat::RGBA_1010102;
+    case ::android::drm_hwcomposer::BufferFormat::kUndefined:
+    default:
+      ALOGW("Unsupported buffer format: %u, using RGBA_8888 instead.",
+            static_cast<uint32_t>(format));
+      return common::PixelFormat::RGBA_8888;
+  }
+}
+
+auto ToDataspace(::android::drm_hwcomposer::BufferFormat format)
+    -> common::Dataspace {
+  switch (format) {
+    case ::android::drm_hwcomposer::BufferFormat::kRgba8888:
+    case ::android::drm_hwcomposer::BufferFormat::kXrgb8888:
+      return common::Dataspace::SRGB;
+    case ::android::drm_hwcomposer::BufferFormat::kRgbaFp16:
+    case ::android::drm_hwcomposer::BufferFormat::kRgba1010102:
+      return common::Dataspace::DISPLAY_BT2020;
+    case ::android::drm_hwcomposer::BufferFormat::kUndefined:
+    default:
+      ALOGW("Unsupported buffer format: %u, using SRGB instead.",
+            static_cast<uint32_t>(format));
+      return common::Dataspace::SRGB;
   }
 }
 

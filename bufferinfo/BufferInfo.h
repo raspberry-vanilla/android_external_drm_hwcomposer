@@ -23,6 +23,14 @@ namespace android::drm_hwcomposer {
 
 constexpr int kBufferMaxPlanes = 4;
 
+enum class BufferFormat : int32_t {
+  kUndefined,
+  kXrgb8888,
+  kRgba8888,
+  kRgbaFp16,
+  kRgba1010102,
+};
+
 enum class BufferColorEncoding : int32_t {
   kUndefined,
   kItuRec601,

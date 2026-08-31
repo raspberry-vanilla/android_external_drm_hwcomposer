@@ -21,6 +21,7 @@
 
 #include <memory>
 
+#include "bufferinfo/BufferInfo.h"
 #include "hwc/HwcDisplay.h"
 
 // Forward declarations
@@ -30,6 +31,11 @@ class DrmFbIdHandle;
 class GrallocBufferCache;
 class HwcLayer;
 }  // namespace android::drm_hwcomposer
+
+namespace aidl::android::hardware::graphics::common {
+enum class Dataspace;
+enum class PixelFormat;
+}  // namespace aidl::android::hardware::graphics::common
 
 namespace aidl::android::hardware::graphics::composer3 {
 class CommandResultWriter;
@@ -42,6 +48,12 @@ class DrmHwcThree;
 struct NativeHandleDeleter {
   void operator()(const native_handle_t* h) const;
 };
+
+auto ToPixelFormat(::android::drm_hwcomposer::BufferFormat format)
+    -> common::PixelFormat;
+
+auto ToDataspace(::android::drm_hwcomposer::BufferFormat format)
+    -> common::Dataspace;
 
 auto ImportFb(const ::android::drm_hwcomposer::HwcDisplay* display,
               ::android::drm_hwcomposer::BufferInfo& bi)

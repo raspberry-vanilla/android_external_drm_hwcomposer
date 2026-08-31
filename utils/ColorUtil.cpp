@@ -228,6 +228,10 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
 
     signal = is_degamma ? EvaluateEotf(tf, signal) : EvaluateOetf(tf, signal);
 
+    if (is_degamma && ColorUtil::NeedsTonemapping(tf)) {
+      signal *= ColorUtil::BoostHdrMultiplier(signal);
+    }
+
     if constexpr (std::is_same_v<T, drm_color_lut32>) {
       lut[i].red = lut[i].green = lut[i].blue = SignalToUint32(signal);
     } else {

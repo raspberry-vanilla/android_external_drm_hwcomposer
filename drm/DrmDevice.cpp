@@ -466,12 +466,7 @@ class DumbBufferFd : public PrimeFdsSharedBase {
 auto DrmDevice::CreateDumbBuffer(uint32_t width, uint32_t height,
                                  uint32_t format, uint32_t prime_fd_flags)
     -> std::optional<BufferInfo> {
-  uint32_t bpp = BufferInfoGetter::DrmFormatToBpp(format);
-  if (bpp == 0) {
-    ALOGE("CreateDumbBuffer: Unsupported format %u", format);
-    return {};
-  }
-
+  const uint32_t bpp = BufferInfoGetter::DrmFormatToBpp(format);
   std::optional<BufferInfo> result;
   void *ptr = MAP_FAILED;
   struct drm_mode_create_dumb create = {
