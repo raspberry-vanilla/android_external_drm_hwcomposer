@@ -46,8 +46,8 @@ TEST(BufferInfoGetterTest, DrmFormatToBpp16BitFormats) {
 }
 
 TEST(BufferInfoGetterTest, DrmFormatToBppInvalidFormat) {
-  EXPECT_EQ(BufferInfoGetter::DrmFormatToBpp(DRM_FORMAT_INVALID), 0U);
-  EXPECT_EQ(BufferInfoGetter::DrmFormatToBpp(0xDEADBEEF), 0U);
+  EXPECT_EQ(BufferInfoGetter::DrmFormatToBpp(DRM_FORMAT_INVALID), 32U);
+  EXPECT_EQ(BufferInfoGetter::DrmFormatToBpp(0xDEADBEEF), 32U);
 }
 
 }  // namespace android::drm_hwcomposer

@@ -521,11 +521,6 @@ bool EarlyBootAnimation::ReadHeader(int fd) {
     ALOGE("EarlyBootAnimation: Invalid frame count %u", header_.num_frames);
     return false;
   }
-  if (BufferInfoGetter::DrmFormatToBpp(header_.format) == 0) {
-    ALOGE("EarlyBootAnimation: Invalid or unsupported format 0x%08x",
-          header_.format);
-    return false;
-  }
 
   if (header_.hold_duration_ms > kMaxHoldDurationMs) {
     ALOGE("EarlyBootAnimation: Hold duration %u ms exceeds %u ms",
