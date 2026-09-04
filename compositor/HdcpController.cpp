@@ -31,6 +31,10 @@
 
 namespace android::drm_hwcomposer {
 
+namespace {
+constexpr auto kEarlyCheckInterval = std::chrono::milliseconds(100);
+}  // namespace
+
 HdcpController::HdcpController(const DrmDisplayPipeline* pipeline,
                                HdcpConCallbacks callbacks,
                                std::chrono::milliseconds timeout)
@@ -164,13 +168,13 @@ void HdcpController::ThreadFn() {
           fire_callback = true;
         } else {
           ALOGV("Wait_until");
-          // Wait for 1 second or until sleep_until_, whichever is earlier,
+          // Wait for kEarlyCheckInterval or until sleep_until_, whichever is earlier,
           // to re-check the HDCP status.
           // This is to handle the case where HDCP status change times are
           // variable and can sometimes take a long time, so we want to re-check
           // the status periodically until the timeout expires.
           cv_.wait_until(lock,
-                         std::min(sleep_until_, now + std::chrono::seconds(1)));
+                         std::min(sleep_until_, now + kEarlyCheckInterval));
           // hdcp_state_ could have been changed while waiting, so check the
           // hdcp_state_ again.
           if (hdcp_state_ == HdcpState::kRequested) {
@@ -188,7 +192,7 @@ void HdcpController::ThreadFn() {
     // This needs to happen outside of the lock to avoid blocking other
     // operations while potentially performing I/O or other long-running tasks.
     if (early_check) {
-      if (pipeline_->connector->Get()->IsContentProtectionEnabled()) {
+      if (pipeline_->connector->Get()->QueryContentProtectionEnabled()) {
         SetContentProtectionStatus();
       }
     } else if (fire_callback) {

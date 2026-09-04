@@ -88,7 +88,9 @@ namespace {
 
 // NOLINTBEGIN(misc-include-cleaner)
 constexpr auto kFlatteningTimeout = 1s;
-constexpr auto kHdcpRetryTimeout = 30s;
+// 6s accommodates the DP HDCP 2.2 repeater spec limit (t_rxlist <= 3.0s),
+// AKE protocol overhead, and driver retries matching Intel IGT test allowances.
+constexpr auto kHdcpRetryTimeout = 6s;
 // NOLINTEND(misc-include-cleaner)
 
 // Client target buffer may be updated since the composition was validated,
