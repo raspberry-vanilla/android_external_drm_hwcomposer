@@ -258,8 +258,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
         default:
           ALOGW("HDR type %d is not supported, using Display BT2020 instead.",
                 static_cast<int>(type));
-          SetHdrOutputMetadata(kBt2020Gamut,
-                               TransferFunction::kSmpte170M);
+          SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kSmpte170M);
           break;
       }
       break;
@@ -860,6 +859,20 @@ void HwcDisplay::InitHdrSupported() {
     return;
   }
 
+  if (!GetPipe().connector || !GetPipe().connector->Get()) {
+    has_hdr_support_ = false;
+    return;
+  }
+
+  const bool hdr_sysprop_enabled = GetPipe().connector->Get()->IsExternal()
+                                       ? hwc_->GetResMan().ExternalHdrEnabled()
+                                       : hwc_->GetResMan()
+                                             .PersistentHdrEnabled();
+  if (!hdr_sysprop_enabled) {
+    has_hdr_support_ = false;
+    return;
+  }
+
   if (pipeline_->capabilities) {
     auto override_types = pipeline_->capabilities->GetHdrTypesOverride();
     if (override_types.has_value()) {
@@ -876,19 +889,8 @@ void HwcDisplay::InitHdrSupported() {
   std::vector<ui::Hdr> hdr_types;
   GetEdid()->GetSupportedHdrTypes(hdr_types);
 
-  if (!GetPipe().connector || !GetPipe().connector->Get()) {
-    has_hdr_support_ = false;
-    return;
-  }
-
-  const bool hdr_sysprop_enabled = GetPipe().connector->Get()->IsExternal()
-                                       ? hwc_->GetResMan().ExternalHdrEnabled()
-                                       : hwc_->GetResMan()
-                                             .PersistentHdrEnabled();
-
   // TODO check for HDR types
   has_hdr_support_ = use_color_pipeline_ && crtc_gamma && has_wcg_support_ &&
-                     hdr_sysprop_enabled &&
                      GetPipe()
                          .connector->Get()
                          ->GetHdrOutputMetadataProperty() &&
@@ -945,8 +947,8 @@ bool HwcDisplay::Init() {
       auto backlights = SysfsBacklightController::EnumerateBacklights();
       for (const auto &name : backlights) {
         // TODO(seanpaul): logic to associate backlight with connector
-        backlight_controller_ = SysfsBacklightController::CreateInstanceFromName(
-            name);
+        backlight_controller_ = SysfsBacklightController::
+            CreateInstanceFromName(name);
         if (backlight_controller_) {
           ALOGI("Associated backlight %s with display %d", name.c_str(),
                 static_cast<int>(handle_));

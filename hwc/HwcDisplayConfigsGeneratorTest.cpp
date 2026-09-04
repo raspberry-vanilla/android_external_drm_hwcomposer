@@ -190,7 +190,8 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrEnabledExternal) {
             OutputType::kSystem);
 }
 
-TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrEnabledViaBackend) {
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigsHdrDisabledInternalViaBackendWithoutPersistent) {
   auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
                                                       /*is_external=*/false,
                                                       500, 300);
@@ -209,6 +210,37 @@ TEST_F(HwcDisplayConfigsGeneratorTest, GetDisplayConfigsHdrEnabledViaBackend) {
   HwcConfigParameters params = {
       .use_color_pipeline = false,
       .persistent_hdr_enabled = false,
+      .capabilities = &capabilities,
+  };
+
+  const auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  const auto& configs = *configs_opt;
+  EXPECT_EQ(configs.hwc_configs.size(), 1);
+  EXPECT_EQ(configs.hwc_configs.begin()->second.output_type, OutputType::kSdr);
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       GetDisplayConfigsHdrEnabledInternalViaBackendWithPersistent) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 60.0F, 0, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  MockBackendDisplayCapabilities capabilities;
+  std::vector<ui::Hdr> hdr_types = {ui::Hdr::HDR10};
+  EXPECT_CALL(capabilities, GetHdrTypesOverride())
+      .WillOnce(testing::Return(hdr_types));
+  EXPECT_CALL(capabilities, FilterModes(testing::_))
+      .WillRepeatedly(testing::ReturnArg<0>());
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = true,
       .capabilities = &capabilities,
   };
 

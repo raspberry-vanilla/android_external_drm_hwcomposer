@@ -124,16 +124,19 @@ HwcDisplayConfigsGenerator::GenerateDisplayConfigs(
   configs.mm_width = connector.GetMmWidth();
   configs.mm_height = connector.GetMmHeight();
 
-  bool enable_hdr = params.use_color_pipeline &&
-                    (connector.IsExternal() ? params.external_hdr_enabled
-                                            : params.persistent_hdr_enabled);
-
+  // Devices configure HDR capability either through the generic DRM color
+  // pipeline (e.g. Intel, MediaTek) or via backend capabilities overrides
+  // (e.g. Qualcomm SDM).
+  bool enable_hdr = params.use_color_pipeline;
   if (params.capabilities != nullptr) {
     auto override_types = params.capabilities->GetHdrTypesOverride();
     if (override_types.has_value()) {
       enable_hdr = !override_types.value().empty();
     }
   }
+  enable_hdr = enable_hdr &&
+               (connector.IsExternal() ? params.external_hdr_enabled
+                                       : params.persistent_hdr_enabled);
 
   // Order determines preferred output type
   const std::vector<OutputType>
