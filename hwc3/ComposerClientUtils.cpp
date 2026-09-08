@@ -609,6 +609,10 @@ void ExecuteSetDisplayClientTarget(DrmHwc& hwc, int64_t display_handle,
       .transfer_func = AidlToTransferFunc(command.dataspace),
   };
   client_layer.SetLayerProperties(properties);
+
+  cmd_result_writer.AddClientTarget(display_handle, command.dataspace,
+                                    ToPixelFormat(
+                                        display->GetWritebackBufferFormat()));
 }
 
 void ExecuteSetDisplayOutputBuffer(DrmHwc& hwc, int64_t display_handle,
@@ -812,9 +816,6 @@ void ExecuteDisplayCommand(DrmHwcThree& hwc, const DisplayCommand& command,
       }
     }
 
-    cmd_result_writer.AddClientTarget(display_handle,
-                                      ToDataspace(buffer_format),
-                                      ToPixelFormat(buffer_format));
     auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
     hwc.ClearMustValidateDisplay(display_handle);
     hwc3_display->desired_present_time = AidlToPresentTimeNs(
@@ -881,23 +882,6 @@ auto ToPixelFormat(::android::drm_hwcomposer::BufferFormat format)
       ALOGW("Unsupported buffer format: %u, using RGBA_8888 instead.",
             static_cast<uint32_t>(format));
       return common::PixelFormat::RGBA_8888;
-  }
-}
-
-auto ToDataspace(::android::drm_hwcomposer::BufferFormat format)
-    -> common::Dataspace {
-  switch (format) {
-    case ::android::drm_hwcomposer::BufferFormat::kRgba8888:
-    case ::android::drm_hwcomposer::BufferFormat::kXrgb8888:
-      return common::Dataspace::SRGB;
-    case ::android::drm_hwcomposer::BufferFormat::kRgbaFp16:
-    case ::android::drm_hwcomposer::BufferFormat::kRgba1010102:
-      return common::Dataspace::DISPLAY_BT2020;
-    case ::android::drm_hwcomposer::BufferFormat::kUndefined:
-    default:
-      ALOGW("Unsupported buffer format: %u, using SRGB instead.",
-            static_cast<uint32_t>(format));
-      return common::Dataspace::SRGB;
   }
 }
 
