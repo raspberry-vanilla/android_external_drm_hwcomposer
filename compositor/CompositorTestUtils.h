@@ -94,4 +94,7 @@ class CompositorTestUtils {
                               bool is_active = false);
 };
 
+auto CreateValidatedComposition(const std::vector<const HwcLayer*>& layers)
+    -> CompositionPlanner::ValidatedComposition;
+
 }  // namespace android::drm_hwcomposer

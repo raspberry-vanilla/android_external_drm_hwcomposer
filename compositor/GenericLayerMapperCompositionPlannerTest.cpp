@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "compositor/CompositionPlanner.h"
@@ -46,6 +47,7 @@ using ::testing::Contains;
 using ::testing::Field;
 using ::testing::Pair;
 using ::testing::Return;
+using ::testing::ReturnRef;
 using ::testing::ReturnRefOfCopy;
 
 constexpr float kOpaque = 1.0F;
@@ -1429,6 +1431,76 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                     {&wallpaper, CompositionType::kDevice},
                                     {&cursor, CompositionType::kCursor}}));
   EXPECT_TRUE(composition.cursor_plane_validated);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest, ShortCircuited) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 100,
+                                                           .top = 100,
+                                                           .right = 600,
+                                                           .bottom = 600},
+                                                     /*z_order=*/1,
+                                                     CompositionType::kClient);
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/2,
+                                                     CompositionType::kCursor);
+  std::vector<const HwcLayer*> ordered_layer_ptrs = {&layer1, &layer2, &cursor};
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(ordered_layer_ptrs));
+
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+
+  FakeDrmDevice device;
+  std::shared_ptr<FakeDrmPlane>
+      cursor_plane = std::make_shared<FakeDrmPlane>(device,
+                                                    DRM_PLANE_TYPE_CURSOR,
+                                                    /*is_valid=*/true);
+
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane())
+      .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
+  EXPECT_CALL(mock_display, GetColorTransformMatrix())
+      .WillRepeatedly(Return(kIdentityCtm));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
+
+  // Set up the composition cache mocking a previous identical composition.
+  PresentedCompositionCache composition_cache;
+  auto last_composition = CreateValidatedComposition(ordered_layer_ptrs);
+  {
+    auto last_request = ValidationRequestContext(mock_display,
+                                                 ordered_layer_ptrs);
+    ASSERT_TRUE(last_request);
+    ASSERT_TRUE(composition_cache.SetRequestedContext(std::move(last_request)));
+    ASSERT_TRUE(composition_cache.SetValidatedComposition(last_composition));
+    ASSERT_TRUE(composition_cache.GetContext().has_value());
+  }
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRef(composition_cache));
+
+  // Validate the display and check whether it was short circuited.
+  auto [composition, short_circuited] = planner.ValidateDisplay(&mock_display);
+  EXPECT_TRUE(short_circuited);
+  EXPECT_EQ(composition, last_composition);
 }
 }  // namespace android::drm_hwcomposer
 

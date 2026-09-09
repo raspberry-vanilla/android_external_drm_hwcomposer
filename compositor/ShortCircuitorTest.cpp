@@ -73,22 +73,6 @@ auto ToConstPtrList(const LayerList& layers) -> std::vector<const HwcLayer*> {
   return result;
 }
 
-auto CreateCompositionTypeMap(const std::vector<const HwcLayer*>& layers)
-    -> CompositionPlanner::CompositionTypeMap {
-  CompositionPlanner::CompositionTypeMap type_map;
-  for (const auto* layer : layers)
-    type_map.emplace(layer, layer->GetSfType());
-  return type_map;
-}
-
-auto CreateValidatedComposition(const std::vector<const HwcLayer*>& layers)
-    -> CompositionPlanner::ValidatedComposition {
-  return {.composition_types = CreateCompositionTypeMap(layers),
-          .flatten_reason = CompositionPlanner::FlattenReason::kNone,
-          .cursor_plane_validated = layers.back()->GetSfType() ==
-                                    CompositionType::kCursor};
-}
-
 }  // namespace
 
 struct ShortCircuitorTest : public ::testing::Test {

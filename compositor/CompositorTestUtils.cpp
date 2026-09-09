@@ -19,8 +19,10 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "bufferinfo/BufferInfo.h"
+#include "compositor/CompositionPlanner.h"
 #include "compositor/FrameTimeHistory.h"
 #include "compositor/ICompositorDisplay.h"
 #include "compositor/LayerData.h"
@@ -40,6 +42,14 @@ FrameTimeHistory CreateFrameTimeHistory(bool is_active) {
     }
   }
   return history;
+}
+
+auto CreateCompositionTypeMap(const std::vector<const HwcLayer*>& layers)
+    -> CompositionPlanner::CompositionTypeMap {
+  CompositionPlanner::CompositionTypeMap type_map;
+  for (const auto* layer : layers)
+    type_map.emplace(layer, layer->GetSfType());
+  return type_map;
 }
 }  // namespace
 
@@ -67,5 +77,13 @@ HwcLayer CompositorTestUtils::CreateLayer(ICompositorDisplay* display,
   layer.layer_data_.frame_time_history = CreateFrameTimeHistory(is_active);
 
   return layer;
+}
+
+auto CreateValidatedComposition(const std::vector<const HwcLayer*>& layers)
+    -> CompositionPlanner::ValidatedComposition {
+  return {.composition_types = CreateCompositionTypeMap(layers),
+          .flatten_reason = CompositionPlanner::FlattenReason::kNone,
+          .cursor_plane_validated = layers.back()->GetSfType() ==
+                                    CompositionType::kCursor};
 }
 }  // namespace android::drm_hwcomposer
