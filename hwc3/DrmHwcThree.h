@@ -78,9 +78,11 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
  private:
   std::shared_ptr<IComposerCallback> composer_callback_;
 
-  std::mutex must_validate_lock_;
+  std::mutex display_state_lock_;
   std::set<::android::drm_hwcomposer::DisplayHandle> must_validate_
-      GUARDED_BY(must_validate_lock_);
+      GUARDED_BY(display_state_lock_);
+  std::set<::android::drm_hwcomposer::DisplayHandle> connected_displays_
+      GUARDED_BY(display_state_lock_);
 };
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

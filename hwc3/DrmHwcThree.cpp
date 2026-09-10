@@ -51,6 +51,10 @@ DrmHwcThree::~DrmHwcThree() {
 }
 
 void DrmHwcThree::SetCallback(std::shared_ptr<IComposerCallback> callback) {
+  {
+    const std::scoped_lock lock(display_state_lock_);
+    connected_displays_.clear();
+  }
   composer_callback_ = std::move(callback);
 }
 
@@ -73,11 +77,20 @@ void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
 void DrmHwcThree::SendRefreshEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle) {
   {
-    const std::scoped_lock lock(must_validate_lock_);
+    const std::scoped_lock lock(display_state_lock_);
     must_validate_.insert(display_handle);
   }
   if (!composer_callback_) {
     return;
+  }
+  {
+    const std::scoped_lock lock(display_state_lock_);
+    // This is still racy if hotplugDisconnect is sent between checking
+    // connected_displays_ and firing the callback, but this shouldn't be a
+    // problem.
+    if (connected_displays_.count(display_handle) == 0) {
+      return;
+    }
   }
   composer_callback_->onRefresh(static_cast<int64_t>(display_handle));
 }
@@ -109,12 +122,23 @@ void DrmHwcThree::SendHotplugEventToClient(
   }
   if (event == common::DisplayHotplugEvent::DISCONNECTED) {
     ClearMustValidateDisplay(display_handle);
+    const std::scoped_lock lock(display_state_lock_);
+    // Clearing before sending the event is intentional so that subsequent
+    // refresh events are dropped immediately.
+    connected_displays_.erase(display_handle);
   }
   if (!composer_callback_) {
     return;
   }
   composer_callback_->onHotplugEvent(static_cast<int64_t>(display_handle),
                                      event);
+  if (event == common::DisplayHotplugEvent::CONNECTED) {
+    const std::scoped_lock lock(display_state_lock_);
+    // Populating connected_displays_ after the callback is fired is intentional
+    // so that the client has processed the hotplug event before any refresh
+    // callbacks are delivered.
+    connected_displays_.insert(display_handle);
+  }
 }
 
 void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
@@ -149,13 +173,13 @@ void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
 
 auto DrmHwcThree::GetMustValidateDisplay(
     ::android::drm_hwcomposer::DisplayHandle display_handle) -> bool {
-  std::scoped_lock lock(must_validate_lock_);
+  std::scoped_lock lock(display_state_lock_);
   return must_validate_.find(display_handle) != must_validate_.end();
 }
 
 void DrmHwcThree::ClearMustValidateDisplay(
     ::android::drm_hwcomposer::DisplayHandle display_handle) {
-  std::scoped_lock lock(must_validate_lock_);
+  std::scoped_lock lock(display_state_lock_);
   must_validate_.erase(display_handle);
 }
 
