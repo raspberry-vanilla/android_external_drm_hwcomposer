@@ -59,6 +59,7 @@ void HdcpController::Start() {
     if (hdcp_state_ != HdcpState::kRetry &&
         hdcp_state_ != HdcpState::kInfeasible &&
         hdcp_state_ != HdcpState::kEnabled) {
+      ALOGI("HDCP requested to start");
       hdcp_state_ = HdcpState::kDesired;
       changed = true;
     }

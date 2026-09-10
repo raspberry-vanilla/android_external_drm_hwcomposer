@@ -78,6 +78,10 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   void ClearMustValidateDisplay(
       ::android::drm_hwcomposer::DisplayHandle display_handle);
 
+  auto& GetDisplays() {
+    return Displays();
+  }
+
  private:
   std::shared_ptr<IComposerCallback> composer_callback_;
 

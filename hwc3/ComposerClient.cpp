@@ -66,7 +66,9 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmFbImporter.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
@@ -1212,32 +1214,68 @@ ndk::ScopedAStatus ComposerClient::notifyExpectedPresent(
 
 ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
     int64_t display_handle, const drm::HdcpLevels& levels) {
-  ndk::ScopedAStatus status;
-  HwcDisplay* display = GetDisplay(display_handle);
-  if (display == nullptr) {
-    status = ToBinderStatus(hwc3::Error::kBadDisplay);
-  } else {
-    status = ToBinderStatus(hwc3::Error::kBadParameter);
-    // Client can only request lazy HDCP activation/start
-    // TODO: Add HDCP terminate/stop request once client handles it
-    if (levels.connectedLevel != drm::HdcpLevel::HDCP_NONE &&
-        levels.connectedLevel != drm::HdcpLevel::HDCP_UNKNOWN) {
-      ALOGI("Requested to start HDCP for connected level : %d",
-            static_cast<int>(levels.connectedLevel));
-      if (display->StartHdcp()) {
-        status = ndk::ScopedAStatus::ok();
-      } else {
-        status = ToBinderStatus(hwc3::Error::kUnsupported);
+  // Client can only request lazy HDCP activation/start
+  // TODO: Add HDCP terminate/stop request once client handles it
+  if (levels.connectedLevel == drm::HdcpLevel::HDCP_NONE ||
+      levels.connectedLevel == drm::HdcpLevel::HDCP_UNKNOWN) {
+    hwc_->NotifyHdcpErrorToClient(display_handle);
+    return ToBinderStatus(hwc3::Error::kBadParameter);
+  }
+
+  ALOGI("Requested to start HDCP for connected level : %d",
+        static_cast<int>(levels.connectedLevel));
+
+  bool success = false;
+  {
+    std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
+
+    HwcDisplay* display = GetDisplay(display_handle);
+    if (display == nullptr) {
+      return ToBinderStatus(hwc3::Error::kBadDisplay);
+    }
+
+    success = display->StartHdcp();
+    if (!success) {
+      hwc_->NotifyHdcpErrorToClient(display_handle);
+      return ToBinderStatus(hwc3::Error::kUnsupported);
+    }
+
+    /* Request to start HDCP on MST displays should be propagated to all other
+     * MST displays as well.
+     */
+    auto* connector = display->GetPipe().connector
+                          ? display->GetPipe().connector->Get()
+                          : nullptr;
+    if (connector != nullptr && connector->IsMst()) {
+      auto base_id = connector->GetPhysicalPortBaseId();
+      if (base_id.has_value()) {
+        for (const auto& [handle, other_display] : hwc_->Displays()) {
+          if (other_display && other_display.get() != display) {
+            auto* other_connector = other_display->GetPipe().connector
+                                        ? other_display->GetPipe()
+                                              .connector->Get()
+                                        : nullptr;
+            if (other_connector != nullptr && other_connector->IsConnected() &&
+                other_connector->IsMst()) {
+              auto other_base_id = other_connector->GetPhysicalPortBaseId();
+              if (other_base_id.has_value() && other_base_id == base_id) {
+                ALOGI("Propagating HDCP start to MST display with handle: %d",
+                      static_cast<int>(handle));
+                success &= other_display->StartHdcp();
+              }
+            }
+          }
+        }
       }
     }
   }
 
-  if (!status.isOk()) {
-    // async call must report error via callback
+  if (!success) {
     hwc_->NotifyHdcpErrorToClient(display_handle);
+    return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
-  return status;
+  return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus ComposerClient::getMaxLayerPictureProfiles(int64_t /* display */,

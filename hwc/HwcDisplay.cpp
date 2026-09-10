@@ -1213,7 +1213,6 @@ auto HwcDisplay::StartHdcp() -> bool {
         "display");
     return false;
   }
-  ALOGI("HDCP requested to start");
   hdcpcon_->Start();
   return true;
 }
