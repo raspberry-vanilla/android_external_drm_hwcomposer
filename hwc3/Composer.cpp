@@ -128,6 +128,7 @@ ndk::ScopedAStatus Composer::getCapabilities(std::vector<Capability>* caps) {
   }
 
   caps->emplace_back(Capability::LAYER_LIFECYCLE_BATCH_COMMAND);
+  caps->emplace_back(Capability::DISPLAY_COMMAND_CONFIG_CHANGE);
 
   return ndk::ScopedAStatus::ok();
 }

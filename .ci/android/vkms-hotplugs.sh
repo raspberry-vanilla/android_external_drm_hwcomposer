@@ -20,11 +20,17 @@ safe_adb push "/${BINARIES_DIR}/teardown_vkms" /data/local/tmp/teardown_vkms
 adb shell logcat -c;
 
 SKIP_FILE="${CI_PROJECT_DIR}/.ci/android/vkms-hotplugs-skips.txt"
-EXCLUDE_FILTERS="$(grep -v -E "^(#|[[:space:]]*$)" "$SKIP_FILE" | paste -sd: -)"
+GTEST_FILTER_ARG=""
+if [ -f "$SKIP_FILE" ]; then
+  EXCLUDE_FILTERS="$(grep -v -E "^(#|[[:space:]]*$)" "$SKIP_FILE" | paste -sd: -)"
+  if [ -n "$EXCLUDE_FILTERS" ]; then
+    GTEST_FILTER_ARG="--gtest_filter=-$EXCLUDE_FILTERS "
+  fi
+fi
 
 # Run the entire command inside adb shell to capture stdout/err
 ADB_TEST_CMD="(/data/local/tmp/test_hotplugs \
-  --gtest_filter=-$EXCLUDE_FILTERS 2>&1 |\
+  ${GTEST_FILTER_ARG}2>&1 |\
    tee /data/local/tmp/vkms_hotplugs_results.txt)"
 
 # If drm-hwcomposer crashes, the test may timeout rather than fail

@@ -149,13 +149,18 @@ deapexer \
   /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
   /old_apex
 
+# Dynamically locate the HWC3 service binary built earlier in the pipeline
+# (installed under bin/hw/ or vendor/bin/hw/ depending on container setup)
+HWC3_BINARY="$(find "${CI_PROJECT_DIR}/install/x86_64" -name "android.hardware.composer.hwc3-service.drm" | head -n 1)"
 mkdir -p /new_image/bin/hw
-# This binary is built earlier in the pipeline
-cp "${CI_PROJECT_DIR}/install/x86_64/vendor/bin/hw/android.hardware.composer.hwc3-service.drm" \
-  "/new_image/bin/hw"
+cp "${HWC3_BINARY}" "/new_image/bin/hw"
 
 cp -r /old_apex/etc /new_image/etc
 cp -r /old_apex/lib64 /new_image/lib64
+
+# Overlay updated VINTF manifest and shared libraries from build artifacts
+find /new_image/etc -name "hwc3-drm.xml" -exec cp "${CI_PROJECT_DIR}/hwc3/hwc3-drm.xml" {} \;
+find "${CI_PROJECT_DIR}/install/x86_64" -name "*.so" -exec cp {} /new_image/lib64/ \; 2>/dev/null || true
 
 mkdir /new_apex
 cp /old_apex/apex_manifest.pb /new_apex/

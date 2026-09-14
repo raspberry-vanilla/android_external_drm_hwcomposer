@@ -62,6 +62,7 @@
 #include "compositor/LayerData.h"
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmHwc.h"
+#include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
 #include "hwc3/CommandResultWriter.h"
@@ -722,6 +723,42 @@ void ExecuteDisplayCommand(DrmHwcThree& hwc, const DisplayCommand& command,
   if (display == nullptr) {
     cmd_result_writer.AddError(hwc3::Error::kBadDisplay);
     return;
+  }
+
+  if (command.activeConfig) {
+    ::android::drm_hwcomposer::QueuedConfigTiming unused_timing{};
+    HwcDisplay::ConfigError
+        error = display->QueueConfig(command.activeConfig->configId,
+                                     ::android::drm_hwcomposer::
+                                         ResourceManager::GetTimeMonotonicNs(),
+                                     &unused_timing);
+    if (error == HwcDisplay::kSeamlessNotAllowed) {
+      ALOGE_IF(command.activeConfig->seamlessRequired,
+               "Seamless modeset not possible with requested config=%d. "
+               "Falling "
+               "back to a blocking full modeset.",
+               command.activeConfig->configId);
+
+      error = display->SetConfig(command.activeConfig->configId);
+    }
+    if (error != HwcDisplay::ConfigError::kNone) {
+      ALOGE("Invalid desired mode: %d", static_cast<int32_t>(error));
+      switch (error) {
+        case HwcDisplay::ConfigError::kBadConfig:
+          cmd_result_writer.AddError(hwc3::Error::kBadConfig);
+          break;
+        case HwcDisplay::ConfigError::kSeamlessNotAllowed:
+          cmd_result_writer.AddError(hwc3::Error::kSeamlessNotAllowed);
+          break;
+        case HwcDisplay::ConfigError::kSeamlessNotPossible:
+          cmd_result_writer.AddError(hwc3::Error::kSeamlessNotPossible);
+          break;
+        default:
+          cmd_result_writer.AddError(hwc3::Error::kBadConfig);
+          break;
+      }
+      return;
+    }
   }
 
   hwc3::Error error = ValidateColorTransformMatrix(

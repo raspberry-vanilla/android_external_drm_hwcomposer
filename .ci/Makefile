@@ -7,7 +7,7 @@ CLANG := clang++-19
 CLANG_TIDY := clang-tidy-19
 OUT_DIR := /tmp/drm_hwcomposer/build
 SRC_DIR := .
-ANDROID_SDK_VERSION ?= 36
+ANDROID_SDK_VERSION ?= 37
 STD ?= gnu++17
 
 CXXFLAGS := -Wall -Wextra -Werror -Wno-missing-designated-field-initializers

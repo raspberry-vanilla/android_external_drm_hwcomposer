@@ -67,6 +67,9 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
       std::optional<enum ::android::drm_hwcomposer::HdcpContentType>
           current_hdcp_level) override;
 
+  void NotifyHdcpErrorToClient(
+      ::android::drm_hwcomposer::DisplayHandle display_handle);
+
   static auto GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
       -> std::shared_ptr<Hwc3Display>;
 

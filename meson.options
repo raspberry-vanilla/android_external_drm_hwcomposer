@@ -1,1 +1,1 @@
-option('android_sdk_version', type : 'string', value : '36')
+option('android_sdk_version', type : 'string', value : '37')

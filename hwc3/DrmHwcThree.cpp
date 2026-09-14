@@ -171,6 +171,15 @@ void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
                                           hdcplevel);
 }
 
+void DrmHwcThree::NotifyHdcpErrorToClient(
+    ::android::drm_hwcomposer::DisplayHandle display_handle) {
+  constexpr drm::HdcpLevels kErrorHdcp =
+      {.connectedLevel = drm::HdcpLevel::HDCP_UNKNOWN,
+       .maxLevel = drm::HdcpLevel::HDCP_UNKNOWN};
+  composer_callback_->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
+                                          kErrorHdcp);
+}
+
 auto DrmHwcThree::GetMustValidateDisplay(
     ::android::drm_hwcomposer::DisplayHandle display_handle) -> bool {
   std::scoped_lock lock(display_state_lock_);
