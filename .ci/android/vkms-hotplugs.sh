@@ -12,11 +12,10 @@ fi
 source "${CI_PROJECT_DIR}/.ci/android/launch-cvd.sh"
 
 fdo_log_section_start_collapsed run_vkms_hotplugs "run_vkms_hotplugs"
-adb wait-for-device devices
-adb root
-adb push "/${BINARIES_DIR}/setup_vkms_connectors_for_atest" /data/local/tmp/setup_vkms_connectors_for_atest
-adb push "/${BINARIES_DIR}/test_hotplugs" /data/local/tmp/test_hotplugs
-adb push "/${BINARIES_DIR}/teardown_vkms" /data/local/tmp/teardown_vkms
+safe_adb root
+safe_adb push "/${BINARIES_DIR}/setup_vkms_connectors_for_atest" /data/local/tmp/setup_vkms_connectors_for_atest
+safe_adb push "/${BINARIES_DIR}/test_hotplugs" /data/local/tmp/test_hotplugs
+safe_adb push "/${BINARIES_DIR}/teardown_vkms" /data/local/tmp/teardown_vkms
 
 adb shell logcat -c;
 

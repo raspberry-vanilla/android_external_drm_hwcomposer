@@ -108,19 +108,37 @@ function print_vkms_config() {
 function stop_hwc() {
   adb shell setprop ctl.stop surfaceflinger
   adb shell setprop ctl.stop vendor.hwcomposer-3
-  echo -n "hwcomposer-3: "
-  adb shell getprop init.svc.vendor.hwcomposer-3
-  echo -n "surfaceflinger: "
-  adb shell getprop init.svc.surfaceflinger
+  local retries=30
+  while [ $retries -gt 0 ]; do
+    local sf_svc hwc_svc
+    sf_svc=$(adb shell getprop init.svc.surfaceflinger 2>/dev/null | tr -d '\r')
+    hwc_svc=$(adb shell getprop init.svc.vendor.hwcomposer-3 2>/dev/null | tr -d '\r')
+    if [ "$sf_svc" = "stopped" ] && [ "$hwc_svc" = "stopped" ]; then
+      break
+    fi
+    sleep 0.5
+    retries=$((retries - 1))
+  done
+  echo "hwcomposer-3: $(adb shell getprop init.svc.vendor.hwcomposer-3 2>/dev/null | tr -d '\r')"
+  echo "surfaceflinger: $(adb shell getprop init.svc.surfaceflinger 2>/dev/null | tr -d '\r')"
 }
 
 function start_hwc() {
   adb shell setprop ctl.start vendor.hwcomposer-3
   adb shell setprop ctl.start surfaceflinger
-  echo -n "hwcomposer-3: "
-  adb shell getprop init.svc.vendor.hwcomposer-3
-  echo -n "surfaceflinger: "
-  adb shell getprop init.svc.surfaceflinger
+  local retries=30
+  while [ $retries -gt 0 ]; do
+    local sf_svc hwc_svc
+    sf_svc=$(adb shell getprop init.svc.surfaceflinger 2>/dev/null | tr -d '\r')
+    hwc_svc=$(adb shell getprop init.svc.vendor.hwcomposer-3 2>/dev/null | tr -d '\r')
+    if [ "$sf_svc" = "running" ] && [ "$hwc_svc" = "running" ]; then
+      break
+    fi
+    sleep 0.5
+    retries=$((retries - 1))
+  done
+  echo "hwcomposer-3: $(adb shell getprop init.svc.vendor.hwcomposer-3 2>/dev/null | tr -d '\r')"
+  echo "surfaceflinger: $(adb shell getprop init.svc.surfaceflinger 2>/dev/null | tr -d '\r')"
 }
 
 function reload_vkms() {
@@ -133,11 +151,10 @@ function reload_vkms() {
   case "$enable_overlay"   in true|false) ;; *) echo "arg2 enable_overlay must be true or false" >&2; exit 1 ;; esac
   case "$enable_writeback" in true|false) ;; *) echo "arg3 enable_writeback must be true or false" >&2; exit 1 ;; esac
 
-  adb reboot
-  adb wait-for-device devices
-  adb root
+  safe_adb root
 
   stop_hwc
+  adb shell "echo 0 > ${VKMS_DIR}/enabled 2>/dev/null || true"
   adb shell /vendor/bin/modprobe -d /vendor/lib/modules -r vkms || true
   adb logcat -b events -d | grep -iE 'rescue|watchdog|fatal' || true
 
@@ -152,7 +169,7 @@ function reload_vkms() {
   echo "Reloaded vkms module."
 
   start_hwc
-  adb root
+  safe_adb root
 
   unset CONNECTOR_TYPES
 }
@@ -275,7 +292,6 @@ function run_vts() {
   return $?
 }
 
-adb wait-for-device devices
-adb root
-adb push "/${BINARIES_DIR}/VtsHalGraphicsComposer3_TargetTest" /data/local/tmp/
-adb push "/${BINARIES_DIR}/setup_vkms_connectors_for_atest" /data/local/tmp/
+safe_adb root
+safe_adb push "/${BINARIES_DIR}/VtsHalGraphicsComposer3_TargetTest" /data/local/tmp/
+safe_adb push "/${BINARIES_DIR}/setup_vkms_connectors_for_atest" /data/local/tmp/

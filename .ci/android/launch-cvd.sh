@@ -26,6 +26,53 @@ function my_atexit()
   exit $EXIT_CODE
 }
 
+# safe_adb [-t <timeout_seconds>] [-d <delay_seconds>] <adb_args...>
+function safe_adb() {
+  local timeout=30
+  local delay=1
+
+  # Parse optional timeout/delay flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t) timeout="$2"; shift 2 ;;
+      -d) delay="$2"; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+
+  local start_time
+  start_time=$(date +%s)
+
+  while true; do
+    if [ "${1:-}" = "root" ]; then
+      local root_out
+      root_out=$(adb root 2>&1)
+      if [ $? -eq 0 ] || [[ "$root_out" =~ "already running as root" ]]; then
+        adb wait-for-device
+        return 0
+      fi
+    else
+      if adb "$@"; then
+        return 0
+      fi
+    fi
+
+    local current_time
+    current_time=$(date +%s)
+    if (( current_time - start_time >= timeout )); then
+      echo "ERROR: 'adb $*' failed after ${timeout}s" >&2
+      return 1
+    fi
+
+    echo "WARNING: 'adb $*' failed, retrying in ${delay}s (elapsed: $((current_time - start_time))s / ${timeout}s)..." >&2
+    sleep "$delay"
+    adb wait-for-device || true
+  done
+}
+
+export -f safe_adb
+
 fdo_log_section_start_collapsed get_cuttlefish "get_cuttlefish"
 tar xf "/${CUTTLEFISH_TARBALL}" -C /
 fdo_log_section_end get_cuttlefish
@@ -75,7 +122,8 @@ HOME=/cuttlefish timeout -k 30s 15m launch_cvd \
   -cpus="${FDO_CI_CONCURRENT:-4}" \
   -extra_bootconfig_args="androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer"
 
-while [ "$(adb shell dumpsys -l | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
+while [ "$(adb shell dumpsys -l 2>/dev/null | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
+while [ "$(adb shell dumpsys -l 2>/dev/null | grep package)" = "" ] ; do sleep 1; done
 adb shell dumpsys SurfaceFlinger | grep GLES
 
 adb logcat -d | grep -i vkms
@@ -87,9 +135,8 @@ fdo_log_section_end launch_cvd
 fdo_log_section_start_collapsed push_new_apex "push_new_apex"
 
 mkdir /old_apex
-adb wait-for-device root || true
-adb wait-for-device
-adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex /old_apex
+safe_adb root
+safe_adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex /old_apex
 
 # Unzip it to get apex_build_info.pb which has all the build parameters normally passed to apexer
 unzip /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex -d /old_apex
@@ -142,34 +189,35 @@ mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
 mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex \
   /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
 
-adb install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+safe_adb -t 60 install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
 
 # Reboot and wait for drmhwc to start up again with new apex
 adb logcat -c
 adb reboot
+sleep 2
 adb wait-for-device devices
 fdo_log_section_end push_new_apex
 
 # Define helper to wait for critical services with a timeout
 function wait_for_services() {
   # If this service is missing, cts-tradefed will fail device pretests
-  while [ "$(adb shell dumpsys -l | grep window)" = "" ] ; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep window)" = "" ] ; do sleep 1; done
   echo "window ok"
 
-  while [ "$(adb shell dumpsys -l | grep lock_settings)" = "" ] ; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep lock_settings)" = "" ] ; do sleep 1; done
   echo "lock_settings ok"
 
-  while [ "$(adb shell dumpsys -l | grep display)" = "" ] ; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep display)" = "" ] ; do sleep 1; done
   echo "display ok"
 
-  while [ "$(adb shell dumpsys -l | grep input)" = "" ] ; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep input)" = "" ] ; do sleep 1; done
   echo "input ok"
 
-  while [ "$(adb shell dumpsys -l | grep logcat)" = "" ] ; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep logcat)" = "" ] ; do sleep 1; done
   echo "logcat ok"
 
   # package manager is needed before CTS can install APKs
-  while [ "$(adb shell dumpsys -l | grep package)" = "" ]; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep package)" = "" ]; do sleep 1; done
   echo "package ok"
 }
 

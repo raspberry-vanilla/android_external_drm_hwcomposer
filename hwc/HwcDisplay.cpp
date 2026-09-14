@@ -1785,6 +1785,10 @@ auto HwcDisplay::GetWritebackBufferFormat() const -> BufferFormat {
 
 std::optional<LayerData> HwcDisplay::GetModesetLayerData(
     const HwcDisplayConfig *new_config) {
+  if (IsInHeadlessMode()) {
+    return std::nullopt;
+  }
+
   const uint32_t new_width = new_config->mode.GetRawMode().hdisplay;
   const uint32_t new_height = new_config->mode.GetRawMode().vdisplay;
 
