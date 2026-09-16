@@ -27,14 +27,35 @@
 #include <cstdio>
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define ALOGE(args...) printf("ERR: " args)
+#define ALOGE(args...) fprintf(stderr, "ERR: " args)
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define ALOGW(args...) printf("WARN: " args)
+#define ALOGW(args...) fprintf(stderr, "WARN: " args)
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define ALOGI(args...) printf("INFO: " args)
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define ALOGD(args...) printf("DBG:" args)
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define ALOGV(args...) printf("VERBOSE: " args)
+
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define ALOGE_IF(cond, args...) \
+  if (cond)                     \
+    ALOGE(args);                \
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define ALOGW_IF(cond, args...) \
+  if (cond)                     \
+    ALOGW(args);                \
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define ALOGI_IF(cond, args...) \
+  if (cond)                     \
+    ALOGI(args);                \
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define ALOGD_IF(cond, args...) \
+  if (cond)                     \
+    ALOGD(args);                \
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define ALOGV_IF(cond, args...) \
+  if (cond)                     \
+    ALOGV(args);
 
 #endif

@@ -1,0 +1,158 @@
+CLANG ?= clang++-19
+OUT_DIR ?= /tmp/drm_hwcomposer/build
+SRC_DIR ?= .
+STD ?= gnu++17
+
+HOST_AOSPLESS_DIR ?= $(firstword $(wildcard /aospless_x86_64 ../aospless))
+
+HOST_INCLUDES := \
+	-I. \
+	-I./tests/test_include \
+	-isystem /usr/include/libdrm \
+	-isystem /usr/include/gtest \
+	-isystem /usr/include/gmock \
+	-I/usr/src/googletest/googletest \
+	-I/usr/src/googletest/googlemock \
+	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libcutils/include_outside_system \
+	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libutils/include \
+	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libsystem/include \
+	-I$(HOST_AOSPLESS_DIR)/includes/system/libbase/include \
+	-I$(HOST_AOSPLESS_DIR)/includes/hardware/libhardware/include_all \
+	-I$(HOST_AOSPLESS_DIR)/includes/soong/.intermediates/hardware/interfaces/graphics/common/aidl/android.hardware.graphics.common-V7-ndk-source/gen/include \
+	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/binder/ndk/include_cpp \
+	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/ui/include_types \
+	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/math/include \
+	-I$(HOST_AOSPLESS_DIR)/includes/bionic/libc/kernel/uapi
+
+HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Wno-missing-designated-field-initializers
+HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4
+HOST_CXXFLAGS += $(HOST_INCLUDES)
+
+HOST_OUT_DIR := $(OUT_DIR)/host_unittests
+
+UNITTEST_SRCS := \
+	bufferinfo/BufferInfoGetter.cpp \
+	bufferinfo/BufferInfoGetterTest.cpp \
+	bufferinfo/GrallocBufferCache.cpp \
+	bufferinfo/GrallocBufferCacheTest.cpp \
+	compositor/CompositionPlanner.cpp \
+	compositor/CompositorTestUtils.cpp \
+	compositor/FlatteningController.cpp \
+	compositor/FlatteningControllerTests.cpp \
+	compositor/FlatteningEventAtomReporter.cpp \
+	compositor/FrameTimeHistory.cpp \
+	compositor/FrameTimeHistoryTest.cpp \
+	compositor/GenericLayerMapperCompositionPlanner.cpp \
+	compositor/GenericLayerMapperCompositionPlannerTest.cpp \
+	compositor/IntelMappingValidator.cpp \
+	compositor/IntelMappingValidatorTest.cpp \
+	compositor/PresentedCompositionCache.cpp \
+	compositor/ShortCircuitor.cpp \
+	compositor/ShortCircuitorTest.cpp \
+	compositor/mapper/CursorLayerMapper.cpp \
+	compositor/mapper/CursorLayerMapperTest.cpp \
+	compositor/mapper/ForceClientCompositionLayerMapper.cpp \
+	compositor/mapper/ForceClientCompositionLayerMapperTest.cpp \
+	compositor/mapper/LayerCachingMapper.cpp \
+	compositor/mapper/LayerCachingMapperTest.cpp \
+	compositor/mapper/LeftoverLayerMapper.cpp \
+	compositor/mapper/LeftoverLayerMapperTest.cpp \
+	compositor/mapper/MapperUtils.cpp \
+	compositor/mapper/UnderlayMapper.cpp \
+	compositor/mapper/UnderlayMapperTest.cpp \
+	drm/DrmColorOp.cpp \
+	drm/DrmConnector.cpp \
+	drm/DrmCrtc.cpp \
+	drm/DrmDevice.cpp \
+	drm/DrmDisplayPipeline.cpp \
+	drm/DrmDisplayPipelineTest.cpp \
+	drm/DrmEncoder.cpp \
+	drm/DrmFbImporter.cpp \
+	drm/DrmMode.cpp \
+	drm/DrmPlane.cpp \
+	drm/DrmProperty.cpp \
+	early_animation/EarlyBootAnimation.cpp \
+	early_animation/EarlyBootAnimationTest.cpp \
+	hwc/HwcBufferCache.cpp \
+	hwc/HwcBufferCacheTest.cpp \
+	hwc/HwcDisplayConfigs.cpp \
+	hwc/HwcDisplayConfigsGeneratorTest.cpp \
+	hwc/HwcLayer.cpp \
+	stats/Stats.cpp \
+	stats/StatsTest.cpp \
+	tests/backend_test_stub.cpp \
+	tests/host_test_stubs.cpp \
+	tests/host_compat_stubs.cpp \
+	utils/BacklightController.cpp \
+	utils/BacklightControllerTest.cpp \
+	utils/ColorUtil.cpp \
+	utils/ColorUtilTest.cpp \
+	utils/SlruCacheTest.cpp \
+	utils/SysfsBacklightController.cpp \
+	utils/SysfsBacklightControllerTest.cpp \
+	utils/fd.cpp \
+	utils/properties.cpp
+
+COLORSPACE_SRC ?= $(firstword $(wildcard \
+	$(HOST_AOSPLESS_DIR)/aosp_src/ColorSpace.cpp \
+	../../frameworks/native/libs/ui/ColorSpace.cpp \
+	$(SRC_DIR)/frameworks/native/libs/ui/ColorSpace.cpp \
+))
+
+TRACE_HOST_SRC ?= $(firstword $(wildcard \
+	$(HOST_AOSPLESS_DIR)/aosp_src/trace-host.cpp \
+	../../system/core/libcutils/trace-host.cpp \
+	$(SRC_DIR)/system/core/libcutils/trace-host.cpp \
+))
+
+HOST_EXT_OBJS := $(HOST_OUT_DIR)/ColorSpace.o $(HOST_OUT_DIR)/trace-host.o
+
+HOST_OBJS := $(patsubst %.cpp,$(HOST_OUT_DIR)/%.o,$(UNITTEST_SRCS))
+HOST_GTEST_OBJS := $(HOST_OUT_DIR)/gtest-all.o $(HOST_OUT_DIR)/gmock-all.o $(HOST_OUT_DIR)/gtest_main.o
+
+.PHONY: all check clean unittests
+
+all: check
+
+unittests: $(HOST_OUT_DIR)/drm_hwcomposer_unittests
+
+check: unittests
+	$(HOST_OUT_DIR)/drm_hwcomposer_unittests $(GTEST_ARGS)
+
+clean:
+	rm -rf $(HOST_OUT_DIR)/
+
+$(HOST_OUT_DIR)/%.o: $(SRC_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/ColorSpace.o: $(COLORSPACE_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/trace-host.o: $(TRACE_HOST_SRC)
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/gtest-all.o: /usr/src/googletest/googletest/src/gtest-all.cc
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/gmock-all.o: /usr/src/googletest/googlemock/src/gmock-all.cc
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/gtest_main.o: /usr/src/googletest/googletest/src/gtest_main.cc
+	@mkdir -p $(dir $@)
+	@echo "HOST_CC $<"
+	@$(CLANG) $(HOST_CXXFLAGS) -c $< -o $@
+
+$(HOST_OUT_DIR)/drm_hwcomposer_unittests: $(HOST_OBJS) $(HOST_EXT_OBJS) $(HOST_GTEST_OBJS)
+	@mkdir -p $(dir $@)
+	@echo "HOST_LD $@"
+	@$(CLANG) $^ -ldrm -llz4 -lpthread -o $@

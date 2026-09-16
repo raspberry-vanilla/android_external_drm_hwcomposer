@@ -141,6 +141,10 @@ tar --no-same-owner -xf aospless.tar.gz
 # Rename and move the artifacts needed for subsequent jobs to the root directory
 cp -r "${TOP}/out/target/product/vsoc_x86_64_only/obj/AOSPEXT/DRMHWCOMPOSER/aospless" \
   "/aospless_x86_64"
+# Package AOSP source files required for deviceless host unit tests.
+mkdir -p "/aospless_x86_64/aosp_src"
+cp "${TOP}/frameworks/native/libs/ui/ColorSpace.cpp" "/aospless_x86_64/aosp_src/"
+cp "${TOP}/system/core/libcutils/trace-host.cpp" "/aospless_x86_64/aosp_src/"
 fdo_log_section_end build_aospless_x86_64
 
 
@@ -156,6 +160,10 @@ make gen_aospless
 tar --no-same-owner -xf aospless.tar.gz
 # Rename and move the artifacts needed for subsequent jobs to the root directory
 cp -r "./aospless" "/aospless_arm64"
+# Package AOSP source files required for deviceless host unit tests.
+mkdir -p "/aospless_arm64/aosp_src"
+cp "${TOP}/frameworks/native/libs/ui/ColorSpace.cpp" "/aospless_arm64/aosp_src/"
+cp "${TOP}/system/core/libcutils/trace-host.cpp" "/aospless_arm64/aosp_src/"
 fdo_log_section_end build_aospless_arm64
 
 # clean up
