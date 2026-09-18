@@ -335,4 +335,8 @@ auto Properties::EarlyBootHoldMs() -> int {
                             kDefaultEarlyBootHoldMs);
 }
 
+auto Properties::BootAnimationCompleted() -> bool {
+  return (property_get_bool("service.bootanim.exit", 0) != 0);
+}
+
 }  // namespace android::drm_hwcomposer

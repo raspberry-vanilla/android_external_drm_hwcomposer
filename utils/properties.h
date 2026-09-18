@@ -95,6 +95,8 @@ class Properties {
    * Default: false.
    */
   static auto BootAnimationEnabled() -> bool;
+
+  static auto BootAnimationCompleted() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

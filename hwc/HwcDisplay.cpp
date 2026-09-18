@@ -901,7 +901,11 @@ void HwcDisplay::InitHdrSupported() {
 }
 
 bool HwcDisplay::Init() {
-  boot_animation_state_ = BootAnimationState::kActive;
+  boot_animation_state_ = IsInHeadlessMode() ||
+                                  pipeline_->connector->Get()->IsExternal() ||
+                                  Properties::BootAnimationCompleted()
+                              ? BootAnimationState::kInactive
+                              : BootAnimationState::kActive;
 
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
