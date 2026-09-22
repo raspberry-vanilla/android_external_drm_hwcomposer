@@ -36,10 +36,17 @@ struct DrmDisplayPipeline;
 class BackendManager {
  public:
   using BackendCreator = std::function<std::unique_ptr<Backend>(DrmDevice &)>;
+  using BackendInit = std::function<bool()>;
+
+  struct BackendRegistration {
+    BackendCreator creator;
+    BackendInit init;
+  };
 
   static BackendManager &GetInstance();
 
-  void RegisterCreator(const std::string &name, BackendCreator creator);
+  void Register(const std::string &name, BackendRegistration registration);
+  void InitializeBackends();
   std::unique_ptr<Backend> CreateBackendForDevice(DrmDevice &drm);
 
   // Template helper for static registration of backends
@@ -47,16 +54,18 @@ class BackendManager {
   class RegisterBackend {
    public:
     explicit RegisterBackend(const std::string &name) {
-      BackendManager::GetInstance().RegisterCreator(name, [](DrmDevice &drm) {
-        return std::make_unique<T>(drm);
-      });
+      BackendManager::GetInstance().Register(
+          name, {.creator = [](DrmDevice &drm) {
+            return std::make_unique<T>(drm);
+          }});
     }
   };
 
  private:
   BackendManager() = default;
 
-  std::map<std::string, BackendCreator> creators_;
+  bool initialized_ = false;
+  std::map<std::string, BackendRegistration> backends_;
 };
 
 }  // namespace android::drm_hwcomposer

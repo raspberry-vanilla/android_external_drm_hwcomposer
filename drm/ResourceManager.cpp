@@ -161,6 +161,10 @@ void ResourceManager::Init() {
     return;
   }
 
+  // Ensure that Backends have been initialized before the BackendManager is
+  // used.
+  BackendManager::GetInstance().InitializeBackends();
+
   color_pipeline_enabled_ = Properties::UseColorPipeline();
   force_color_mode_ = Properties::ForceColorMode();
   persistent_hdr_enabled_ = Properties::PersistentHdrEnabled();

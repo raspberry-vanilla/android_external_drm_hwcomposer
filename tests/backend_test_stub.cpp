@@ -27,10 +27,14 @@ BackendManager &BackendManager::GetInstance() {
   return backend_manager;
 }
 
-void BackendManager::RegisterCreator(
+void BackendManager::Register(
     const std::string & /*name*/,
     // NOLINTNEXTLINE(performance-unnecessary-value-param)
-    BackendCreator /*creator*/) {
+    BackendRegistration /*registration*/) {
+}
+
+void BackendManager::InitializeBackends() {
+  initialized_ = true;
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)

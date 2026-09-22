@@ -46,18 +46,33 @@ BackendManager &BackendManager::GetInstance() {
   return backend_manager;
 }
 
-void BackendManager::RegisterCreator(const std::string &name,
-                                     BackendCreator creator) {
-  if (creators_.count(name) != 0) {
+void BackendManager::Register(const std::string &name,
+                              BackendRegistration registration) {
+  if (backends_.count(name) != 0) {
     ALOGE("Backend creator for %s already registered.", name.c_str());
     return;
   }
-  creators_[name] = std::move(creator);
+  backends_[name] = std::move(registration);
+}
+
+void BackendManager::InitializeBackends() {
+  if (initialized_) {
+    return;
+  }
+  initialized_ = true;
+  for (auto it = backends_.begin(); it != backends_.end();) {
+    if (it->second.init && !it->second.init()) {
+      ALOGE("Failed to initialize backend %s", it->first.c_str());
+      it = backends_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
     DrmDevice &drm) {
-  if (creators_.empty()) {
+  if (backends_.empty()) {
     ALOGE("No backends are registered");
     return nullptr;
   }
@@ -67,8 +82,8 @@ std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
     name = drm.GetName();
   }
 
-  auto it = creators_.find(name);
-  if (it == creators_.end()) {
+  auto it = backends_.find(name);
+  if (it == backends_.end()) {
     auto client_it = std::find(kClientDevices.begin(), kClientDevices.end(),
                                name);
     name = client_it == kClientDevices.end() ? "generic" : "client";
@@ -76,7 +91,7 @@ std::unique_ptr<Backend> BackendManager::CreateBackendForDevice(
 
   ALOGI("Creating backend '%s' for device '%s'", name.c_str(),
         drm.GetName().c_str());
-  return creators_[name](drm);
+  return backends_[name].creator(drm);
 }
 
 }  // namespace android::drm_hwcomposer

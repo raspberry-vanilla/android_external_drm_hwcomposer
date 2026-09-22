@@ -6,9 +6,9 @@ NPROCS:=$(shell grep -c ^processor /proc/cpuinfo)
 DOCKERFILE := .ci/Dockerfile
 IMAGE_NAME := drmhwc_ci
 
-# We can't run style and bpfmt check in docker
-# when repo is within AOSP tree, will run it locally.
-GIT_IS_SYMLINK:=$(shell test -L .git && echo true)
+DOCKER_TTY := $(shell [ -t 0 ] && echo -it || echo -i)
+GIT_IS_SYMLINK := $(shell test -L .git && echo true)
+DOCKER_REPO_MOUNT := $(if $(GIT_IS_SYMLINK),-v $(shell realpath ../..)/.repo:/home/.repo,)
 
 define print_no_docker_err
 $(warning Please install docker, e.g. for Ubuntu:)
@@ -28,10 +28,10 @@ PREPARE:=.out/prepare_docker.timestamp
 $(PREPARE): $(DOCKERFILE)
 	$(if $(DOCKER_BIN),,$(call print_no_docker_err))
 	mkdir -p $(dir $@)
-	$(DOCKER_BIN) build -t local/build-env -f $(DOCKERFILE) .;
+	$(DOCKER_BIN) build --build-arg RUN_UID=$(shell id -u) -t local/build-env -f $(DOCKERFILE) .;
 	$(DOCKER_BIN) stop $(IMAGE_NAME) || true
 	$(DOCKER_BIN) rm $(IMAGE_NAME) || true
-	$(DOCKER_BIN) run -itd --name $(IMAGE_NAME) --network="host" -v $(shell pwd):/home/user/drm_hwcomposer local/build-env
+	$(DOCKER_BIN) run -itd --name $(IMAGE_NAME) --network="host" $(DOCKER_REPO_MOUNT) -v $(shell pwd):/home/user/drm_hwcomposer local/build-env
 	@touch $@
 
 prepare: $(PREPARE)
@@ -39,38 +39,36 @@ prepare: ## Build and run Docker image
 
 shell: $(PREPARE)
 shell: ## Start shell into a container
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash
 
 ci_fast: $(PREPARE)
 ci_fast: ## Run meson build for arm64 in docker container
 	@echo "Run meson cross-build for Android:"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "make -C ~/aospless all"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "make -C ~/aospless all"
 
 ci: $(PREPARE)
 ci: ## Run presubmit within the docker container
 	@echo "Run native build:"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "make -f .ci/Makefile -j$(NPROCS)"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "make -f .ci/Makefile -j$(NPROCS)"
 	@echo "Run meson cross-build for Android:"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "make -C ~/aospless install"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "make -C ~/aospless install"
 	@echo "Run style check:"
-	$(if $(GIT_IS_SYMLINK), \
-		./.ci/.gitlab-ci-checkcommit.sh, \
-		$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "./.ci/.gitlab-ci-checkcommit.sh")
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "./.ci/.gitlab-ci-checkcommit.sh"
 	@echo "\n\e[32m --- SUCCESS ---\n"
 
 ci_cleanup: ## Cleanup after 'make ci'
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "make -f .ci/Makefile clean"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "rm -rf ~/aospless/build"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "rm -rf ~/aospless/install"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "rm -rf ~/aospless/out_src"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "make -f .ci/Makefile clean"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "rm -rf ~/aospless/build"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "rm -rf ~/aospless/install"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "rm -rf ~/aospless/out_src"
 
 build_deploy: $(PREPARE)
 build_deploy: ## Build for Andoid and deploy onto the target device (require active adb device connected)
 	$(if $(filter $(shell adb shell getprop ro.bionic.arch),arm64),,$(error arm64 only is supported at the moment))
 	adb root && adb remount vendor
 	mkdir -p .out/arm64
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "make -C ~/aospless install"
-	$(DOCKER_BIN) exec -it $(IMAGE_NAME) bash -c "cp -r ~/aospless/install/* ~/drm_hwcomposer/.out/arm64"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "make -C ~/aospless install"
+	$(DOCKER_BIN) exec $(DOCKER_TTY) $(IMAGE_NAME) bash -c "cp -r ~/aospless/install/* ~/drm_hwcomposer/.out/arm64"
 	adb push .out/arm64/vendor/bin/hw/android.hardware.composer.hwc3-service.drm /vendor/bin/hw/android.hardware.composer.hwc3-service.drm
 	adb shell stop
 	adb shell stop vendor.hwcomposer-3 && adb shell start vendor.hwcomposer-3 || true

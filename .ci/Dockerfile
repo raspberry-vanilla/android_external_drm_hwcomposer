@@ -1,35 +1,43 @@
-FROM ubuntu:24.10
+FROM registry.freedesktop.org/drm-hwcomposer/drm-hwcomposer/ubuntu/x86_64_aospless:20260915--aec7a6ce7bb38902c70641526f6611e27141784a
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 ENV PATH="/home/user/bin:${PATH}"
 
 # Taking into account layer structure, everything should be done within one layer.
-RUN apt-get update && apt-get upgrade -y && \
+RUN apt-get update && \
     apt-get install -y clang-19 clang-tidy-19 clang-format-19 git libdrm-dev blueprint-tools libgtest-dev libgmock-dev clang \
     llvm make python3 wget sudo rsync lld pkg-config ninja-build meson \
     python3-mako python3-jinja2 python3-ply python3-yaml
 
-ENV RUN_USER user
-ENV RUN_UID 1000
+ARG RUN_USER=user
+ARG RUN_UID=1000
 
-ENV USER_HOME /home/${RUN_USER}
+ENV RUN_USER=${RUN_USER}
+ENV RUN_UID=${RUN_UID}
+ENV USER_HOME=/home/${RUN_USER}
+ENV HOME=${USER_HOME}
 
 RUN mkdir -pv ${USER_HOME}
 
-# Delete default user
-RUN userdel -r ubuntu
+# Delete default ubuntu user if present
+RUN userdel -r ubuntu || true
 
 # Create new user
-RUN adduser \
-    --gecos 'Build User' \
-    --shell '/usr/bin/bash' \
-    --uid ${RUN_UID} \
-    --disabled-login \
-    --disabled-password ${RUN_USER} \
+RUN useradd \
+    -m -d ${USER_HOME} \
+    -c 'Build User' \
+    -s '/usr/bin/bash' \
+    -u ${RUN_UID} \
+    -o \
+    ${RUN_USER} \
     && adduser ${RUN_USER} sudo
 
-RUN chown -R ${RUN_USER}:${RUN_USER} ${USER_HOME} && chmod -R 775 ${USER_HOME}
+RUN cp -r /aospless_arm64 ${USER_HOME}/aospless && \
+    rm -rf ${USER_HOME}/aospless/src && \
+    ln -s ../drm_hwcomposer/ ${USER_HOME}/aospless/src && \
+    chown -R ${RUN_USER}:${RUN_USER} ${USER_HOME} && \
+    chmod -R 775 ${USER_HOME}
 
 # Ensure sudo group users are not
 # asked for a password when using
@@ -40,17 +48,12 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> \
 # Pass control to a newly created user
 USER ${RUN_USER}
 
-# Install aospless package (produced by GloDroid/aospext)
-RUN wget -P ${USER_HOME} https://gitlab.freedesktop.org/-/project/5/uploads/cafa930dad28acf7ee44d50101d5e8f0/aospless_drm_hwcomposer_arm64.tar.xz && \
-    cd ${USER_HOME} && \
-    sha256sum aospless_drm_hwcomposer_arm64.tar.xz && \
-    (echo f792b1140861112f80c8a3a22e1af8e3eccf4910fe4449705e62d2032b713bf9 aospless_drm_hwcomposer_arm64.tar.xz | sha256sum --check) && \
-    tar xf aospless_drm_hwcomposer_arm64.tar.xz && ln -s ../drm_hwcomposer/ ${USER_HOME}/aospless/src
-
 # Create project path
 RUN mkdir -pv ${USER_HOME}/drm_hwcomposer
 WORKDIR ${USER_HOME}/drm_hwcomposer
 
-RUN git config --global user.name "FIRST_NAME LAST_NAME" && git config --global user.email "MY_NAME@example.com"
+RUN git config --global user.name "FIRST_NAME LAST_NAME" && \
+    git config --global user.email "MY_NAME@example.com" && \
+    git config --global --add safe.directory '*'
 
 CMD [ "/bin/bash" ]
