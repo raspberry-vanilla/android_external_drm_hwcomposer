@@ -84,6 +84,10 @@ class ResourceManager {
     return persistent_hdr_enabled_;
   }
 
+  bool ForceCtmHandlesOffset() const {
+    return force_ctm_handles_offset_;
+  }
+
   bool ExternalHdrEnabled() const {
     return external_hdr_enabled_;
   }
@@ -106,6 +110,7 @@ class ResourceManager {
  private:
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
   void UpdateFrontendDisplays();
+  void ProcessHotplugForConnector(DrmConnector *conn);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
@@ -119,6 +124,7 @@ class ResourceManager {
   bool scale_with_gpu_{};
   CtmHandling ctm_handling_{};
   bool color_pipeline_enabled_{};
+  bool force_ctm_handles_offset_{};
   int force_color_mode_{};
   bool persistent_hdr_enabled_{};
   bool external_hdr_enabled_{};

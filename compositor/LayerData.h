@@ -116,6 +116,13 @@ struct DamageInfo {
 
 constexpr float kAlphaOpaque = 1.0F;
 
+struct SolidColor {
+  float r;
+  float g;
+  float b;
+  float a;
+};
+
 struct PresentInfo {
   LayerTransform transform{};
   float alpha = kAlphaOpaque;
@@ -148,6 +155,7 @@ struct LayerData {
   TransferFunction transfer_func{};
   FrameTimeHistory frame_time_history;
   std::optional<float> brightness;
+  std::optional<SolidColor> solid_color;
 };
 
 }  // namespace android::drm_hwcomposer

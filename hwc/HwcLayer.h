@@ -52,6 +52,7 @@ class HwcLayer {
     std::optional<TransferFunction> transfer_func;
     std::optional<CompositionType> composition_type;
     std::optional<DstRectInfo> display_frame;
+    std::optional<SolidColor> solid_color;
     std::optional<float> alpha;
     std::optional<SrcRectInfo> source_crop;
     std::optional<LayerTransform> transform;

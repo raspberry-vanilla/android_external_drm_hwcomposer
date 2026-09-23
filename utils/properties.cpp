@@ -141,6 +141,13 @@ auto Properties::PersistentHdrEnabled() -> bool {
 }
 
 /**
+ * Force passing CTM matrix even if it has offset.
+ */
+auto Properties::ForceCtmHandlesOffset() -> bool {
+  return (property_get_bool("vendor.hwc.drm.force_ctm_handles_offset", 0) != 0);
+}
+
+/**
  * @brief Determine if the "Present Not Reliable" property is enabled.
  *
  * @return boolean
@@ -337,6 +344,11 @@ auto Properties::EarlyBootHoldMs() -> int {
 
 auto Properties::BootAnimationCompleted() -> bool {
   return (property_get_bool("service.bootanim.exit", 0) != 0);
+}
+
+auto Properties::IgnoreDrmMasterFailure() -> bool {
+  return (property_get_bool("vendor.hwc.drm.ignore_drm_master_failure", 0) !=
+          0);
 }
 
 }  // namespace android::drm_hwcomposer

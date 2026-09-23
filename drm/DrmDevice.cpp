@@ -140,8 +140,11 @@ auto DrmDevice::Init(const char *path) -> int {
     ALOGE("Failed to set drm master %d", errno);
   }
   if (drmIsMaster(*GetFd()) == 0) {
-    ALOGE("DRM/KMS master access required");
-    return -EACCES;
+    if (!Properties::IgnoreDrmMasterFailure()) {
+      ALOGE("DRM/KMS master access required");
+      return -EACCES;
+    }
+    ALOGW("Continuing without DRM/KMS master access");
   }
 
   external_displays_enabled_ = Properties::EnableExternalDisplays();

@@ -91,6 +91,7 @@ using ::android::drm_hwcomposer::IRect;
 using ::android::drm_hwcomposer::LayerTransform;
 using ::android::drm_hwcomposer::MakeSharedFd;
 using ::android::drm_hwcomposer::SharedFd;
+using ::android::drm_hwcomposer::SolidColor;
 using ::android::drm_hwcomposer::SrcRectInfo;
 using ::android::drm_hwcomposer::TransferFunction;
 
@@ -373,6 +374,18 @@ std::optional<SrcRectInfo> AidlToSrcRect(
   return src_rect;
 }
 
+std::optional<SolidColor> AidlToColor(const std::optional<Color>& color) {
+  if (!color) {
+    return std::nullopt;
+  }
+  return SolidColor{
+      .r = color->r,
+      .g = color->g,
+      .b = color->b,
+      .a = color->a,
+  };
+}
+
 std::optional<float> AidlToAlpha(const std::optional<PlaneAlpha>& alpha) {
   if (!alpha) {
     return std::nullopt;
@@ -518,6 +531,7 @@ void DispatchLayerCommand(DrmHwc& hwc, int64_t display_handle,
   properties.transfer_func = AidlToTransferFunc(command.dataspace);
   properties.composition_type = AidlToCompositionType(command.composition);
   properties.display_frame = AidlToDstRect(command.displayFrame);
+  properties.solid_color = AidlToColor(command.color);
   properties.alpha = AidlToAlpha(command.planeAlpha);
   properties.source_crop = AidlToSrcRect(command.sourceCrop);
   properties.transform = AidlToLayerTransform(command.transform);

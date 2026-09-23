@@ -51,6 +51,7 @@ class Properties {
   static auto ValidationShortCircuiting() -> bool;
   static auto ShortCircuitIgnoreGeometry() -> bool;
   static auto ShortCircuitIgnoreCtm() -> bool;
+  static auto ForceCtmHandlesOffset() -> bool;
   static auto ExternalHdrEnabled() -> bool;
   static auto SkipPlaneDamageClips() -> bool;
   static auto FlatteningEnabled() -> bool;
@@ -97,6 +98,8 @@ class Properties {
   static auto BootAnimationEnabled() -> bool;
 
   static auto BootAnimationCompleted() -> bool;
+
+  static auto IgnoreDrmMasterFailure() -> bool;
 };
 
 }  // namespace android::drm_hwcomposer

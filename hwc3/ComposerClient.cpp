@@ -700,12 +700,12 @@ ndk::ScopedAStatus ComposerClient::registerCallback(
     std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
     // This function is specified to be called exactly once per client instance.
     hwc_->SetCallback(callback);
-    // For the first client (SurfaceFlinger), ResourceManager was already
-    // initialized early in Composer::Composer(). For subsequent clients
-    // (e.g. VTS tests), initialize DRM resources on demand.
-    if (!hwc_->GetResMan().IsInitialized()) {
-      hwc_->GetResMan().Init();
-    }
+  }
+  // For the first client (SurfaceFlinger), ResourceManager was already
+  // initialized early in Composer::Composer(). For subsequent clients
+  // (e.g. VTS tests), initialize DRM resources on demand.
+  if (!hwc_->GetResMan().IsInitialized()) {
+    hwc_->GetResMan().Init();
   }
   // Flush queued hotplug events outside GetMainLock to prevent deadlock with
   // synchronous callbacks into the client process.

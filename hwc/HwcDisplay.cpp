@@ -47,6 +47,7 @@
 #include <utility>
 #include <vector>
 
+#include "backend/Backend.h"
 #include "backend/BackendDisplayCapabilities.h"
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
@@ -152,7 +153,9 @@ void HwcDisplay::SetColorTransformMatrix(
   } else {
     client_ctm_has_offset_ = ColorUtil::HasOffset(color_transform_matrix);
     client_color_matrix_ = std::make_shared<HalColorTransformMatrix>(
-        ColorUtil::ToLinearCtm(color_transform_matrix, color_mode_));
+        use_color_pipeline_
+            ? ColorUtil::ToLinearCtm(color_transform_matrix, color_mode_)
+            : color_transform_matrix);
   }
 
   UpdateColorTransformMatrix();
@@ -778,6 +781,13 @@ void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
 
 void HwcDisplay::Deinit() {
   if (pipeline_ != nullptr) {
+    if (pipeline_->connector && pipeline_->connector->Get()) {
+      auto *connector = pipeline_->connector->Get();
+      connector->GetDev()
+          .GetBackend()
+          .SetRefreshCallbackForConnector(connector->GetId(), nullptr);
+    }
+
     AtomicCommitArgs a_args{};
     a_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
     ExecuteAtomicCommit(a_args);
@@ -921,6 +931,15 @@ bool HwcDisplay::Init() {
           .trigger = [this]() { hwc_->SendRefreshEventToClient(handle_); }};
       flatcon_ = std::make_unique<FlatteningController>(handle_, flatcbk,
                                                         kFlatteningTimeout);
+    }
+
+    if (pipeline_ && pipeline_->connector && pipeline_->connector->Get()) {
+      auto *connector = pipeline_->connector->Get();
+      connector->GetDev()
+          .GetBackend()
+          .SetRefreshCallbackForConnector(connector->GetId(), [this]() {
+            hwc_->SendRefreshEventToClient(handle_);
+          });
     }
 
     if (IsHdcpPropertyPresent()) {
@@ -1424,7 +1443,8 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
 
   // Client CTM with offset cannot be processed by CTM prop. Only apply render
   // intent CTM which will never have offset.
-  if (client_ctm_has_offset_ && !HasHardwareColorTransform()) {
+  if (client_ctm_has_offset_ && !(HasHardwareColorTransform() ||
+                                  hwc_->GetResMan().ForceCtmHandlesOffset())) {
     a_args.color_matrix = render_intent_matrix_;
   }
 
@@ -1611,6 +1631,13 @@ std::shared_ptr<BindingOwner<DrmPlane>> HwcDisplay::GetCursorPlane() const {
 bool HwcDisplay::HasHardwareColorTransform() const {
   if (IsInHeadlessMode()) {
     return false;
+  }
+  if (pipeline_ && pipeline_->capabilities) {
+    const auto ctm_override = pipeline_->capabilities
+                                  ->GetHardwareColorTransformOverride();
+    if (ctm_override.has_value()) {
+      return *ctm_override;
+    }
   }
   return UseColorPipeline() && GetPipe().crtc && GetPipe().crtc->Get() &&
          GetPipe().crtc->Get()->GetCtmProperty() &&

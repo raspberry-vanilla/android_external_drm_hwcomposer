@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,6 +32,10 @@ struct DrmDisplayPipeline;
 
 class Backend {
  public:
+  using RefreshCallback = std::function<void()>;
+  using HotplugHandler = std::function<void(uint32_t /*connector_id*/,
+                                            bool /*connected*/)>;
+
   explicit Backend(DrmDevice &drm);
   virtual ~Backend() = default;
 
@@ -37,6 +43,26 @@ class Backend {
   // creating the CompositionPlanner for this DrmDisplayPipeline.
   virtual std::unique_ptr<DrmDisplayPipeline> CreatePipeline(
       DrmConnector &connector) = 0;
+
+  // Set (or clear if callback is null) a refresh trigger callback for a
+  // connector.
+  // NOLINTBEGIN(performance-unnecessary-value-param)
+  virtual void SetRefreshCallbackForConnector(uint32_t /*connector_id*/,
+                                              RefreshCallback /*callback*/) {
+  }
+
+  // Set the hotplug event handler for the backend. Note that a backend might
+  // call the passed function before SetHotplugHandler returns.
+  virtual void SetHotplugHandler(HotplugHandler /*handler*/) {
+  }
+  // NOLINTEND(performance-unnecessary-value-param)
+
+  // Returns true if this backend provides its own hotplug events via
+  // SetHotplugHandler, or false if UEventListener and standard polling
+  // should be used.
+  virtual bool UseBackendHotplug() const {
+    return false;
+  }
 
   // Get the BufferInfoGetter for the Backend.
   virtual std::unique_ptr<BufferInfoGetter> CreateBufferInfoGetter() = 0;

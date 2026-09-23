@@ -47,6 +47,12 @@ class BackendDisplayCapabilities {
     return modes;
   }
 
+  // Returns an override for Hardware Color Transform support, or std::nullopt
+  // to fall through to DRM/KMS CRTC CTM property detection.
+  virtual std::optional<bool> GetHardwareColorTransformOverride() const {
+    return std::nullopt;
+  }
+
   virtual ~BackendDisplayCapabilities() = 0;
 };
 

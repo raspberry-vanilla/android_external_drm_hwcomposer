@@ -62,6 +62,9 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
   if (layer_properties.display_frame) {
     layer_data_.pi.display_frame = layer_properties.display_frame.value();
   }
+  if (layer_properties.solid_color) {
+    layer_data_.solid_color = layer_properties.solid_color.value();
+  }
   if (layer_properties.alpha) {
     layer_data_.pi.alpha = layer_properties.alpha.value();
   }
