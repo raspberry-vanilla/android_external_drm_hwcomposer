@@ -10,11 +10,6 @@ project(
 inc_include = [include_directories('.')]
 
 src_common = files(
-    'backend/Backend.cpp',
-    'backend/BackendManager.cpp',
-    'backend/ClientBackend.cpp',
-    'backend/GenericBackend.cpp',
-    'backend/IntelBackend.cpp',
     'compositor/CompositionPlanner.cpp',
     'compositor/FlatteningController.cpp',
     'compositor/FlatteningEventAtomReporter.cpp',
@@ -103,6 +98,7 @@ hwc2_cpp_flags = [
     '-DHWC2_USE_CPP11',
 ]
 
+subdir('backend')
 subdir('drm')
 subdir('bufferinfo')
 subdir('hwc')
@@ -113,6 +109,7 @@ drmhwc_common = static_library(
 # TODO remove hwc2 flags from common code (backends needs rework)
     cpp_args : common_cpp_flags + hwc2_cpp_flags,
     dependencies : deps,
+    include_directories : inc_include,
 )
 
 subdir('hwc3')

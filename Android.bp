@@ -200,6 +200,7 @@ cc_binary {
 
     defaults: [
         "android.hardware.composer.hwc3-service.drm.defaults",
+        "sdm_backend",
     ],
 
     srcs: ["bufferinfo/legacy/BufferInfoLibdrm.cpp"],

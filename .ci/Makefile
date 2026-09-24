@@ -21,7 +21,7 @@ CXXARGS := $(subst [BASE_DIR],$(BASE_DIR),$(CXXARGS))
 CXXARGS := $(patsubst -mcpu=%,,$(CXXARGS))
 GTEST_INCLUDE_DIR := $(OUT_DIR)/googletest_include
 $(shell mkdir -p $(GTEST_INCLUDE_DIR) && ln -sfn /usr/include/gtest $(GTEST_INCLUDE_DIR)/gtest && ln -sfn /usr/include/gmock $(GTEST_INCLUDE_DIR)/gmock)
-CXXARGS += -I. -I./tests/test_include -isystem $(GTEST_INCLUDE_DIR) $(CXXFLAGS)
+CXXARGS += -I. -I./backend/sdm -isystem ./backend/sdm/stubs/include -I./tests/test_include -isystem $(GTEST_INCLUDE_DIR) $(CXXFLAGS)
 
 TIDY_FILES_OVERRIDE := \
     bufferinfo/legacy/BufferInfoImagination.cpp:COARSE  \
@@ -122,7 +122,7 @@ $(OUT_DIR)/%.d: $(SRC_DIR)/%.cpp
 	@$(CLANG) $(CXXARGS) $< -MM -MT $(OUT_DIR)/$(patsubst %.cpp,%.o,$<) -o $@
 
 # TIDY
-TIDY_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' \( -path '*.cpp' -o -path '*.h' \))
+TIDY_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -not -path '*/backend/sdm/stubs/*' \( -path '*.cpp' -o -path '*.h' \))
 
 TIDY_FILES_OVERRIDE_path := $(foreach pair,$(TIDY_FILES_OVERRIDE),$(SRC_DIR)/$(pair))
 

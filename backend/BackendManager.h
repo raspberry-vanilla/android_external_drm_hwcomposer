@@ -54,10 +54,10 @@ class BackendManager {
   class RegisterBackend {
    public:
     explicit RegisterBackend(const std::string &name) {
-      BackendManager::GetInstance().Register(
-          name, {.creator = [](DrmDevice &drm) {
-            return std::make_unique<T>(drm);
-          }});
+      BackendManager::GetInstance().Register(name,
+                                             {.creator = [](DrmDevice &drm) {
+                                               return std::make_unique<T>(drm);
+                                             }});
     }
   };
 
