@@ -351,4 +351,9 @@ auto Properties::IgnoreDrmMasterFailure() -> bool {
           0);
 }
 
+auto Properties::SupportsMultiDisplayModeset() -> bool {
+  return (property_get_bool("ro.vendor.hwc.drm.supports_multi_display_modeset",
+                            1) != 0);
+}
+
 }  // namespace android::drm_hwcomposer

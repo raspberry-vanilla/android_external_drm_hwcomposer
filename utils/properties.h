@@ -56,6 +56,7 @@ class Properties {
   static auto SkipPlaneDamageClips() -> bool;
   static auto FlatteningEnabled() -> bool;
   static auto UseLogGammaLut() -> bool;
+  static auto SupportsMultiDisplayModeset() -> bool;
 
   /**
    * Minimum display brightness floor in the range [0.0, 1.0].
