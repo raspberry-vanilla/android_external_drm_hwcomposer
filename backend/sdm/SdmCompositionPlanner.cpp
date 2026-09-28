@@ -140,7 +140,12 @@ android_dataspace_t ReconstructDataspace(HwcColorspace colorspace,
   return static_cast<android_dataspace_t>(standard | transfer | range_val);
 }
 
-bool ForceClientComposition(const HwcLayer* layer) {
+bool ForceClientComposition(const ICompositorDisplay* display,
+                            const HwcLayer* layer) {
+  if (display->CtmByGpu()) {
+    return true;
+  }
+
   // b/557260536: Solid color layers are not working properly
   // in SDM when serviced by device. Force all solid color
   // layers to client.
@@ -183,7 +188,7 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
   CompositionPlanner::CompositionTypeMap composition_type_map;
   for (const auto* layer : display->GetOrderLayersByZPos()) {
     CompositionType composition_type = layer->GetSfType();
-    if (ForceClientComposition(layer)) {
+    if (ForceClientComposition(display, layer)) {
       composition_type = CompositionType::kClient;
     }
     UpdateLayer(layer, composition_type);

@@ -143,7 +143,15 @@ class SdmDisplayCapabilities : public BackendDisplayCapabilities {
   }
 
   std::optional<bool> GetHardwareColorTransformOverride() const override {
-    return true;
+    sdm::DisplayClass display_class{};
+    auto error = caps_intf_->GetDisplayConnectionType(sdm_display_id_,
+                                                      &display_class);
+    if (error != sdm::kErrorNone) {
+      ALOGE("GetDisplayConnectionType failed for display %" PRIu64 ": %s",
+            sdm_display_id_, ErrorToString(error).c_str());
+      return std::nullopt;
+    }
+    return display_class == sdm::DISPLAY_CLASS_BUILTIN;
   }
 
   std::optional<std::vector<ColorMode>> GetColorModeOverrides() const override {

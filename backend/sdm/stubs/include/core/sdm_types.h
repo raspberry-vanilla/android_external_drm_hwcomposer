@@ -74,6 +74,13 @@ enum class SDMPowerMode {
   POWER_MODE_DOZE_SUSPEND = 3,
 };
 
+enum DisplayClass {
+  DISPLAY_CLASS_BUILTIN,
+  DISPLAY_CLASS_PLUGGABLE,
+  DISPLAY_CLASS_VIRTUAL,
+  DISPLAY_CLASS_NULL,
+};
+
 enum class SDMLayerRequest : int32_t {
   ClearClientTarget = 1,
 };

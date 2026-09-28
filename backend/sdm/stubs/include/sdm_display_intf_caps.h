@@ -34,6 +34,8 @@ class SDMDisplayCapsIntf {
                                           float *out_min_luminance) = 0;
   virtual DisplayError GetDisplayHwId(uint64_t disp_id,
                                       int32_t *disp_hw_id) = 0;
+  virtual DisplayError GetDisplayConnectionType(
+      uint64_t display_id, DisplayClass *display_class) = 0;
 };
 
 }  // namespace sdm
