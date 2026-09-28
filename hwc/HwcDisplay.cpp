@@ -389,7 +389,7 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
   }
 
   if (boot_animation_state_ == BootAnimationState::kCleanup) {
-    boot_animation_state_ = BootAnimationState::kInactive;
+    SetBootAnimationState(BootAnimationState::kInactive);
     if (has_hdr_support_) {
       SetOutputType(OutputType::kSystem);
     }
@@ -908,11 +908,12 @@ void HwcDisplay::InitHdrSupported() {
 }
 
 bool HwcDisplay::Init() {
-  boot_animation_state_ = IsInHeadlessMode() ||
-                                  pipeline_->connector->Get()->IsExternal() ||
-                                  Properties::BootAnimationCompleted()
-                              ? BootAnimationState::kInactive
-                              : BootAnimationState::kActive;
+  SetBootAnimationState(IsInHeadlessMode() ||
+                                pipeline_->connector->Get()->IsExternal() ||
+                                (Properties::BootAnimationCompleted() &&
+                                 !Properties::EarlyBootAnimationEnabled())
+                            ? BootAnimationState::kInactive
+                            : BootAnimationState::kActive);
 
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
@@ -1069,8 +1070,9 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
   // TODO(b/553171429): Clean up sentinel once early boot animation is active.
   // BootAnimation creates a single surface for its entire lifecycle and drops
   // it on exit. Use the first layer destruction as the completion signal.
-  if (boot_animation_state_ == BootAnimationState::kActive) {
-    boot_animation_state_ = BootAnimationState::kCleanup;
+  if (boot_animation_state_ == BootAnimationState::kActive &&
+      !Properties::EarlyBootAnimationEnabled()) {
+    SetBootAnimationState(BootAnimationState::kCleanup);
   }
   auto count = layers_.erase(layer_id);
   return count != 0;
