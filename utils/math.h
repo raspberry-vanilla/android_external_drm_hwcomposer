@@ -17,12 +17,11 @@
 #pragma once
 
 #include <cmath>
-#include <limits>
 
 namespace android::drm_hwcomposer {
 
 inline bool FloatEquals(float a, float b) {
-  constexpr float kEpsilon = std::numeric_limits<float>::epsilon();
+  constexpr float kEpsilon = 1e-6F;
   return std::abs(a - b) < kEpsilon;
 }
 

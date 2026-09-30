@@ -351,7 +351,8 @@ std::shared_ptr<std::array<uint64_t, 3>> ColorUtil::ToColorOffset(
   if (!color_transform_matrix)
     return nullptr;
 
-  if (src_colorspace == dest_colorspace) {
+  if (src_colorspace == dest_colorspace ||
+      &ToColorGamut(src_colorspace) == &ToColorGamut(dest_colorspace)) {
     return ToColorOffset(color_transform_matrix);
   }
 
@@ -466,7 +467,8 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
     const std::shared_ptr<const HalColorTransformMatrix>
         &color_transform_matrix) {
-  if (src_colorspace == dest_colorspace) {
+  if (src_colorspace == dest_colorspace ||
+      &ToColorGamut(src_colorspace) == &ToColorGamut(dest_colorspace)) {
     if constexpr (std::is_same_v<T, drm_color_ctm>) {
       return ColorUtil::ToColorTransform3x3(color_transform_matrix);
     } else if constexpr (std::is_same_v<T, drm_color_ctm_3x4>) {

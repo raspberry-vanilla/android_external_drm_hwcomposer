@@ -23,6 +23,7 @@
 #include <math/vec3.h>
 #include <ui/ColorSpace.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,7 @@
 #include "drm/DrmColorspace.h"
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
+#include "utils/math.h"
 #include "utils/properties.h"
 
 using ColorGamut = android::ColorSpace;
@@ -860,6 +862,58 @@ TEST(ColorUtilTest, UseLogGammaLutSysprop) {
     ScopedTestProperty prop("vendor.hwc.use_log_gamma_lut", "false");
     EXPECT_FALSE(Properties::UseLogGammaLut());
   }
+}
+
+TEST(ColorUtilTest, FloatEqualsEpsilonBoundary) {
+  constexpr float kMachineEpsilon = std::numeric_limits<float>::epsilon();
+  // Framework color matrix calculations (e.g. chromatic adaptation matrix
+  // multiplication or MathUtils.lerp) produce 0.99999988F (1.0F - epsilon) for
+  // identity diagonal elements.
+  constexpr float kInterpolatedOne = 0.99999988F;
+
+  // Strict "< machine_epsilon" fails because |0.99999988F - 1.0F| == epsilon.
+  EXPECT_GE(std::abs(kInterpolatedOne - 1.0F), kMachineEpsilon);
+  EXPECT_GE(std::abs(kMachineEpsilon - 0.0F), kMachineEpsilon);
+
+  // FloatEquals with kEpsilon = 1e-6F accepts machine-epsilon rounding error.
+  EXPECT_TRUE(FloatEquals(kInterpolatedOne, 1.0F));
+  EXPECT_TRUE(FloatEquals(kMachineEpsilon, 0.0F));
+  EXPECT_TRUE(FloatEquals(2.0F * kMachineEpsilon, 0.0F));
+
+  // Identity matrix check with machine-epsilon imprecision passes.
+  HalColorTransformMatrix approx_identity = kIdentityMatrix;
+  approx_identity[0] = kInterpolatedOne;
+  approx_identity[5] = kInterpolatedOne;
+  approx_identity[10] = kInterpolatedOne;
+  approx_identity[1] = kMachineEpsilon;
+  EXPECT_TRUE(std::equal(approx_identity.begin(), approx_identity.end(),
+                         kIdentityMatrix.begin(), FloatEquals));
+
+  // Differences at or above 1e-6F (including 1e-4F) are rejected.
+  EXPECT_FALSE(FloatEquals(1.0F - 1e-6F, 1.0F));
+  EXPECT_FALSE(FloatEquals(1e-6F, 0.0F));
+  EXPECT_FALSE(FloatEquals(1.0F - 1e-4F, 1.0F));
+}
+
+TEST(ColorUtilTest, ToLinearCtmAndHasOffsetWithMachineEpsilonImprecision) {
+  constexpr float kMachineEpsilon = std::numeric_limits<float>::epsilon();
+  HalColorTransformMatrix matrix = kIdentityMatrix;
+  matrix[0] = 0.5F;
+  matrix[5] = 0.5F;
+  matrix[10] = 0.5F;
+  // Off-diagonal and offset entries with 1*machine_epsilon noise would fail
+  // a strict "< machine_epsilon" check, falsely reporting an offset and
+  // skipping ToLinearCtm linearization.
+  matrix[1] = kMachineEpsilon;
+  matrix[12] = kMachineEpsilon;
+
+  EXPECT_FALSE(ColorUtil::HasOffset(matrix));
+
+  HalColorTransformMatrix linear_ctm = ColorUtil::ToLinearCtm(
+      matrix, ColorMode::kSrgb);
+  // Since the matrix is recognized as diagonal, 0.5F is linearized via sRGB
+  // EOTF (~0.21404F) instead of being returned untouched as 0.5F.
+  EXPECT_LT(linear_ctm[0], 0.25F);
 }
 
 }  // namespace android::drm_hwcomposer
