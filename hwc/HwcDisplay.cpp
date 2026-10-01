@@ -1192,6 +1192,13 @@ auto HwcDisplay::StartHdcp() -> bool {
    * HDCP cannot be completed.
    */
   if (hdcpcon_ == nullptr) {
+    // Virtual emulators lack physical HDCP hardware. Advertise HDCP_V1
+    // so secure content and lockscreen bouncers render on external displays.
+    if (Properties::IsEmulator()) {
+      hwc_->SendHdcpLevelsChangedEventToClient(handle_,
+                                               HdcpContentType::kType0);
+      return true;
+    }
     ALOGE(
         "HDCP requested, but HDCP properties not available on that "
         "display");

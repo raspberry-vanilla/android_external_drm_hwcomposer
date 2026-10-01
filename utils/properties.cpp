@@ -316,6 +316,13 @@ auto Properties::UseLogGammaLut() -> bool {
   return (property_get_bool("vendor.hwc.use_log_gamma_lut", 0) != 0);
 }
 
+auto Properties::IsEmulator() -> bool {
+  char prop[PROPERTY_VALUE_MAX];
+  return (property_get_bool("ro.boot.qemu", 0) != 0) ||
+         (property_get("ro.hardware", prop, "") > 0 &&
+          strcmp(prop, "cutf_cvm") == 0);
+}
+
 auto Properties::BootAnimationPath() -> std::string {
   char path[PROPERTY_VALUE_MAX] = {};
   property_get("ro.vendor.hwc.bootanim.path", path, "/vendor/etc/bootanim.raw");

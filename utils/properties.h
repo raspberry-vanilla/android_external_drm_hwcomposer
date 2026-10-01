@@ -55,6 +55,7 @@ class Properties {
   static auto SkipPlaneDamageClips() -> bool;
   static auto FlatteningEnabled() -> bool;
   static auto UseLogGammaLut() -> bool;
+  static auto IsEmulator() -> bool;
   static auto SupportsMultiDisplayModeset() -> bool;
 
   /**
