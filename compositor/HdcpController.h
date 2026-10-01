@@ -52,6 +52,7 @@ class HdcpController {
     kRequested,
     kEnabled,
     kRetry,
+    kInfeasible,
     kThreadExit
   };
 

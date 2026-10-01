@@ -56,7 +56,9 @@ void HdcpController::Start() {
   bool changed = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (hdcp_state_ != HdcpState::kRetry) {
+    if (hdcp_state_ != HdcpState::kRetry &&
+        hdcp_state_ != HdcpState::kInfeasible &&
+        hdcp_state_ != HdcpState::kEnabled) {
       hdcp_state_ = HdcpState::kDesired;
       changed = true;
     }
@@ -71,7 +73,8 @@ void HdcpController::Requested() {
   auto lock = std::lock_guard<std::mutex>(mutex_);
 
   if (hdcp_state_ == HdcpState::kEnabled ||
-      hdcp_state_ == HdcpState::kUndesired) {
+      hdcp_state_ == HdcpState::kUndesired ||
+      hdcp_state_ == HdcpState::kInfeasible) {
     return;
   }
 
@@ -116,8 +119,9 @@ void HdcpController::SetContentProtectionStatus() {
       } else {
         if (was_retry_) {
           was_retry_ = false;
-          hdcp_state_ = HdcpState::kUndesired;
+          hdcp_state_ = HdcpState::kInfeasible;
           notify_type = std::nullopt;
+          ALOGI("HDCP negotiation failed after retry. Marking as infeasible.");
           should_notify_hdcp_status = true;
         } else {
           hdcp_state_ = HdcpState::kRetry;
