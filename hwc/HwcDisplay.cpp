@@ -1270,6 +1270,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   AtomicCommitArgs args{};
 
   args.brightness = brightness_;
+  args.brightness_nits = brightness_nits_;
   args.color_matrix = color_matrix_;
   args.content_type = content_type_;
   args.colorspace = colorspace_;
@@ -1428,6 +1429,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
 
   AtomicCommitArgs a_args;
   a_args.brightness = brightness_;
+  a_args.brightness_nits = brightness_nits_;
   a_args.color_matrix = color_matrix_;
   a_args.content_type = content_type_;
   a_args.colorspace = colorspace_;
@@ -1944,6 +1946,20 @@ auto HwcDisplay::SetBrightness(float brightness) -> bool {
     return backlight_controller_->SetBrightness(std::nullopt);
   }
   return true;
+}
+
+void HwcDisplay::SetBrightnessNits(float brightness_nits) {
+  if (IsInHeadlessMode() || pipeline_->connector->Get()->IsExternal()) {
+    return;
+  }
+
+  // Negative values indicate turning the backlight off per HAL API.
+  // Set to 0 so downstream color and gamma pipelines scale to 0 (black).
+  if (brightness_nits < 0.F) {
+    brightness_nits_ = 0.F;
+  } else {
+    brightness_nits_ = brightness_nits;
+  }
 }
 
 void HwcDisplay::LogModesOnHotplug() {

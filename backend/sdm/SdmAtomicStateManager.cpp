@@ -322,6 +322,17 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
       result.present_fence = MakeSharedFd(sdm::Fence::Dup(out_retire_fence));
     }
   }
+  if (args.brightness_nits) {
+    auto display_error = settings_intf_
+                             ->SetDisplayBrightnessNits(sdm_display_id_,
+                                                        args.brightness_nits
+                                                            .value());
+    if (display_error != sdm::kErrorNone) {
+      ALOGE("SetDisplayBrightnessNits failed: %s",
+            ErrorToString(display_error).c_str());
+      return std::nullopt;
+    }
+  }
   return result;
 }
 

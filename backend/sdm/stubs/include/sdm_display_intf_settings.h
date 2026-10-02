@@ -45,6 +45,8 @@ class SDMDisplaySettingsIntf {
                                          const std::vector<float> &matrix) = 0;
   virtual int GetDisplayConfigGroup(
       uint64_t disp_id, const DisplayConfigVariableInfo &config) = 0;
+  virtual DisplayError SetDisplayBrightnessNits(uint64_t disp_id,
+                                                float brightness_nits) = 0;
 };
 
 }  // namespace sdm
