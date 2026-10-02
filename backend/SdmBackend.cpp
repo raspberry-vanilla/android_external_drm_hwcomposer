@@ -203,12 +203,18 @@ SdmDisplayCapabilities::GetHdrTypesOverride() const {
     }
   }
 
-  ALOGI("SDM HDR Capabilities for display %" PRIu64
-        ": max_lum=%f, max_avg_lum=%f, min_lum=%f, count=%u",
-        sdm_display_id_, max_lum, max_avg_lum, min_lum, count);
+  std::string types_str;
   for (auto t : types) {
-    ALOGI("  type: %d", static_cast<int>(t));
+    if (!types_str.empty()) {
+      types_str += ", ";
+    }
+    types_str += std::to_string(static_cast<int>(t));
   }
+
+  ALOGI("SDM HDR Capabilities for display %" PRIu64
+        ": max_lum=%f, max_avg_lum=%f, min_lum=%f, count=%u, types=[%s]",
+        sdm_display_id_, max_lum, max_avg_lum, min_lum, count,
+        types_str.c_str());
 
   return types;
 }
