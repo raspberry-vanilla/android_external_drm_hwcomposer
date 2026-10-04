@@ -96,15 +96,12 @@ void SdmHotplugHandler::DispatchLoop() {
     }
 
     if (current_handler) {
-      if (!next_event.connected) {
-        // Delay the hotplug disconnect for 100ms. This makes multi-display
-        // hotplug more reliable, by avoiding suspected issues in the Android
-        // Framework resulting in the disconnect event being dropped. Tested
-        // over multiple plug/unplug iterations.
-        constexpr int kDisconnectDelayMs = 100;
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(kDisconnectDelayMs));
-      }
+      // Delay hotplug events for 200ms. This makes multi-display hotplug
+      // more reliable, by avoiding suspected issues in the Android Framework
+      // resulting in hotplug events being dropped or coalesced. Tested over
+      // multiple plug/unplug iterations.
+      constexpr int kHotplugDelayMs = 200;
+      std::this_thread::sleep_for(std::chrono::milliseconds(kHotplugDelayMs));
       current_handler(next_event.connector_id, next_event.connected);
     }
   }
