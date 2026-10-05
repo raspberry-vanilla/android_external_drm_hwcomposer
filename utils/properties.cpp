@@ -322,24 +322,37 @@ auto Properties::UseLogGammaLut() -> bool {
   return (property_get_bool("vendor.hwc.use_log_gamma_lut", 0) != 0);
 }
 
-auto Properties::BootAnimationPath() -> std::string {
+auto Properties::IsEmulator() -> bool {
+  char prop[PROPERTY_VALUE_MAX];
+  return (property_get_bool("ro.boot.qemu", 0) != 0) ||
+         (property_get("ro.hardware", prop, "") > 0 &&
+          strcmp(prop, "cutf_cvm") == 0);
+}
+
+auto Properties::EarlyBootAnimationPath() -> std::string {
   char path[PROPERTY_VALUE_MAX] = {};
   property_get("ro.vendor.hwc.bootanim.path", path, "/vendor/etc/bootanim.raw");
   return path;
 }
 
-void Properties::SetBootAnimationCompleted(bool completed) {
-  property_set("vendor.hwc.bootanim.completed", completed ? "1" : "0");
+void Properties::SetEarlyBootAnimationCompleted(bool completed) {
+  constexpr char kKey[] = "vendor.hwc.bootanim.completed";
+  const char* value = completed ? "1" : "0";
+  const int err = property_set(kKey, value);
+  ALOGE_IF(err != 0, "Failed to set property \"%s\"= \"%s\" (err=%d)", kKey,
+           value, err);
 }
 
-auto Properties::BootAnimationEnabled() -> bool {
+auto Properties::EarlyBootAnimationEnabled() -> bool {
   return (property_get_bool("vendor.hwc.drm.bootanim.enable", 0) != 0);
 }
 
-auto Properties::EarlyBootHoldMs() -> int {
+auto Properties::EarlyBootAnimationHoldMs() -> int {
   constexpr int kDefaultEarlyBootHoldMs = 1000;
-  return property_get_int32("debug.hwc.early_boot_hold_ms",
-                            kDefaultEarlyBootHoldMs);
+  return property_get_int32("vendor.hwc.drm.early_boot_hold_ms",
+                            // Use legacy name as first-level fallback.
+                            property_get_int32("debug.hwc.early_boot_hold_ms",
+                                               kDefaultEarlyBootHoldMs));
 }
 
 auto Properties::BootAnimationCompleted() -> bool {

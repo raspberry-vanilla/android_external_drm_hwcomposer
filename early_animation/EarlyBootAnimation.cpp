@@ -84,8 +84,8 @@ constexpr bool IsHdrFormat(uint32_t format) {
 }  // namespace
 
 EarlyBootAnimation::EarlyBootAnimation(HwcDisplay* display)
-    : display_(display), animation_path_(Properties::BootAnimationPath()) {
-  Properties::SetBootAnimationCompleted(false);
+    : display_(display), animation_path_(Properties::EarlyBootAnimationPath()) {
+  Properties::SetEarlyBootAnimationCompleted(false);
 }
 
 EarlyBootAnimation::~EarlyBootAnimation() {
@@ -145,6 +145,7 @@ bool EarlyBootAnimation::Start() {
     }
   }
 
+  display_->SetBootAnimationState(HwcDisplay::BootAnimationState::kActive);
   const HwcDisplayConfig* current_config = display_->GetCurrentConfig();
   if (current_config == nullptr) {
     ALOGE("EarlyBootAnimation: No current display config");
@@ -155,24 +156,23 @@ bool EarlyBootAnimation::Start() {
                                              display_->GetDisplayConfigs(),
                                              static_cast<float>(header_.fps));
 
-  ALOGD("EarlyBootAnimation: Current config is %u (%ux%u @ %.2f Hz)",
+  ALOGD("EarlyBootAnimation: Existing config is %u (%ux%u @ %.2f Hz)",
         current_config->id, current_config->mode.GetRawMode().hdisplay,
         current_config->mode.GetRawMode().vdisplay,
         current_config->mode.GetVRefresh());
-  if (best_config_id == current_config->id) {
-    ALOGD("EarlyBootAnimation: Keeping current config %u to match FPS %u",
-          current_config->id, header_.fps);
-  } else {
-    ALOGD("EarlyBootAnimation: Switching config from %u to %u to match FPS %u",
-          current_config->id, best_config_id, header_.fps);
-    display_->SetConfig(best_config_id);
-    current_config = display_->GetCurrentConfig();
-    if (current_config == nullptr) {
-      ALOGE("EarlyBootAnimation: No current display config after SetConfig");
-      Stop();
-      return false;
-    }
+  // Attempt to set the config even if the best config is already current,
+  // because this allows the display to choose boot-specific color settings.
+  display_->SetConfig(best_config_id);
+  current_config = display_->GetCurrentConfig();
+  if (current_config == nullptr) {
+    ALOGE("EarlyBootAnimation: No current display config after SetConfig");
+    Stop();
+    return false;
   }
+  ALOGD("EarlyBootAnimation: New config is %u (%ux%u @ %.2f Hz)",
+        current_config->id, current_config->mode.GetRawMode().hdisplay,
+        current_config->mode.GetRawMode().vdisplay,
+        current_config->mode.GetVRefresh());
 
   // Match sleep duration to the panel's actual refresh rate to avoid clock
   // drift (e.g. 59.94Hz), and use multiplier for high refresh panels (e.g.
@@ -306,7 +306,7 @@ void EarlyBootAnimation::WaitForCompletion() {
   // with an added 3-second safety watchdog buffer to prevent false timeouts.
   const auto expected_duration = (header_.num_frames * frame_duration_) +
                                  std::chrono::milliseconds(
-                                     Properties::EarlyBootHoldMs()) +
+                                     Properties::EarlyBootAnimationHoldMs()) +
                                  std::chrono::milliseconds(
                                      header_.hold_duration_ms);
   static constexpr auto kWatchdogBuffer = std::chrono::seconds(3);
@@ -348,7 +348,10 @@ void EarlyBootAnimation::Stop() {
     }
 
     FreeBuffers();
-    Properties::SetBootAnimationCompleted(true);
+    if (display_ != nullptr) {
+      display_->SetBootAnimationState(HwcDisplay::BootAnimationState::kCleanup);
+    }
+    Properties::SetEarlyBootAnimationCompleted(true);
     ALOGD("EarlyBootAnimation: Stopped");
   });
 }
@@ -437,7 +440,7 @@ void EarlyBootAnimation::Loop(UniqueFd fd) {
 
     if (frame_count == 0) {
       const auto first_frame_hold = std::chrono::milliseconds(
-          Properties::EarlyBootHoldMs());
+          Properties::EarlyBootAnimationHoldMs());
       ALOGD("EarlyBootAnimation: First frame committed, holding for %lldms",
             static_cast<long long>(first_frame_hold.count()));
       {

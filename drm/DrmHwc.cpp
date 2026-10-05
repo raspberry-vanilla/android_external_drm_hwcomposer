@@ -405,7 +405,7 @@ DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() 
 }
 
 void DrmHwc::StartBootAnimation() {
-  if (!Properties::BootAnimationEnabled()) {
+  if (!Properties::EarlyBootAnimationEnabled()) {
     return;
   }
   auto &primary_display = displays_[kPrimaryDisplay];

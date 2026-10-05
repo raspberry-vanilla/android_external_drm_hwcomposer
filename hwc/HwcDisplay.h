@@ -352,6 +352,10 @@ class HwcDisplay : public ICompositorDisplay {
   // Enable or disable the display.
   HwcDisplay::Error SetPowerMode(PowerMode mode);
 
+  void SetBootAnimationState(BootAnimationState state) {
+    boot_animation_state_ = state;
+  }
+
  private:
   bool IsDozeSupported() const;
   bool IsDozeSuspendSupported() const;
