@@ -251,17 +251,17 @@ void ResourceManager::Init() {
               break;
             }
           }
-          if (conn == nullptr) {
-            ALOGW("ResourceManager: connector %u not found on device %s",
-                  connector_id, drm_ptr->GetName().c_str());
-            return;
-          }
-          ProcessHotplugForConnector(conn);
-          if (conn->IsConnected() != connected) {
-            ALOGE(
-                "ResourceManager: connector %u connected state mismatch "
-                "(DRM=%d, backend=%d)",
-                connector_id, conn->IsConnected(), connected);
+          ALOGW_IF(conn == nullptr,
+                   "ResourceManager: connector %u not found on device %s",
+                   connector_id, drm_ptr->GetName().c_str());
+          if (conn != nullptr) {
+            ProcessHotplugForConnector(conn);
+            if (conn->IsConnected() != connected) {
+              ALOGE(
+                  "ResourceManager: connector %u connected state mismatch "
+                  "(DRM=%d, backend=%d)",
+                  connector_id, conn->IsConnected(), connected);
+            }
           }
           frontend_interface_->FinalizeDisplayBinding();
         }
