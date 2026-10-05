@@ -1245,6 +1245,10 @@ auto HwcDisplay::StopHdcp() -> bool {
 
 std::optional<AtomicCommitArgs> HwcDisplay::CreateModesetCommit(
     ConfigId configId) {
+  if (IsInHeadlessMode()) {
+    return std::nullopt;
+  }
+
   ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
   staged_mode_config_id_ = configId;
   const auto *config = GetConfig(configId);
