@@ -303,6 +303,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   }
 
   ALOGV("Create modeset commit.");
+
+  // TODO(b/533481169) - updating the state via SetOutputType should happen
+  // after the successful commit via ApplyCommitChanges().
   SetOutputType(new_config->output_type);
 
   // Create atomic commit args for a blocking modeset. There's no need to do a
@@ -1187,16 +1190,20 @@ auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
 }
 
 auto HwcDisplay::StartHdcp() -> bool {
-  /*
-   * Hdcp will be enabled on hotplug or client can request to start Hdcp
-   * With requests to start Hdcp, internal state is set to kDesired
-   * else the state stays as Undesired
-   * Since the HDCP Content and Content Protection prop are optional
-   * We need to make sure the connector has these properties else
-   * return a false to indicate that the request to start/stop
-   * HDCP cannot be completed.
-   */
   if (hdcpcon_ == nullptr) {
+    const int forced_level = Properties::ForceHdcpLevel();
+    if (forced_level == 0) {
+      ALOGI("HDCP requested to start (forced kType0)");
+      hwc_->SendHdcpLevelsChangedEventToClient(handle_,
+                                               HdcpContentType::kType0);
+      return true;
+    }
+    if (forced_level == 1) {
+      ALOGI("HDCP requested to start (forced kType1)");
+      hwc_->SendHdcpLevelsChangedEventToClient(handle_,
+                                               HdcpContentType::kType1);
+      return true;
+    }
     // Virtual emulators lack physical HDCP hardware. Advertise HDCP_V1
     // so secure content and lockscreen bouncers render on external displays.
     if (Properties::IsEmulator()) {
@@ -1237,6 +1244,23 @@ auto HwcDisplay::StopHdcp() -> bool {
     hdcpcon_->Terminate();
   }
   return true;
+}
+
+std::optional<AtomicCommitArgs> HwcDisplay::CreateModesetCommit(
+    ConfigId configId) {
+  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
+  staged_mode_config_id_ = configId;
+  const auto *config = GetConfig(configId);
+  if (config == nullptr) {
+    ALOGE("Could not find active mode for %u", configId);
+    return std::nullopt;
+  }
+
+  // TODO(b/533481169) - this function should be const and the state of
+  // HwcDisplay should only be change after a successful commit.
+  SetOutputType(config->output_type);
+  std::optional<LayerData> modeset_layer_data = GetModesetLayerData(config);
+  return CreateModesetCommit(config, modeset_layer_data);
 }
 
 AtomicCommitArgs HwcDisplay::CreateModesetCommit(
