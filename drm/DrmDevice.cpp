@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,10 +69,6 @@ DrmDevice::~DrmDevice() {
 auto DrmDevice::CreateInstance(std::string const &path,
                                ResourceManager *res_man, uint32_t index)
     -> std::unique_ptr<DrmDevice> {
-  if (!IsKMSDev(path.c_str())) {
-    return {};
-  }
-
   auto device = std::unique_ptr<DrmDevice>(new DrmDevice(res_man, index));
 
   if (device->Init(path.c_str()) != 0) {
@@ -89,12 +87,53 @@ DrmDevice::DrmDevice(ResourceManager *res_man, uint32_t index)
 
 auto DrmDevice::Init(const char *path) -> int {
   /* TODO: Use drmOpenControl here instead */
-  // NOLINTNEXTLINE(misc-include-cleaner)
-  fd_ = MakeSharedFd(open(path, O_RDWR | O_CLOEXEC));
-  if (!fd_) {
-    // NOLINTNEXTLINE(concurrency-mt-unsafe): Fixme
-    ALOGE("Failed to open dri %s: %s", path, strerror(errno));
-    return -ENODEV;
+  constexpr int kMaxMasterRetries = 20;
+  constexpr auto kMasterRetryDelay = std::chrono::milliseconds(50);
+
+  for (int attempt = 1; attempt <= kMaxMasterRetries; ++attempt) {
+    // NOLINTNEXTLINE(misc-include-cleaner)
+    fd_ = MakeSharedFd(open(path, O_RDWR | O_CLOEXEC));
+    if (!fd_) {
+      // NOLINTNEXTLINE(concurrency-mt-unsafe): Fixme
+      ALOGE("Failed to open dri %s: %s", path, strerror(errno));
+      return -ENODEV;
+    }
+
+    // Check KMS capabilities on the already-open fd rather than opening and
+    // closing the device prior to Init(), which would drop the kernel's
+    // auto-granted DRM master. Because KMS resource counts are static and do
+    // not require DRM master, only check on the first attempt so non-KMS
+    // devices fail fast without redundant ioctls on subsequent retries.
+    if (attempt == 1 && !IsKMSDev(*GetFd())) {
+      return -ENODEV;
+    }
+
+    // Without CAP_SYS_ADMIN, the kernel only allows drmSetMaster() if the fd
+    // was auto-granted master at open() time (file_priv->was_master == true),
+    // in which case drmSetMaster() succeeds as a no-op. If another process
+    // transiently held DRM master during open(), was_master is false and
+    // drmSetMaster() will permanently fail with EACCES on this fd, so we must
+    // close and re-open the device on retry.
+    if (drmSetMaster(*GetFd()) == 0) {
+      break;
+    }
+
+    ALOGW("Failed to set drm master on %s (errno=%d, attempt=%d/%d)", path,
+          errno, attempt, kMaxMasterRetries);
+    if (Properties::IgnoreDrmMasterFailure() || attempt == kMaxMasterRetries) {
+      break;
+    }
+
+    fd_.reset();
+    std::this_thread::sleep_for(kMasterRetryDelay);
+  }
+
+  if (drmIsMaster(*GetFd()) == 0) {
+    if (!Properties::IgnoreDrmMasterFailure()) {
+      ALOGE("DRM/KMS master access required");
+      return -EACCES;
+    }
+    ALOGW("Continuing without DRM/KMS master access");
   }
 
   int ret = drmSetClientCap(*GetFd(), DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
@@ -134,17 +173,6 @@ auto DrmDevice::Init(const char *path) -> int {
       drmGetCap(*GetFd(), DRM_CAP_CURSOR_HEIGHT, &cursor_height) == 0) {
     cap_cursor_size_ = std::pair<uint64_t, uint64_t>(cursor_width,
                                                      cursor_height);
-  }
-
-  if (drmSetMaster(*GetFd()) != 0) {
-    ALOGE("Failed to set drm master %d", errno);
-  }
-  if (drmIsMaster(*GetFd()) == 0) {
-    if (!Properties::IgnoreDrmMasterFailure()) {
-      ALOGE("DRM/KMS master access required");
-      return -EACCES;
-    }
-    ALOGW("Continuing without DRM/KMS master access");
   }
 
   external_displays_enabled_ = Properties::EnableExternalDisplays();
@@ -312,14 +340,8 @@ std::string DrmDevice::GetName() const {
   return name;
 }
 
-auto DrmDevice::IsKMSDev(const char *path) -> bool {
-  // NOLINTNEXTLINE(misc-include-cleaner)
-  auto fd = MakeUniqueFd(open(path, O_RDWR | O_CLOEXEC));
-  if (!fd) {
-    return false;
-  }
-
-  auto res = MakeDrmModeResUnique(*fd);
+auto DrmDevice::IsKMSDev(int fd) -> bool {
+  auto res = MakeDrmModeResUnique(fd);
   if (!res) {
     return false;
   }

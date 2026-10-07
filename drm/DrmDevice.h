@@ -126,7 +126,7 @@ class DrmDevice {
   auto Init(const char *path) -> int;
   auto IsConnectorAllowed(DrmConnector &conn) const -> bool;
 
-  static auto IsKMSDev(const char *path) -> bool;
+  static auto IsKMSDev(int fd) -> bool;
 
   SharedFd fd_;
   const uint32_t index_in_dev_array_;
