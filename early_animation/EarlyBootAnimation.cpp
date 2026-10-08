@@ -85,7 +85,6 @@ constexpr bool IsHdrFormat(uint32_t format) {
 
 EarlyBootAnimation::EarlyBootAnimation(HwcDisplay* display)
     : display_(display), animation_path_(Properties::EarlyBootAnimationPath()) {
-  Properties::SetEarlyBootAnimationCompleted(false);
 }
 
 EarlyBootAnimation::~EarlyBootAnimation() {
