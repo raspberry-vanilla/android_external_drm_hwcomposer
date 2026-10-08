@@ -41,7 +41,6 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmMode.h"
 #include "hwc/HwcDisplay.h"
-#include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -100,25 +99,13 @@ void SdmAtomicStateManager::InitColorModes() {
     if (!color_mode) {
       continue;
     }
-    auto colorspace = ColorUtil::ToHwcColorspace(color_mode.value());
-    auto it = colorspace_map_.find(colorspace);
-    if (it != colorspace_map_.end()) {
-      ALOGW(
-          "ColorModes %d and %d both map to Colorspace %d. Skipping ColorMode "
-          "%d",
-          static_cast<int32_t>(*color_mode), static_cast<int32_t>(it->second),
-          static_cast<int32_t>(it->first), static_cast<int32_t>(*color_mode));
-      continue;
-    }
     color_modes_.push_back(color_mode.value());
-    colorspace_map_[colorspace] = color_modes_.back();
   }
   if (color_modes_.empty()) {
     ALOGE(
         "InitColorModes resulted in no ColorModes being set. Falling back to "
         "kNative.");
     color_modes_.push_back(ColorMode::kNative);
-    colorspace_map_[HwcColorspace::kDefault] = ColorMode::kNative;
   }
 }
 
@@ -271,26 +258,19 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
       power_mode_ = *new_power_mode;
     }
   }
-  if (args.colorspace && args.colorspace != last_colorspace_) {
-    ColorMode color_mode = ColorMode::kNative;
-    auto it = colorspace_map_.find(*args.colorspace);
-    ALOGE_IF(it == colorspace_map_.end(),
-             "Did not find ColorMode for HwcColorspace %d",
-             static_cast<int>(*args.colorspace));
-    if (it != colorspace_map_.end()) {
-      color_mode = it->second;
-    }
+  if (args.color_mode &&
+      (!last_color_mode_ || *args.color_mode != *last_color_mode_)) {
     // Hardcode to colorimetric render intent.
     constexpr int32_t kColorimetricRenderIntent = 0;
     auto display_error = settings_intf_->SetColorModeWithRenderIntent(
-        sdm_display_id_, static_cast<int32_t>(color_mode),
+        sdm_display_id_, static_cast<int32_t>(*args.color_mode),
         kColorimetricRenderIntent);
     if (display_error != sdm::kErrorNone) {
       ALOGE("SetColorModeWithRenderIntent failed: %s",
             ErrorToString(display_error).c_str());
       return std::nullopt;
     }
-    last_colorspace_ = args.colorspace;
+    last_color_mode_ = args.color_mode;
   }
   if (args.color_matrix &&
       (!last_color_matrix_ || *args.color_matrix != *last_color_matrix_)) {
