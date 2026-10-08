@@ -409,13 +409,18 @@ void DrmHwc::StartBootAnimation() {
     return;
   }
   auto &primary_display = displays_[kPrimaryDisplay];
-  if (primary_display && !primary_display->IsInHeadlessMode()) {
-    if (!boot_animation_) {
-      boot_animation_ = std::make_unique<EarlyBootAnimation>(
-          primary_display.get());
-      if (!boot_animation_->Start()) {
-        boot_animation_.reset();
-      }
+  if (!primary_display || primary_display->IsInHeadlessMode()) {
+    ALOGW(
+        "EarlyBootAnimation: Primary display unavailable or in headless mode, "
+        "skipping boot animation");
+    Properties::SetEarlyBootAnimationCompleted(false);
+    return;
+  }
+  if (!boot_animation_) {
+    boot_animation_ = std::make_unique<EarlyBootAnimation>(
+        primary_display.get());
+    if (!boot_animation_->Start()) {
+      boot_animation_.reset();
     }
   }
 }
