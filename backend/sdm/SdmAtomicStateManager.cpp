@@ -224,7 +224,7 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
   if (args.display_mode) {
     auto sdm_config_idx = GetSdmConfigId(*args.display_mode);
     if (sdm_config_idx.has_value()) {
-      ALOGI("Setting active SDM config %u for mode %s", *sdm_config_idx,
+      ALOGV("Setting active SDM config %u for mode %s", *sdm_config_idx,
             args.display_mode->GetName().c_str());
       sdm::DisplayError display_error = sdm::kErrorNone;
       // TODO (b/544508262): Use SetActiveConfig for both seamless and
@@ -322,6 +322,17 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
       result.present_fence = MakeSharedFd(sdm::Fence::Dup(out_retire_fence));
     }
   }
+  if (args.brightness_nits) {
+    auto display_error = settings_intf_
+                             ->SetDisplayBrightnessNits(sdm_display_id_,
+                                                        args.brightness_nits
+                                                            .value());
+    if (display_error != sdm::kErrorNone) {
+      ALOGE("SetDisplayBrightnessNits failed: %s",
+            ErrorToString(display_error).c_str());
+      return std::nullopt;
+    }
+  }
   return result;
 }
 
@@ -412,7 +423,7 @@ bool SdmAtomicStateManager::IsSeamlessConfigChange(const DrmMode& mode) const {
                                                  target_config_it->second);
 
   bool seamless = (current_group == target_group) && (current_group != -1);
-  ALOGI(
+  ALOGV(
       "IsSeamlessConfigChange: current %u (group %d), target %u (group %d), "
       "seamless: %d",
       *active_sdm_config_id_, current_group, *target_config_idx, target_group,

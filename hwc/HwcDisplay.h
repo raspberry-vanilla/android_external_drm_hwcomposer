@@ -216,6 +216,7 @@ class HwcDisplay : public ICompositorDisplay {
   }
 
   auto SetBrightness(float brightness) -> bool;
+  void SetBrightnessNits(float brightness_nits);
 
   auto SetContentType(ContentType content_type) {
     content_type_ = content_type;
@@ -470,6 +471,7 @@ class HwcDisplay : public ICompositorDisplay {
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
   float brightness_ = kBrightnessUnset;
+  float brightness_nits_ = kBrightnessUnset;
   float hdr_headroom_{};
 
   bool has_wcg_support_ = false;

@@ -578,6 +578,8 @@ void ExecuteSetDisplayBrightness(DrmHwc& hwc, int64_t display_handle,
   if (!display->SetBrightness(brightness.brightness)) {
     cmd_result_writer.AddError(hwc3::Error::kBadParameter);
   }
+
+  display->SetBrightnessNits(brightness.brightnessNits);
 }
 
 void ExecuteSetDisplayClientTarget(DrmHwc& hwc, int64_t display_handle,
