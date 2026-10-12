@@ -1281,6 +1281,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.hdr_metadata = hdr_metadata_;
   args.min_bpc = min_bpc_;
   args.hdr_headroom = hdr_headroom_;
+  args.color_mode = color_mode_;
 
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
@@ -1440,6 +1441,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   a_args.hdr_metadata = hdr_metadata_;
   a_args.min_bpc = min_bpc_;
   a_args.hdr_headroom = hdr_headroom_;
+  a_args.color_mode = color_mode_;
 
   if (staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {

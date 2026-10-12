@@ -72,7 +72,7 @@ class SdmAtomicStateManager : public AtomicStateManager {
   // target in SDM.
   bool UpdateClientTarget(const LayerToPlaneJoiningPlan& plan);
 
-  // Initialize color_modes_ and colorspace_map_.
+  // Initialize color_modes_.
   void InitColorModes();
 
   // Get the supported color modes from the SDMDisplaySettingsIntf.
@@ -86,12 +86,11 @@ class SdmAtomicStateManager : public AtomicStateManager {
   sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf_;
   sdm::SDMDisplaySettingsIntf* settings_intf_;
   std::vector<ColorMode> color_modes_;
-  std::map<HwcColorspace, ColorMode> colorspace_map_;
   sdm::SDMPowerMode power_mode_ = sdm::SDMPowerMode::POWER_MODE_OFF;
-  // Colorspace/color matrix last successfully applied to SDM, so
+  // Color mode/color matrix last successfully applied to SDM, so
   // ExecuteAtomicCommit can skip re-applying an unchanged value on every
   // commit.
-  std::optional<HwcColorspace> last_colorspace_;
+  std::optional<ColorMode> last_color_mode_;
   std::shared_ptr<const HalColorTransformMatrix> last_color_matrix_;
   std::map<uint32_t, sdm::DisplayConfigVariableInfo> sdm_configs_;
   std::optional<uint32_t> active_sdm_config_id_;

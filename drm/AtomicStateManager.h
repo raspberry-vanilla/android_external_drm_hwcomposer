@@ -62,6 +62,7 @@ struct AtomicCommitArgs {
   std::optional<float> brightness;
   std::optional<float> brightness_nits;
   std::optional<float> hdr_headroom;
+  std::optional<ColorMode> color_mode;
 
   std::shared_ptr<IDrmFbIdHandle> writeback_fb;
   SharedFd writeback_release_fence;
