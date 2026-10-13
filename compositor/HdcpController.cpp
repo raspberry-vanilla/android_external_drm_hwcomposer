@@ -54,15 +54,32 @@ HdcpController::~HdcpController() {
 // Set the HDCP state to desired if not already requested
 void HdcpController::Start() {
   bool changed = false;
+  bool should_notify = false;
+  std::optional<HdcpContentType> notify_type;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (hdcp_state_ != HdcpState::kRetry &&
-        hdcp_state_ != HdcpState::kInfeasible &&
-        hdcp_state_ != HdcpState::kEnabled) {
-      ALOGI("HDCP requested to start");
-      hdcp_state_ = HdcpState::kDesired;
-      changed = true;
+    switch (hdcp_state_) {
+      case HdcpState::kEnabled:
+        should_notify = true;
+        notify_type = enabled_content_type_;
+        break;
+      case HdcpState::kInfeasible:
+        should_notify = true;
+        notify_type = std::nullopt;
+        break;
+      case HdcpState::kRetry:
+        break;
+      default:
+        ALOGI("HDCP requested to start");
+        hdcp_state_ = HdcpState::kDesired;
+        enabled_content_type_ = std::nullopt;
+        changed = true;
+        break;
     }
+  }
+
+  if (should_notify) {
+    cbks_.notify_hdcp_status(notify_type);
   }
 
   if (changed) {
@@ -117,6 +134,7 @@ void HdcpController::SetContentProtectionStatus() {
         } else {
           notify_type = HdcpContentType::kType1;
         }
+        enabled_content_type_ = notify_type;
       } else {
         if (was_retry_) {
           was_retry_ = false;
@@ -149,6 +167,7 @@ HdcpController::HdcpState HdcpController::GetHdcpState() const {
 void HdcpController::Terminate() {
   auto lock = std::lock_guard<std::mutex>(mutex_);
   hdcp_state_ = HdcpState::kUndesired;
+  enabled_content_type_ = std::nullopt;
   cbks_.notify_hdcp_status(std::nullopt);
   cv_.notify_all();
 }

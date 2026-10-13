@@ -1231,6 +1231,7 @@ ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
 
     HwcDisplay* display = GetDisplay(display_handle);
     if (display == nullptr) {
+      hwc_->NotifyHdcpErrorToClient(display_handle);
       return ToBinderStatus(hwc3::Error::kBadDisplay);
     }
 
