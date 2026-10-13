@@ -70,6 +70,7 @@ UNITTEST_SRCS := \
 	compositor/mapper/UnderlayMapperTest.cpp \
 	drm/DrmAtomicCommitSink.cpp \
 	drm/DrmAtomicStateManager.cpp \
+	drm/DrmAtomicStateManagerTest.cpp \
 	drm/DrmColorOp.cpp \
 	drm/DrmConnector.cpp \
 	drm/DrmCrtc.cpp \
@@ -79,6 +80,7 @@ UNITTEST_SRCS := \
 	drm/DrmEncoder.cpp \
 	drm/DrmFbImporter.cpp \
 	drm/DrmHwc.cpp \
+	drm/DrmHwcTest.cpp \
 	drm/DrmMode.cpp \
 	drm/DrmPlane.cpp \
 	drm/DrmProperty.cpp \
@@ -91,6 +93,7 @@ UNITTEST_SRCS := \
 	hwc/HwcDisplay.cpp \
 	hwc/HwcDisplayConfigs.cpp \
 	hwc/HwcDisplayConfigsGeneratorTest.cpp \
+	hwc/HwcDisplayTest.cpp \
 	hwc/HwcLayer.cpp \
 	stats/CompositionStatsAtomReporter.cpp \
 	stats/CountActiveDisplaysReporter.cpp \
