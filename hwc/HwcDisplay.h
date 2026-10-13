@@ -218,6 +218,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   auto SetBrightness(float brightness) -> bool;
   void SetBrightnessNits(float brightness_nits);
+  auto GetMaxLuminance() const -> float;
 
   auto SetContentType(ContentType content_type) {
     content_type_ = content_type;

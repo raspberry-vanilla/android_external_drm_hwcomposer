@@ -57,6 +57,7 @@
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 #include "utils/properties.h"
@@ -160,6 +161,13 @@ bool EarlyBootAnimation::Start() {
   }
 
   display_->SetBootAnimationState(HwcDisplay::BootAnimationState::kActive);
+  const auto brightness_nits = static_cast<float>(
+      Properties::EarlyBootAnimationBrightnessNits());
+  const float max_lum = display_->GetMaxLuminance();
+  const float brightness = std::clamp(brightness_nits / max_lum, kMinBrightness,
+                                      kMaxBrightness);
+  display_->SetBrightness(brightness);
+  display_->SetBrightnessNits(brightness_nits);
   const HwcDisplayConfig* current_config = display_->GetCurrentConfig();
   if (current_config == nullptr) {
     ALOGE("EarlyBootAnimation: No current display config");

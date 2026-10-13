@@ -355,6 +355,12 @@ auto Properties::EarlyBootAnimationEnabled() -> bool {
   return (property_get_bool("vendor.hwc.drm.bootanim.enable", 0) != 0);
 }
 
+auto Properties::EarlyBootAnimationBrightnessNits() -> int {
+  constexpr int kDefaultEarlyBootBrightnessNits = 170;
+  return property_get_int32("vendor.hwc.drm.bootanim.brightness_nits",
+                            kDefaultEarlyBootBrightnessNits);
+}
+
 auto Properties::EarlyBootAnimationHoldMs() -> int {
   constexpr int kDefaultEarlyBootHoldMs = 1000;
   return property_get_int32("vendor.hwc.drm.early_boot_hold_ms",

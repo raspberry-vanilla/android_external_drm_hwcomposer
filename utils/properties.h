@@ -104,6 +104,12 @@ class Properties {
   static auto EarlyBootAnimationEnabled() -> bool;
 
   /**
+   * Retrieves the target display brightness in nits for the early boot
+   * animation via the vendor.hwc.drm.bootanim.brightness_nits system property.
+   */
+  static auto EarlyBootAnimationBrightnessNits() -> int;
+
+  /**
    * Whether the standalone boot animation has completed. Does not refer to
    * early boot animation.
    */

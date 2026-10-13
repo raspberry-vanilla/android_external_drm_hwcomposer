@@ -213,13 +213,15 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
-void HwcDisplay::SetHdrHeadroom() {
+auto HwcDisplay::GetMaxLuminance() const -> float {
   float hdr_luminance[3]{kDefaultMaxLuminance, kDefaultMaxLuminance, 0.F};
   GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
                              &hdr_luminance[2]);
-  float max_lum = hdr_luminance[0] > 0.F ? hdr_luminance[0]
-                                         : kDefaultMaxLuminance;
-  hdr_headroom_ = max_lum / kHdrReferenceLuminance;
+  return hdr_luminance[0] > 0.F ? hdr_luminance[0] : kDefaultMaxLuminance;
+}
+
+void HwcDisplay::SetHdrHeadroom() {
+  hdr_headroom_ = GetMaxLuminance() / kHdrReferenceLuminance;
 }
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
