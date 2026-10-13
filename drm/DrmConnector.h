@@ -58,7 +58,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return *drm_;
   }
 
-  auto GetId() const {
+  virtual uint32_t GetId() const {
     return connector_->connector_id;
   }
 
@@ -77,9 +77,9 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   bool IsWriteback() const;
   bool IsValid() const;
 
-  std::string GetName() const;
+  virtual std::string GetName() const;
 
-  int UpdateModesAndProperties();
+  virtual int UpdateModesAndProperties();
 
   bool IsLinkStatusGood();
 
@@ -155,7 +155,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return panel_orientation_;
   }
 
-  auto IsConnected() const {
+  virtual bool IsConnected() const {
     return connector_->connection == DRM_MODE_CONNECTED;
   }
 
@@ -164,7 +164,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   auto GetPanelOrientation() -> std::optional<PanelOrientation>;
 
-  uint32_t GetConnectorType() const {
+  virtual uint32_t GetConnectorType() const {
     return connector_->connector_type;
   }
 

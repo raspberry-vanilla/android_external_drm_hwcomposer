@@ -373,4 +373,10 @@ auto Properties::SupportsMultiDisplayModeset() -> bool {
                             1) != 0);
 }
 
+auto Properties::DelayedEdidRecoveryMs() -> int {
+  constexpr int kDefaultRecoveryDelayMs = 3000;
+  return property_get_int32("vendor.hwc.delayed_edid_recovery_ms",
+                            kDefaultRecoveryDelayMs);
+}
+
 }  // namespace android::drm_hwcomposer

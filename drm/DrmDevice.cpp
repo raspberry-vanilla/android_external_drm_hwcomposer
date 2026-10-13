@@ -487,6 +487,11 @@ class DumbBufferFd : public PrimeFdsSharedBase {
   SharedFd fd;
 };
 
+auto DrmDevice::CreateDumbBuffer(uint32_t width, uint32_t height,
+                                 uint32_t format) -> std::optional<BufferInfo> {
+  return CreateDumbBuffer(width, height, format, 0);
+}
+
 // NOLINTBEGIN(cppcoreguidelines-avoid-goto)
 auto DrmDevice::CreateDumbBuffer(uint32_t width, uint32_t height,
                                  uint32_t format, uint32_t prime_fd_flags)

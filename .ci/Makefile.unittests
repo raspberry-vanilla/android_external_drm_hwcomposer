@@ -14,23 +14,28 @@ HOST_INCLUDES := \
 	-I/usr/src/googletest/googletest \
 	-I/usr/src/googletest/googlemock \
 	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libcutils/include_outside_system \
+	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libsync/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libutils/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/system/core/libsystem/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/system/libbase/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/hardware/libhardware/include_all \
 	-I$(HOST_AOSPLESS_DIR)/includes/soong/.intermediates/hardware/interfaces/graphics/common/aidl/android.hardware.graphics.common-V7-ndk-source/gen/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/binder/ndk/include_cpp \
+	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/binder/ndk/include_ndk \
 	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/ui/include_types \
 	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/math/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/bionic/libc/kernel/uapi
 
 HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Wno-missing-designated-field-initializers
-HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4
+HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4 -D__INTRODUCED_IN\(x\)=
 HOST_CXXFLAGS += $(HOST_INCLUDES)
 
 HOST_OUT_DIR := $(OUT_DIR)/host_unittests
 
 UNITTEST_SRCS := \
+	backend/Backend.cpp \
+	backend/ClientBackend.cpp \
+	backend/GenericBackend.cpp \
 	bufferinfo/BufferInfoGetter.cpp \
 	bufferinfo/BufferInfoGetterTest.cpp \
 	bufferinfo/GrallocBufferCache.cpp \
@@ -42,10 +47,13 @@ UNITTEST_SRCS := \
 	compositor/FlatteningEventAtomReporter.cpp \
 	compositor/FrameTimeHistory.cpp \
 	compositor/FrameTimeHistoryTest.cpp \
+	compositor/GenericCompositionPlanner.cpp \
 	compositor/GenericLayerMapperCompositionPlanner.cpp \
 	compositor/GenericLayerMapperCompositionPlannerTest.cpp \
+	compositor/HdcpController.cpp \
 	compositor/IntelMappingValidator.cpp \
 	compositor/IntelMappingValidatorTest.cpp \
+	compositor/LayerToPlaneJoiningPlan.cpp \
 	compositor/PresentedCompositionCache.cpp \
 	compositor/ShortCircuitor.cpp \
 	compositor/ShortCircuitorTest.cpp \
@@ -60,6 +68,8 @@ UNITTEST_SRCS := \
 	compositor/mapper/MapperUtils.cpp \
 	compositor/mapper/UnderlayMapper.cpp \
 	compositor/mapper/UnderlayMapperTest.cpp \
+	drm/DrmAtomicCommitSink.cpp \
+	drm/DrmAtomicStateManager.cpp \
 	drm/DrmColorOp.cpp \
 	drm/DrmConnector.cpp \
 	drm/DrmCrtc.cpp \
@@ -68,16 +78,25 @@ UNITTEST_SRCS := \
 	drm/DrmDisplayPipelineTest.cpp \
 	drm/DrmEncoder.cpp \
 	drm/DrmFbImporter.cpp \
+	drm/DrmHwc.cpp \
 	drm/DrmMode.cpp \
 	drm/DrmPlane.cpp \
 	drm/DrmProperty.cpp \
+	drm/ResourceManager.cpp \
+	drm/VSyncWorker.cpp \
 	early_animation/EarlyBootAnimation.cpp \
 	early_animation/EarlyBootAnimationTest.cpp \
 	hwc/HwcBufferCache.cpp \
 	hwc/HwcBufferCacheTest.cpp \
+	hwc/HwcDisplay.cpp \
 	hwc/HwcDisplayConfigs.cpp \
 	hwc/HwcDisplayConfigsGeneratorTest.cpp \
 	hwc/HwcLayer.cpp \
+	stats/CompositionStatsAtomReporter.cpp \
+	stats/CountActiveDisplaysReporter.cpp \
+	stats/DisplayConfigurationResultReporter.cpp \
+	stats/DisplayHotplugConnectModeDetectedAtomReporter.cpp \
+	stats/DisplayRefreshRatesChangedAtomReporter.cpp \
 	stats/Stats.cpp \
 	stats/StatsTest.cpp \
 	tests/backend_test_stub.cpp \

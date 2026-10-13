@@ -21,9 +21,7 @@
 #include <cutils/trace.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
-#include <linux/time.h>
 #include <ui/ColorSpace.h>
-#include <ui/GraphicTypes.h>
 #include <utils/Trace.h>
 #include <xf86drmMode.h>
 
@@ -80,6 +78,24 @@
 #include "utils/log.h"
 #include "utils/math.h"
 #include "utils/properties.h"
+
+#ifdef ANDROID
+#include <ui/GraphicTypes.h>
+#else
+// <ui/GraphicTypes.h> and <android/hardware/graphics/common/1.1/types.h> pull
+// in <hidl/HidlInternal.h>, which fails a static_assert on sizeof(std::string)
+// when compiled against host GNU libstdc++ in drm_hwcomposer_unittests (see
+// commit 7aeb2ddcf7). Provide the enum definition corresponding to the forward
+// declaration in HwcDisplay.h for !ANDROID host builds.
+namespace android::hardware::graphics::common::V1_1 {
+enum class RenderIntent : int32_t {
+  COLORIMETRIC = 0,
+  ENHANCE = 1,
+  TONE_MAP_COLORIMETRIC = 2,
+  TONE_MAP_ENHANCE = 3,
+};
+}  // namespace android::hardware::graphics::common::V1_1
+#endif
 
 namespace android::drm_hwcomposer {
 

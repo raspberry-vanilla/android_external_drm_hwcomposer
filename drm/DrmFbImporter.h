@@ -63,6 +63,10 @@ class DrmFbIdHandle : public IDrmFbIdHandle {
     return fb_id_;
   }
 
+ protected:
+  explicit DrmFbIdHandle(uint32_t fb_id) : fb_id_(fb_id) {
+  }
+
  private:
   explicit DrmFbIdHandle(DrmDevice &drm);
 

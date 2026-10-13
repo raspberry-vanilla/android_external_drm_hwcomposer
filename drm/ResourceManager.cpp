@@ -17,8 +17,6 @@
 #include "ResourceManager.h"
 
 #include <android-base/strings.h>
-#include <cutils/properties.h>
-#include <linux/time.h>
 #include <sys/stat.h>
 
 #include <chrono>
@@ -80,7 +78,6 @@ constexpr EdidQuirkEntry kEdidQuirks[] = {
 
 // Decode the PNP manufacturer ID from an EDID blob and return matching quirks.
 constexpr size_t kMinEdidBlobSize = 16;
-constexpr int kDefaultRecoveryDelayMs = 3000;
 
 uint32_t GetEdidQuirks(DrmConnector *conn) {
   auto blob = conn->GetEdidBlob();
@@ -483,8 +480,7 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
 
   // Configurable delay (ms) for the scaler to finish its boot sequence.
   // Default 3000ms is sufficient for Novatek-based TCONs.
-  int delay_ms = property_get_int32(
-      "vendor.hwc.delayed_edid_recovery_ms", kDefaultRecoveryDelayMs);
+  int delay_ms = Properties::DelayedEdidRecoveryMs();
   if (delay_ms <= 0) {
     ALOGW("Delayed-EDID recovery disabled via property on %s",
           quirk_conn->GetName().c_str());

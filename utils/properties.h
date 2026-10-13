@@ -104,6 +104,7 @@ class Properties {
   static auto BootAnimationCompleted() -> bool;
 
   static auto IgnoreDrmMasterFailure() -> bool;
+  static auto DelayedEdidRecoveryMs() -> int;
 };
 
 }  // namespace android::drm_hwcomposer

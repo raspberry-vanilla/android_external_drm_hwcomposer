@@ -23,8 +23,10 @@
 #include <ios>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <android-base/file.h>
+#include <android-base/strings.h>
 #include <hardware/hardware.h>
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,21 @@ bool WriteStringToFile(const std::string& content,
                        const std::string& content_path, mode_t /*mode*/,
                        uid_t /*owner*/, gid_t /*group*/, bool follow_symlinks) {
   return WriteStringToFile(content, content_path, follow_symlinks);
+}
+
+std::vector<std::string> Tokenize(const std::string& s,
+                                  const std::string& delimiters) {
+  std::vector<std::string> result;
+  size_t end = 0;
+  while (true) {
+    size_t base = s.find_first_not_of(delimiters, end);
+    if (base == std::string::npos) {
+      break;
+    }
+    end = s.find_first_of(delimiters, base);
+    result.push_back(s.substr(base, end - base));
+  }
+  return result;
 }
 
 }  // namespace android::base
