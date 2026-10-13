@@ -81,6 +81,10 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
                : nullptr;
   }
 
+  auto &Displays() {
+    return displays_;
+  }
+
   auto &GetResMan() {
     return resource_manager_;
   }
@@ -112,11 +116,6 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   void StartBootAnimation();
   void WaitForCompletionAndStopBootAnimation();
   void StopBootAnimation();
-
- protected:
-  auto &Displays() {
-    return displays_;
-  }
 
  private:
   // An additional layer to isolate the critical region for invoking hotplug

@@ -21,13 +21,18 @@
 
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmDevice.h"
@@ -419,6 +424,40 @@ bool DrmConnector::IsMst() const {
   // value.
   return path_property_.GetId() != 0 &&
          path_property_.GetValue().value_or(0) != 0;
+}
+
+std::optional<uint32_t> DrmConnector::GetPhysicalPortBaseId() const {
+  if (!IsMst() || !path_property_.IsBlob()) {
+    return std::nullopt;
+  }
+
+  std::vector<char> path_data;
+  if (!path_property_.GetBlobData(path_data) || path_data.empty()) {
+    return std::nullopt;
+  }
+
+  std::string_view path(path_data.data(), path_data.size());
+
+  // Check if it starts with "mst:"
+  if (path.substr(0, 4) != "mst:") {
+    return std::nullopt;
+  }
+
+  // Find the first dash after "mst:"
+  size_t dash_pos = path.find('-', 4);
+  if (dash_pos == std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  std::string_view base_id_str = path.substr(4, dash_pos - 4);
+  uint32_t base_id = 0;
+  auto [ptr, ec] = std::from_chars(base_id_str.data(),
+                                   base_id_str.data() + base_id_str.size(),
+                                   base_id);
+  if (ec == std::errc() && ptr == base_id_str.data() + base_id_str.size()) {
+    return base_id;
+  }
+  return std::nullopt;
 }
 
 }  // namespace android::drm_hwcomposer

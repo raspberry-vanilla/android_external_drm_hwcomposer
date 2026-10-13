@@ -471,7 +471,7 @@ class HwcDisplay : public ICompositorDisplay {
   int32_t min_bpc_{};
   std::shared_ptr<hdr_output_metadata> hdr_metadata_;
   float brightness_ = kBrightnessUnset;
-  float brightness_nits_ = kBrightnessUnset;
+  std::optional<float> brightness_nits_;
   float hdr_headroom_{};
 
   bool has_wcg_support_ = false;
