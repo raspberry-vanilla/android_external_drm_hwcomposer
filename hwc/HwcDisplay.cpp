@@ -1955,10 +1955,9 @@ void HwcDisplay::SetBrightnessNits(float brightness_nits) {
     return;
   }
 
-  // Negative values indicate turning the backlight off per HAL API.
-  // Set to 0 so downstream color and gamma pipelines scale to 0 (black).
+  // Negative values indicate an unknown value per HAL API.
   if (brightness_nits < 0.F) {
-    brightness_nits_ = 0.F;
+    brightness_nits_ = std::nullopt;
   } else {
     brightness_nits_ = brightness_nits;
   }
