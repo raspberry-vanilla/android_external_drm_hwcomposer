@@ -105,7 +105,8 @@ class DrmAtomicStateManager : public AtomicStateManager {
   std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
       AtomicCommitArgs &args) override;
   AtomicCommitResult FinishPendingRequest(
-      const AtomicCommitArgs &args, std::unique_ptr<AtomicRequest> request);
+      const AtomicCommitArgs &args,
+      std::unique_ptr<AtomicRequest> request) override;
   bool IsActive() const override;
   void WaitLastFrame() override;
   std::string DumpState() const override;

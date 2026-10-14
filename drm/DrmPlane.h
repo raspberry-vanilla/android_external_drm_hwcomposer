@@ -90,7 +90,7 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
     return zpos_property_;
   }
 
-  auto GetId() const {
+  virtual uint32_t GetId() const {
     return plane_->plane_id;
   }
 

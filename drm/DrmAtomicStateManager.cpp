@@ -799,13 +799,12 @@ void DrmAtomicStateManager::ThreadFn() {
     {
       std::unique_lock lk(mutex_);
       base::ScopedLockAssertion lock_assertion(mutex_);
-      cv_.wait(lk);
+      cv_.wait(lk, [this, tracking_at_the_moment]() REQUIRES(mutex_) {
+        return exit_thread_ || frames_staged_ > tracking_at_the_moment;
+      });
 
       if (exit_thread_)
         break;
-
-      if (frames_staged_ <= tracking_at_the_moment)
-        continue;
 
       tracking_at_the_moment = frames_staged_;
 

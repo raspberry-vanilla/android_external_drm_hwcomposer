@@ -97,6 +97,9 @@ auto DrmFbIdHandle::CreateInstance(BufferInfo *bo, GemHandle first_gem_handle,
 }
 
 DrmFbIdHandle::~DrmFbIdHandle() {
+  if (!drm_fd_) {
+    return;
+  }
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_NAME("Close FB and dmabufs");
 

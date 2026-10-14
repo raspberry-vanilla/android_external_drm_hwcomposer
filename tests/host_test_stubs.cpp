@@ -15,35 +15,57 @@
  */
 
 #include <cutils/native_handle.h>
+#include <sync/sync.h>
 
+#include <cstdint>
+#include <functional>
 #include <memory>
-#include <optional>
-#include <vector>
+#include <utility>
 
+#include "bufferinfo/BufferInfoGetter.h"
+#include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "bufferinfo/GrallocBufferHandle.h"
-#include "compositor/LayerData.h"
-#include "drm/AtomicStateManager.h"
-#include "drm/CommitStatus.h"
-#include "hwc/HwcDisplayConfigs.h"
+#include "drm/UEventListener.h"
+
+struct sync_file_info;
+
+extern "C" {
+
+int sync_wait(int /*fd*/, int /*timeout*/) {
+  return 0;
+}
+
+struct sync_file_info* sync_file_info(int32_t /*fd*/) {
+  return nullptr;
+}
+
+void sync_file_info_free(struct sync_file_info* /*info*/) {
+}
+
+}  // extern "C"
 
 namespace android::drm_hwcomposer {
 
-class HwcDisplay {
- public:
-  enum class ConfigError {
-    kNone,
-    kBadConfig,
-  };
+class UEvent {};
 
-  const HwcDisplayConfig* GetCurrentConfig() const;
-  std::vector<HwcDisplayConfig> GetDisplayConfigs() const;
-  ConfigError SetConfig(ConfigId config);
-  CommitStatusOr<AtomicCommitResult> ExecuteAtomicCommit(
-      AtomicCommitArgs& a_args) const;
-  AtomicCommitArgs CreateModesetCommit(
-      const HwcDisplayConfig* config,
-      const std::optional<LayerData>& modeset_layer);
-};
+UEventListener::UEventListener(std::function<void()> hotplug_handler)
+    : hotplug_handler_(std::move(hotplug_handler)) {
+}
+
+UEventListener::~UEventListener() = default;
+
+auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
+    -> std::shared_ptr<UEventListener> {
+  if (!hotplug_handler) {
+    return {};
+  }
+  return std::shared_ptr<UEventListener>(
+      new UEventListener(std::move(hotplug_handler)));
+}
+
+std::unique_ptr<BufferInfoGetter> BufferInfoMapperMetadata::CreateInstance() {
+  return nullptr;
+}
 
 // Stub for GrallocBufferHandle::Create
 std::shared_ptr<GrallocBufferHandle> GrallocBufferHandle::Create(
@@ -56,30 +78,5 @@ std::shared_ptr<GrallocBufferHandle> GrallocBufferHandle::Create(
 // Stub for GrallocBufferHandle::~GrallocBufferHandle
 // Do not release the handle, since it wasn't imported.
 GrallocBufferHandle::~GrallocBufferHandle() = default;
-
-// NOLINTBEGIN(readability-convert-member-functions-to-static)
-const HwcDisplayConfig* HwcDisplay::GetCurrentConfig() const {
-  return nullptr;
-}
-
-std::vector<HwcDisplayConfig> HwcDisplay::GetDisplayConfigs() const {
-  return {};
-}
-
-HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId /*config*/) {
-  return ConfigError::kNone;
-}
-
-CommitStatusOr<AtomicCommitResult> HwcDisplay::ExecuteAtomicCommit(
-    AtomicCommitArgs& /*a_args*/) const {
-  return CommitStatusOr<AtomicCommitResult>(CommitStatus{.error_code = 0});
-}
-
-AtomicCommitArgs HwcDisplay::CreateModesetCommit(
-    const HwcDisplayConfig* /*config*/,
-    const std::optional<LayerData>& /*modeset_layer*/) {
-  return AtomicCommitArgs{};
-}
-// NOLINTEND(readability-convert-member-functions-to-static)
 
 }  // namespace android::drm_hwcomposer

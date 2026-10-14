@@ -47,7 +47,7 @@ class DrmDevice {
   friend class FakeCompositorDrmDevice;
 
  public:
-  ~DrmDevice();
+  virtual ~DrmDevice();
 
   static auto CreateInstance(std::string const &path, ResourceManager *res_man,
                              uint32_t index) -> std::unique_ptr<DrmDevice>;
@@ -92,15 +92,18 @@ class DrmDevice {
 
   std::string GetName() const;
 
-  auto RegisterUserPropertyBlob(const void *data, size_t length) const
+  virtual auto RegisterUserPropertyBlob(const void *data, size_t length) const
       -> DrmModeUserPropertyBlobUnique;
 
   auto HasAddFb2ModifiersSupport() const {
     return HasAddFb2ModifiersSupport_;
   }
 
-  auto CreateDumbBuffer(uint32_t width, uint32_t height, uint32_t format,
-                        uint32_t prime_fd_flags = 0)
+  auto CreateDumbBuffer(uint32_t width, uint32_t height, uint32_t format)
+      -> std::optional<BufferInfo>;
+
+  virtual auto CreateDumbBuffer(uint32_t width, uint32_t height,
+                                uint32_t format, uint32_t prime_fd_flags)
       -> std::optional<BufferInfo>;
 
   auto &GetDefaultFbImporter() {

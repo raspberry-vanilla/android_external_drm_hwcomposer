@@ -18,7 +18,6 @@
 
 #include <android-base/thread_annotations.h>
 #include <linux/sync_file.h>
-#include <linux/time.h>
 #include <ndk/sync.h>
 #include <utils/Trace.h>
 #include <xf86drm.h>

@@ -91,6 +91,11 @@ class AtomicStateManager {
 
   virtual std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
       AtomicCommitArgs &args) = 0;
+  virtual AtomicCommitResult FinishPendingRequest(
+      const AtomicCommitArgs & /*args*/,
+      std::unique_ptr<AtomicRequest> /*request*/) {
+    return {};
+  }
   virtual bool IsActive() const = 0;
   virtual void WaitLastFrame() = 0;
   virtual std::string DumpState() const {
