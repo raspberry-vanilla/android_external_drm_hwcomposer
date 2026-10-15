@@ -20,6 +20,7 @@
 #include <xf86drmMode.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -33,9 +34,12 @@
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
+#include "compositor/GenericLayerMapperCompositionPlanner.h"
 #include "compositor/HdcpController.h"
+#include "compositor/IntelMappingValidator.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
@@ -535,6 +539,154 @@ TEST_F(HwcDisplayTest, StopHdcpTeardown) {
   ASSERT_FALSE(history2.empty());
   auto args2 = history2.back().front();
   EXPECT_NE(args2.content_protection, ContentProtection::kDesired);
+}
+
+TEST_F(HwcDisplayTest,
+       PresentZeroLayersWithGenericLayerMapperPlannerCommitsClientLayer) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->planner = std::make_unique<GenericLayerMapperCompositionPlanner>();
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties client_props{};
+  client_props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  client_props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  client_props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  client_props.blend_mode = BufferBlendMode::kPreMult;
+  display.GetClientLayer().SetLayerProperties(client_props);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+}
+
+TEST_F(HwcDisplayTest,
+       FullSuspendResumeLifecycleWithGenericLayerMapperPlanner) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->planner = std::make_unique<GenericLayerMapperCompositionPlanner>(
+      IntelValidateMapping);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.SetVsyncCallbacksEnabled(true);
+  ASSERT_TRUE(display.GetDisplayEnabled());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId active_config_id = display.GetCurrentConfig()->id;
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  // Populate client_layer_ as SurfaceFlinger does during normal operation.
+  HwcLayer::LayerProperties client_props{};
+  client_props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  client_props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  client_props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  client_props.blend_mode = BufferBlendMode::kPreMult;
+  display.GetClientLayer().SetLayerProperties(client_props);
+
+  // Step 1: Present an active frame with a device layer before suspend.
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  HwcLayer::LayerProperties layer_props = client_props;
+  layer_props.composition_type = CompositionType::kDevice;
+  layer_props.z_order = 0;
+  layer->SetLayerProperties(layer_props);
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+
+  // Step 2: Pre-suspend screen-off blanking frame. SurfaceFlinger destroys all
+  // HwcLayers while client_layer_ still holds its previous buffer, then runs
+  // validate + present with 0 HwcLayers.
+  ASSERT_TRUE(display.DestroyLayer(kLayerId));
+  ASSERT_TRUE(display.layers().empty());
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+
+  // Step 3: Power off the display for suspend.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  EXPECT_FALSE(display.GetDisplayEnabled());
+
+  // Step 4: Simulate transient modeset failure on initial resume attempt (e.g.
+  // MST hub link training not ready yet), verifying config state stays valid.
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-ENOSPC));
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn),
+            HwcDisplay::Error::kBadParameter);
+  EXPECT_FALSE(display.GetDisplayEnabled());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, active_config_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, active_config_id);
+
+  // Step 5: Retry SetPowerMode(kOn) once the link is ready; display re-enables.
+  sink->SetNextExecuteStatus(CommitStatus::Success());
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_TRUE(display.GetDisplayEnabled());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, active_config_id);
+
+  // Step 6: Post-resume frame presentation with recreated HwcLayer.
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  layer->SetLayerProperties(layer_props);
+
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
 }
 
 }  // namespace android::drm_hwcomposer

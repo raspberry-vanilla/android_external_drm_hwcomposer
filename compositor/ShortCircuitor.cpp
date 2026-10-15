@@ -42,6 +42,9 @@ namespace {
 
 [[nodiscard]] std::optional<size_t> GetCursorLayerIndex(
     const std::vector<CompositionType>& types) {
+  if (types.empty()) {
+    return std::nullopt;
+  }
   return types.back() == CompositionType::kCursor
              ? std::make_optional<size_t>(types.size() - 1)
              : std::nullopt;

@@ -1502,6 +1502,58 @@ TEST(GenericLayerMapperCompositionPlannerTest, ShortCircuited) {
   EXPECT_TRUE(short_circuited);
   EXPECT_EQ(composition, last_composition);
 }
+
+TEST(GenericLayerMapperCompositionPlannerTest, EmptyLayersDoesNotCrash) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(std::vector<const HwcLayer*>{}));
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, GetColorTransformMatrix())
+      .WillRepeatedly(Return(kIdentityCtm));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
+
+  auto [composition, short_circuited] = planner.ValidateDisplay(&mock_display);
+  EXPECT_FALSE(short_circuited);
+  EXPECT_TRUE(composition.composition_types.empty());
+  EXPECT_FALSE(composition.cursor_plane_validated);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest,
+     EmptyLayersTestFailFallsBackCleanly) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(std::vector<const HwcLayer*>{}));
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, GetColorTransformMatrix())
+      .WillRepeatedly(Return(kIdentityCtm));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::InternalFailure()));
+
+  auto [composition, short_circuited] = planner.ValidateDisplay(&mock_display);
+  EXPECT_FALSE(short_circuited);
+  EXPECT_TRUE(composition.composition_types.empty());
+  EXPECT_EQ(composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kValidateFailed);
+}
 }  // namespace android::drm_hwcomposer
 
 // NOLINTEND(readability-magic-numbers)
