@@ -322,18 +322,41 @@ auto ResourceManager::GetTimeMonotonicNs() -> int64_t {
 void ResourceManager::UpdateFrontendDisplays() {
   auto ordered_connectors = GetOrderedConnectors();
 
+  // Pass 1: Update modes and properties on all connectors and detach any
+  // disconnected connectors first so their shared CRTCs, encoders, and planes
+  // are released before Pass 2 allocates pipelines for newly connected ones.
   for (auto *conn : ordered_connectors) {
-    ProcessHotplugForConnector(conn);
+    if (conn == nullptr) {
+      continue;
+    }
+    conn->UpdateModesAndProperties();
+    if (!conn->IsConnected()) {
+      auto it = attached_pipelines_.find(conn);
+      if (it != attached_pipelines_.end()) {
+        ALOGI("Detaching connector %s", conn->GetName().c_str());
+        frontend_interface_->UnbindDisplay(it->second);
+        attached_pipelines_.erase(it);
+      }
+    }
+  }
+
+  // Pass 2: Attach pipelines for newly connected connectors using the
+  // connector state already probed in Pass 1.
+  for (auto *conn : ordered_connectors) {
+    ProcessHotplugForConnector(conn, /*update_modes=*/false);
   }
   frontend_interface_->FinalizeDisplayBinding();
 }
 
-void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn) {
+void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
+                                                 bool update_modes) {
   if (conn == nullptr) {
     return;
   }
 
-  conn->UpdateModesAndProperties();
+  if (update_modes) {
+    conn->UpdateModesAndProperties();
+  }
   auto connected = conn->IsConnected();
   auto it = attached_pipelines_.find(conn);
   auto attached = (it != attached_pipelines_.end());

@@ -108,9 +108,11 @@ class ResourceManager {
   static auto GetTimeMonotonicNs() -> int64_t;
 
  private:
+  friend struct DrmHwcTest;
+
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
   void UpdateFrontendDisplays();
-  void ProcessHotplugForConnector(DrmConnector *conn);
+  void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
