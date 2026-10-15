@@ -46,17 +46,25 @@ void HwcBufferCache::SetSlot(int32_t slot_id,
            this, slot_id);
 }
 
-std::optional<BufferInfo> HwcBufferCache::GetBufferInfo(int32_t slot_id) const {
-  auto slot_entry = GetSlot(slot_id);
-  if (slot_entry == std::nullopt) {
+std::optional<BufferInfo> HwcBufferCache::GetBufferInfo(int32_t slot_id) {
+  auto* slot_entry = GetSlot(slot_id);
+  if (slot_entry == nullptr) {
     return std::nullopt;
   }
   return slot_entry->bi;
 }
 
-std::shared_ptr<DrmFbIdHandle> HwcBufferCache::GetFb(int32_t slot_id) const {
-  auto slot_entry = GetSlot(slot_id);
-  if (slot_entry == std::nullopt) {
+std::shared_ptr<DrmFbIdHandle> HwcBufferCache::GetFb(int32_t slot_id) {
+  auto* slot_entry = GetSlot(slot_id);
+  if (slot_entry == nullptr) {
+    return nullptr;
+  }
+  // Re-attempt ImportFb on the cached slot entry so slots populated while in
+  // headless mode (where importer_ returns nullptr) are lazily imported once a
+  // physical pipeline is attached.
+  if (!ImportFb(*slot_entry)) {
+    ALOGE("Unable to create framebuffer object for layer %p slot %d", this,
+          slot_id);
     return nullptr;
   }
   return slot_entry->fb;
@@ -70,16 +78,15 @@ bool HwcBufferCache::ImportFb(BufferSlot& slot) const {
   if (slot.fb == nullptr) {
     slot.fb = importer_(slot.bi);
   }
-  return true;
+  return slot.fb != nullptr;
 }
 
-std::optional<HwcBufferCache::BufferSlot> HwcBufferCache::GetSlot(
-    int32_t slot_id) const {
+HwcBufferCache::BufferSlot* HwcBufferCache::GetSlot(int32_t slot_id) {
   auto it = slots_.find(slot_id);
   if (it == slots_.end()) {
-    return std::nullopt;
+    return nullptr;
   }
-  return it->second;
+  return &it->second;
 }
 
 }  // namespace android::drm_hwcomposer

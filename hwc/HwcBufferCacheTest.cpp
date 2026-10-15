@@ -16,13 +16,29 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
 #include "bufferinfo/BufferInfo.h"
+#include "drm/DrmFbImporter.h"
 #include "hwc/HwcBufferCache.h"
 
 namespace android::drm_hwcomposer {
+
+namespace {
+
+constexpr uint32_t kTestFbId = 777;
+constexpr uint16_t kTestBufferWidth = 1920;
+constexpr uint16_t kTestBufferHeight = 1080;
+
+class TestFbIdHandle : public DrmFbIdHandle {
+ public:
+  explicit TestFbIdHandle(uint32_t fb_id) : DrmFbIdHandle(fb_id) {
+  }
+};
+
+}  // namespace
 
 struct HwcBufferCacheTest : public ::testing::Test {
   void SetUp() override {
@@ -85,6 +101,40 @@ TEST_F(HwcBufferCacheTest, SetSlotNulloptRemovesEntry) {
 
   cache->SetSlot(0, std::nullopt);
   EXPECT_FALSE(cache->GetBufferInfo(0).has_value());
+}
+
+TEST_F(HwcBufferCacheTest, GetFbReimportsWhenInitialImportReturnedNullptr) {
+  bool allow_import = false;
+  int import_attempts = 0;
+  cache = std::make_unique<HwcBufferCache>(
+      [&](BufferInfo&) -> std::shared_ptr<DrmFbIdHandle> {
+        ++import_attempts;
+        if (!allow_import) {
+          return nullptr;
+        }
+        return std::make_shared<TestFbIdHandle>(kTestFbId);
+      });
+
+  BufferInfo bi{};
+  bi.width = kTestBufferWidth;
+  bi.height = kTestBufferHeight;
+
+  // Initial slot population while in headless mode (importer returns nullptr).
+  cache->SetSlot(0, bi);
+  EXPECT_EQ(import_attempts, 1);
+  EXPECT_EQ(cache->GetFb(0), nullptr);
+  EXPECT_EQ(import_attempts, 2);
+
+  // Transition to physical pipeline (importer now succeeds). Accessing the
+  // cached slot via GetFb(0) must re-import rather than stay poisoned with
+  // nullptr, and subsequent GetFb(0) calls must reuse the cached handle.
+  allow_import = true;
+  auto fb = cache->GetFb(0);
+  ASSERT_NE(fb, nullptr);
+  EXPECT_EQ(fb->GetFbId(), kTestFbId);
+  EXPECT_EQ(import_attempts, 3);
+  EXPECT_EQ(cache->GetFb(0), fb);
+  EXPECT_EQ(import_attempts, 3);
 }
 
 }  // namespace android::drm_hwcomposer

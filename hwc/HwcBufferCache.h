@@ -36,8 +36,8 @@ class HwcBufferCache {
 
   explicit HwcBufferCache(ImporterCallback importer);
   void SetSlot(int32_t slot_id, const std::optional<BufferInfo>& bi);
-  std::optional<BufferInfo> GetBufferInfo(int32_t slot_id) const;
-  std::shared_ptr<DrmFbIdHandle> GetFb(int32_t slot_id) const;
+  std::optional<BufferInfo> GetBufferInfo(int32_t slot_id);
+  std::shared_ptr<DrmFbIdHandle> GetFb(int32_t slot_id);
   void Clear();
 
  private:
@@ -47,7 +47,9 @@ class HwcBufferCache {
   };
 
   bool ImportFb(BufferSlot& slot) const;
-  std::optional<BufferSlot> GetSlot(int32_t slot_id) const;
+  // Returns a pointer into slots_ so GetFb can lazily populate slot->fb in
+  // place without copying BufferSlot.
+  BufferSlot* GetSlot(int32_t slot_id);
 
   std::map<int32_t /*slot_id*/, BufferSlot> slots_;
   ImporterCallback importer_;

@@ -44,6 +44,7 @@
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
+#include "hwc/HwcBufferCache.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
 #include "utils/fd.h"
@@ -687,6 +688,76 @@ TEST_F(HwcDisplayTest,
   EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
                                                release_fences));
   EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+}
+
+TEST_F(HwcDisplayTest,
+       HeadlessToPhysicalTransitionReimportsCachedClientTargetSlot) {
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(nullptr);
+  ASSERT_TRUE(display.IsInHeadlessMode());
+
+  // Mirror ComposerClientUtils::ImportFb: returns nullptr while headless, and
+  // delegates to GetPipe().importer once a physical pipeline is attached.
+  HwcBufferCache client_cache([&display](BufferInfo& bo) {
+    if (display.IsInHeadlessMode()) {
+      return std::shared_ptr<DrmFbIdHandle>(nullptr);
+    }
+    return display.GetPipe().importer->GetOrCreateFbId(&bo);
+  });
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  // Frame 1 while headless: slot 0 is populated with .fb = nullptr.
+  client_cache.SetSlot(0, bo);
+  EXPECT_EQ(client_cache.GetFb(0), nullptr);
+
+  // Hotplug attaches a physical pipeline to kPrimaryDisplay.
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+  display.SetPipeline(pipeline);
+  ASSERT_FALSE(display.IsInHeadlessMode());
+
+  // Frame 2 after transition reuses cached slot 0 on client_layer_.
+  auto cached_bi = client_cache.GetBufferInfo(0);
+  ASSERT_TRUE(cached_bi.has_value());
+  if (!cached_bi.has_value()) {
+    return;
+  }
+  auto cached_fb = client_cache.GetFb(0);
+  EXPECT_NE(cached_fb, nullptr);
+
+  HwcLayer::LayerProperties client_props{};
+  client_props.buffer = HwcLayer::Buffer{
+      .bi = *cached_bi,
+      .fb = cached_fb,
+      .fence = {},
+  };
+  client_props.blend_mode = BufferBlendMode::kPreMult;
+  display.GetClientLayer().SetLayerProperties(client_props);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  HwcLayer::LayerProperties layer_props{};
+  layer_props.composition_type = CompositionType::kClient;
+  layer->SetLayerProperties(layer_props);
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
 }
 
 }  // namespace android::drm_hwcomposer
