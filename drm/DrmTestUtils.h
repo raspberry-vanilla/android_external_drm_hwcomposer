@@ -92,6 +92,44 @@ inline void InitFakeDrmProperty(DrmProperty& prop, uint32_t obj_id,
   prop.Init(nullptr, obj_id, &raw_prop, value);
 }
 
+// Inspects the latest value queued for (obj_id, prop_id) inside an uncommitted
+// drmModeAtomicReq by mirroring libdrm's internal _drmModeAtomicReq layout.
+inline std::optional<uint64_t> GetAtomicReqPropertyValue(
+    drmModeAtomicReqPtr req, uint32_t obj_id, uint32_t prop_id) {
+  struct ReqItemView {
+    uint32_t object_id;
+    uint32_t property_id;
+    uint64_t value;
+    uint32_t cursor;
+  };
+  struct ReqView {
+    uint32_t cursor;
+    uint32_t size_items;
+    ReqItemView* items;
+  };
+  if (req == nullptr) {
+    return std::nullopt;
+  }
+  const int cursor = drmModeAtomicGetCursor(req);
+  if (cursor <= 0) {
+    return std::nullopt;
+  }
+  ReqView view{};
+  std::memcpy(&view, req, sizeof(view));
+  if (view.items == nullptr) {
+    return std::nullopt;
+  }
+  std::vector<ReqItemView> items(static_cast<size_t>(cursor));
+  std::memcpy(items.data(), view.items, items.size() * sizeof(ReqItemView));
+  std::optional<uint64_t> result;
+  for (const auto& item : items) {
+    if (item.object_id == obj_id && item.property_id == prop_id) {
+      result = item.value;
+    }
+  }
+  return result;
+}
+
 inline DrmMode CreateFakeDrmMode(uint16_t width = kFakeDefaultModeWidth,
                                  uint16_t height = kFakeDefaultModeHeight,
                                  uint32_t vrefresh = kFakeDefaultModeVRefresh,
@@ -329,6 +367,12 @@ class FakeDrmConnector : public DrmConnector {
     modes_ = std::move(modes);
   }
 
+  void SetCrtcIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(crtc_id_property_, connector_id_,
+                        kFakeConnectorCrtcPropId, "CRTC_ID",
+                        DRM_MODE_PROP_OBJECT, value);
+  }
+
  private:
   const uint32_t connector_id_;
   const uint32_t encoder_id_;
@@ -416,6 +460,16 @@ class FakeDrmPlane : public DrmPlane {
 
   bool IsValidForLayer(const LayerData* /*layer*/) override {
     return is_valid_;
+  }
+
+  void SetCrtcIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(crtc_property_, plane_id_, kFakePlaneCrtcPropId,
+                        "CRTC_ID", DRM_MODE_PROP_OBJECT, value);
+  }
+
+  void SetFbIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(fb_property_, plane_id_, kFakePlaneFbPropId, "FB_ID",
+                        DRM_MODE_PROP_OBJECT, value);
   }
 
  private:

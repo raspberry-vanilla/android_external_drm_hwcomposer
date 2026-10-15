@@ -167,7 +167,10 @@ void DrmAtomicStateManager::WaitLastFrame() {
 
 void DrmAtomicStateManager::CheckDoubleSettingState(
     AtomicCommitArgs &args) const {
-  if (args.power_mode) {
+  // Preserve power_mode on teardown commits even if the CRTC is already
+  // inactive so SetActiveIfNeeded still clears connector CRTC_ID and CRTC
+  // MODE_ID.
+  if (args.power_mode && !args.teardown) {
     bool is_active = *args.power_mode != PowerMode::kOff;
     if (is_active == committed_frame_state_.crtc_active_state) {
       /* Don't set the same state twice */
@@ -233,15 +236,37 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   bool active = *args.power_mode != PowerMode::kOff;
   request.new_frame_state.crtc_active_state = active;
   if (!crtc->GetActiveProperty().AtomicSet(*request.property_set,
-                                           active ? 1 : 0) ||
-      !connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
-                                                crtc->GetId())) {
+                                           active ? 1 : 0)) {
     return false;
   }
   if (!active && args.teardown) {
+    // Full teardown unbinds the connector from the CRTC and clears its mode.
     if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0) ||
         !crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
       return false;
+    }
+  } else {
+    // Keep the connector bound to the CRTC across active and non-teardown DPMS
+    // transitions.
+    if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
+                                                  crtc->GetId())) {
+      return false;
+    }
+  }
+  // Clear CRTC_ID on any other connector whose cached kernel state still
+  // references this CRTC (e.g. after an unclean MST detach or bootloader
+  // handover), otherwise drm_atomic_helper_check_modeset rejects the commit
+  // with -EINVAL due to conflicting encoders.
+  if (active && pipe_->device != nullptr) {
+    for (const auto &conn : pipe_->device->GetConnectors()) {
+      if (conn.get() == connector) {
+        continue;
+      }
+      if (conn->GetCrtcIdProperty().GetValue().value_or(0) == crtc->GetId()) {
+        if (!conn->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
+          return false;
+        }
+      }
     }
   }
 
@@ -630,11 +655,44 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
 
   // Disable all planes that were used in the previous commit which are no
   // longer being used.
-  return std::all_of(unused_planes.begin(), unused_planes.end(),
-                     [&request](auto &plane) {
-                       return plane->Get()->AtomicDisablePlane(
-                                  *request.property_set) == 0;
-                     });
+  if (!std::all_of(unused_planes.begin(), unused_planes.end(),
+                   [&request](auto &plane) {
+                     return plane->Get()->AtomicDisablePlane(
+                                *request.property_set) == 0;
+                   })) {
+    return false;
+  }
+
+  // On a full modeset, also disable any hardware planes that were left active
+  // on this CRTC prior to DrmAtomicStateManager's tracking (e.g. from
+  // bootloader handover) and are not already in used_planes or unused_planes.
+  if (args.display_mode && !args.seamless && pipe_->device != nullptr) {
+    const uint32_t crtc_id = pipe_->crtc->Get()->GetId();
+    for (const auto &plane : pipe_->device->GetPlanes()) {
+      if (plane->GetCrtcProperty().GetValue().value_or(0) != crtc_id ||
+          plane->GetFbProperty().GetValue().value_or(0) == 0) {
+        continue;
+      }
+      const bool
+          in_used = std::any_of(request.new_frame_state.used_planes.begin(),
+                                request.new_frame_state.used_planes.end(),
+                                [&plane](const auto &used) {
+                                  return used->Get() == plane.get();
+                                });
+      const bool in_unused = std::any_of(unused_planes.begin(),
+                                         unused_planes.end(),
+                                         [&plane](const auto &unused) {
+                                           return unused->Get() == plane.get();
+                                         });
+      if (!in_used && !in_unused) {
+        if (plane->AtomicDisablePlane(*request.property_set) != 0) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
 }
 
 std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
@@ -646,7 +704,13 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  if (!committed_frame_state_.crtc_active_state) {
+  // Only auto-enable the CRTC when the commit sets a mode or presents a
+  // non-empty plane composition. Teardown or plane-clearing commits (empty
+  // composition plan) on an inactive CRTC must not force PowerMode::kOn.
+  if (!committed_frame_state_.crtc_active_state && !args.power_mode &&
+      !args.teardown &&
+      (args.display_mode.has_value() ||
+       (args.composition && !args.composition->plan.empty()))) {
     // Force args.power_mode if the display is not active and there are other
     // things to commit.
     args.power_mode = PowerMode::kOn;
@@ -668,13 +732,16 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  if (!SetOutputFence(*atomic_request)) {
-    ALOGE("Failed to set output fence");
+  if (!SetActiveIfNeeded(args, *atomic_request)) {
+    ALOGE("Failed to set active");
     return nullptr;
   }
 
-  if (!SetActiveIfNeeded(args, *atomic_request)) {
-    ALOGE("Failed to set active");
+  // Evaluate SetActiveIfNeeded before SetOutputFence so OUT_FENCE_PTR is only
+  // requested when the CRTC will be active after this commit.
+  if (atomic_request->new_frame_state.crtc_active_state &&
+      !SetOutputFence(*atomic_request)) {
+    ALOGE("Failed to set output fence");
     return nullptr;
   }
 

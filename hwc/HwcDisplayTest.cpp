@@ -19,9 +19,12 @@
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -31,6 +34,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
@@ -55,6 +59,7 @@ constexpr uint32_t kRefresh60Hz = 60;
 constexpr uint32_t kRefresh120Hz = 120;
 constexpr uint32_t kTestFbId = 501;
 constexpr uint32_t kBytesPerPixel = 4;
+constexpr int kVsyncObservationWindowMs = 50;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -64,6 +69,7 @@ class TestDrmHwc : public DrmHwc {
   void SendVsyncEventToClient(DisplayHandle /*display_handle*/,
                               int64_t /*timestamp*/,
                               uint32_t /*vsync_period*/) const override {
+    ++vsync_count_;
   }
   void SendVsyncPeriodTimingChangedEventToClient(
       DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
@@ -77,6 +83,17 @@ class TestDrmHwc : public DrmHwc {
       DisplayHandle /*display_handle*/,
       std::optional<HdcpContentType> /*current_hdcp_level*/) override {
   }
+
+  void ResetVsyncCount() const {
+    vsync_count_.store(0);
+  }
+
+  int GetVsyncCount() const {
+    return vsync_count_.load();
+  }
+
+ private:
+  mutable std::atomic<int> vsync_count_{0};
 };
 
 }  // namespace
@@ -230,6 +247,98 @@ TEST_F(HwcDisplayTest, CreateValidateAndPresentDeviceLayerComposition) {
 
   EXPECT_TRUE(display.DestroyLayer(kLayerId));
   EXPECT_EQ(display.get_layer(kLayerId), nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       DeinitCoalescesPlaneDisableAndTeardownIntoSingleBlockingCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  display.Deinit();
+
+  ASSERT_EQ(sink->GetExecuteCommitCount(), 1U);
+  const auto& history = sink->GetCommitHistory();
+  ASSERT_EQ(history.size(), 1U);
+  ASSERT_EQ(history[0].size(), 1U);
+  const auto& deinit_args = history[0][0];
+  EXPECT_TRUE(deinit_args.blocking);
+  EXPECT_TRUE(deinit_args.teardown);
+  EXPECT_EQ(deinit_args.power_mode, PowerMode::kOff);
+  ASSERT_NE(deinit_args.composition, nullptr);
+  EXPECT_TRUE(deinit_args.composition->plan.empty());
+}
+
+TEST_F(HwcDisplayTest,
+       PresentZeroLayersWithValidClientTargetCommitsClientLayer) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties client_props{};
+  client_props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  client_props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  client_props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  client_props.blend_mode = BufferBlendMode::kPreMult;
+  display.GetClientLayer().SetLayerProperties(client_props);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  // Present with 0 HwcLayers in display.layers() but a valid client_layer_.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+}
+
+TEST_F(HwcDisplayTest, SetPowerModeOffStopsVsyncCallbacks) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  display.SetVsyncCallbacksEnabled(true);
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+
+  hwc.ResetVsyncCount();
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kVsyncObservationWindowMs));
+  EXPECT_EQ(hwc.GetVsyncCount(), 0);
 }
 
 TEST_F(HwcDisplayTest, QueueSeamlessConfigUpdatesRequestedAndNextConfig) {

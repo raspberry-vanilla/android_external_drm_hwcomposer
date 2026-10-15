@@ -393,7 +393,9 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
     return {};
   }
 
-  if (layers_.empty()) {
+  // Proceed if client_layer_ has a valid buffer even when layers_ is empty
+  // (e.g. pure client-target composition with zero HWC layers).
+  if (layers_.empty() && !client_layer_.IsLayerUsableAsDevice()) {
     ALOGV("No layers to validate.");
     return {};
   }
@@ -495,7 +497,9 @@ auto HwcDisplay::PresentStagedComposition(
     return true;
   }
 
-  if (layers_.empty()) {
+  // Commit client_layer_ when presenting a zero-layer composition that was
+  // rendered directly into the client target.
+  if (layers_.empty() && !client_layer_.IsLayerUsableAsDevice()) {
     ALOGV("No layers to present.");
     return true;
   }
@@ -741,6 +745,11 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
+    // Re-register the VSync timestamp callback if VSync delivery was enabled
+    // prior to powering off the display.
+    if (vsync_event_en_) {
+      SetVsyncCallbacksEnabled(true);
+    }
     if (GetPipe().atomic_state_manager->IsActive()) {
       return HwcDisplay::Error::kNone;
     }
@@ -769,6 +778,12 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // update will try to set it to active again.
   if (!result.IsSuccess() && !enabled) {
     return HwcDisplay::Error::kBadParameter;
+  }
+  // Clear the VSyncWorker callback directly so VSync events stop firing while
+  // the display is powered off, while preserving vsync_event_en_ to restore
+  // callbacks when the display is powered back on.
+  if (!enabled && vsync_worker_) {
+    vsync_worker_->SetTimestampCallback(std::nullopt);
   }
   return HwcDisplay::Error::kNone;
 }
@@ -807,10 +822,13 @@ void HwcDisplay::Deinit() {
           .SetRefreshCallbackForConnector(connector->GetId(), nullptr);
     }
 
+    // Pass an empty composition plan alongside power_mode = kOff and
+    // teardown = true so SetCompositionIfNeeded disables all previously used
+    // planes in the same blocking commit that tears down the CRTC and
+    // connector.
     AtomicCommitArgs a_args{};
+    a_args.blocking = true;
     a_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
-    ExecuteAtomicCommit(a_args);
-    a_args.composition = {};
     a_args.power_mode = PowerMode::kOff;
     a_args.teardown = true;
     ExecuteAtomicCommit(a_args);
@@ -1556,6 +1574,13 @@ HwcDisplay::CreateLayerToPlaneJoiningPlan(
         ALOGE("Invalid layer type: %d", static_cast<int>(type));
         continue;
     }
+  }
+
+  // When layers_ is empty, the loop above does not assign client_z_order. Place
+  // client_layer_ at z_order 0 so pure client-target compositions are committed
+  // to the primary plane.
+  if (layers_.empty() && client_layer_.IsLayerUsableAsDevice()) {
+    client_z_order = 0;
   }
 
   if (client_z_order.has_value()) {

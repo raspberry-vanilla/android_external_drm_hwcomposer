@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "bufferinfo/BufferInfo.h"
@@ -37,9 +38,12 @@ namespace android::drm_hwcomposer {
 namespace {
 
 constexpr uint32_t kOverlayPlaneId = 310;
+constexpr uint32_t kOrphanConnectorId = 105;
+constexpr uint32_t kOrphanEncoderId = 5;
 constexpr uint32_t kTestFbId1 = 501;
 constexpr uint32_t kTestFbId2 = 502;
 constexpr uint32_t kTestFbId3 = 503;
+constexpr uint32_t kStaleBootloaderFbId = 999;
 constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
 constexpr uint32_t kTestVRefresh = 60;
@@ -51,9 +55,12 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   void SetUp() override {
     fake_device = std::make_unique<FakeDrmDevice>();
     fake_device->AddPipelineResources();
-    fake_device->AddPlane(
-        std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_OVERLAY,
-                                       /*is_valid=*/true, kOverlayPlaneId));
+    auto overlay = std::make_unique<FakeDrmPlane>(*fake_device,
+                                                  DRM_PLANE_TYPE_OVERLAY,
+                                                  /*is_valid=*/true,
+                                                  kOverlayPlaneId);
+    overlay_plane = overlay.get();
+    fake_device->AddPlane(std::move(overlay));
     pipeline = fake_device->GetBackend().CreatePipeline(
         *fake_device->GetConnectors().back());
     ASSERT_NE(pipeline, nullptr);
@@ -62,9 +69,16 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    overlay_plane = nullptr;
     state_manager.reset();
     pipeline.reset();
     fake_device.reset();
+  }
+
+  static DrmAtomicStateManager::DrmAtomicRequest* AsDrmRequest(
+      const std::unique_ptr<AtomicRequest>& req) {
+    void* raw = req.get();
+    return static_cast<DrmAtomicStateManager::DrmAtomicRequest*>(raw);
   }
 
   static LayerData CreateTestLayerData(uint32_t fb_id = kTestFbId1,
@@ -91,6 +105,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   std::unique_ptr<FakeDrmDevice> fake_device;
+  FakeDrmPlane* overlay_plane = nullptr;
   std::shared_ptr<DrmDisplayPipeline> pipeline;
   std::unique_ptr<DrmAtomicStateManager> state_manager;
 };
@@ -193,6 +208,161 @@ TEST_F(DrmAtomicStateManagerTest, PowerOffCommitDeactivatesDisplay) {
   ASSERT_NE(off_req, nullptr);
   state_manager->FinishPendingRequest(off_args, std::move(off_req));
   EXPECT_FALSE(state_manager->IsActive());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       TeardownAfterPowerOffIsNotSkippedAndClearsModeAndCrtc) {
+  // Step 1: Activate display with a modeset.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Step 2: Power off without teardown (ACTIVE=0, but CRTC_ID and MODE_ID
+  // remain bound).
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = false;
+
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  state_manager->FinishPendingRequest(off_args, std::move(off_req));
+  ASSERT_FALSE(state_manager->IsActive());
+
+  // Step 3: Teardown commit (power_mode = kOff, teardown = true) while already
+  // powered off must not be filtered out by CheckDoubleSettingState, and must
+  // clear connector CRTC_ID and CRTC MODE_ID.
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.teardown = true;
+
+  auto teardown_req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(teardown_req, nullptr);
+  auto* drm_req = AsDrmRequest(teardown_req);
+  const uint32_t conn_id = pipeline->connector->Get()->GetId();
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
+                                      kFakeConnectorCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcModePropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcOutFencePropId),
+            std::nullopt);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       EmptyCompositionWhilePoweredOffDoesNotForceDisplayActive) {
+  // Step 1: Activate display with a modeset.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Step 2: Power off with teardown (MODE_ID=0, CRTC_ID=0, ACTIVE=0).
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = true;
+
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  state_manager->FinishPendingRequest(off_args, std::move(off_req));
+  ASSERT_FALSE(state_manager->IsActive());
+
+  // Step 3: Commit an empty plane-disabling composition while powered off
+  // (without display_mode or explicit power_mode). It must not force
+  // PowerMode::kOn (which sets ACTIVE=1 with MODE_ID=0 and fails with -EINVAL).
+  AtomicCommitArgs clear_planes_args{};
+  clear_planes_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto clear_req = state_manager->GetAtomicModeReqForArgs(clear_planes_args);
+  EXPECT_NE(clear_planes_args.power_mode, PowerMode::kOn);
+  if (clear_req != nullptr) {
+    state_manager->FinishPendingRequest(clear_planes_args,
+                                        std::move(clear_req));
+  }
+  EXPECT_FALSE(state_manager->IsActive());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       ModesetClearsOrphanedConnectorBoundToTargetCrtc) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  // Add a second connector on the same DrmDevice whose kernel CRTC_ID property
+  // still references our pipeline's CRTC (e.g. from bootloader or an unclean
+  // MST detach).
+  auto orphan_connector = std::make_unique<
+      FakeDrmConnector>(fake_device.get(), kOrphanEncoderId,
+                        /*is_external=*/true, kFakeConnectorMmWidth,
+                        kFakeConnectorMmHeight, kOrphanConnectorId);
+  orphan_connector->SetConnected(false);
+  orphan_connector->SetCrtcIdPropertyValue(crtc_id);
+  fake_device->AddConnector(std::move(orphan_connector));
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req, nullptr);
+  auto* drm_req = AsDrmRequest(req);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOrphanConnectorId,
+                                      kFakeConnectorCrtcPropId),
+            0ULL);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       InitialModesetDisablesStalePlanesBoundToTargetCrtc) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  // Simulate the overlay plane being left active on our CRTC in kernel state
+  // (e.g. from bootloader handover) before DrmAtomicStateManager's first
+  // modeset.
+  ASSERT_NE(overlay_plane, nullptr);
+  overlay_plane->SetCrtcIdPropertyValue(crtc_id);
+  overlay_plane->SetFbIdPropertyValue(kStaleBootloaderFbId);
+
+  // Initial modeset uses only the primary plane.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req, nullptr);
+  auto* drm_req = AsDrmRequest(req);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOverlayPlaneId, kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOverlayPlaneId, kFakePlaneFbPropId),
+            0ULL);
 }
 
 TEST_F(DrmAtomicStateManagerTest, RapidCreateAndDestroyDoesNotDeadlock) {

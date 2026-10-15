@@ -127,6 +127,8 @@ class HdcpController {
   HdcpState hdcp_state_ GUARDED_BY(mutex_) = HdcpState::kUndesired;
 
   bool was_retry_ GUARDED_BY(mutex_) = false;
+  std::optional<HdcpContentType> enabled_content_type_ GUARDED_BY(mutex_) =
+      std::nullopt;
 
   // Only accessed from helper thread.
   const HdcpConCallbacks cbks_;
