@@ -86,6 +86,12 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
                               uint32_t degamma_lut_blob_id,
                               uint32_t gamma_lut_blob_id) const -> int;
   auto AtomicDisablePlane(drmModeAtomicReq &pset) -> int;
+  auto &GetCrtcProperty() const {
+    return crtc_property_;
+  }
+  auto &GetFbProperty() const {
+    return fb_property_;
+  }
   auto &GetZPosProperty() const {
     return zpos_property_;
   }

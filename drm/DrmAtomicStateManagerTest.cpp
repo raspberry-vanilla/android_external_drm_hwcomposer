@@ -43,6 +43,7 @@ constexpr uint32_t kOrphanEncoderId = 5;
 constexpr uint32_t kTestFbId1 = 501;
 constexpr uint32_t kTestFbId2 = 502;
 constexpr uint32_t kTestFbId3 = 503;
+constexpr uint32_t kStaleBootloaderFbId = 999;
 constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
 constexpr uint32_t kTestVRefresh = 60;
@@ -54,9 +55,12 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   void SetUp() override {
     fake_device = std::make_unique<FakeDrmDevice>();
     fake_device->AddPipelineResources();
-    fake_device->AddPlane(
-        std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_OVERLAY,
-                                       /*is_valid=*/true, kOverlayPlaneId));
+    auto overlay = std::make_unique<FakeDrmPlane>(*fake_device,
+                                                  DRM_PLANE_TYPE_OVERLAY,
+                                                  /*is_valid=*/true,
+                                                  kOverlayPlaneId);
+    overlay_plane = overlay.get();
+    fake_device->AddPlane(std::move(overlay));
     pipeline = fake_device->GetBackend().CreatePipeline(
         *fake_device->GetConnectors().back());
     ASSERT_NE(pipeline, nullptr);
@@ -65,6 +69,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    overlay_plane = nullptr;
     state_manager.reset();
     pipeline.reset();
     fake_device.reset();
@@ -100,6 +105,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   std::unique_ptr<FakeDrmDevice> fake_device;
+  FakeDrmPlane* overlay_plane = nullptr;
   std::shared_ptr<DrmDisplayPipeline> pipeline;
   std::unique_ptr<DrmAtomicStateManager> state_manager;
 };
@@ -325,6 +331,37 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
                                       kOrphanConnectorId,
                                       kFakeConnectorCrtcPropId),
+            0ULL);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       InitialModesetDisablesStalePlanesBoundToTargetCrtc) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  // Simulate the overlay plane being left active on our CRTC in kernel state
+  // (e.g. from bootloader handover) before DrmAtomicStateManager's first
+  // modeset.
+  ASSERT_NE(overlay_plane, nullptr);
+  overlay_plane->SetCrtcIdPropertyValue(crtc_id);
+  overlay_plane->SetFbIdPropertyValue(kStaleBootloaderFbId);
+
+  // Initial modeset uses only the primary plane.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req, nullptr);
+  auto* drm_req = AsDrmRequest(req);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOverlayPlaneId, kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOverlayPlaneId, kFakePlaneFbPropId),
             0ULL);
 }
 

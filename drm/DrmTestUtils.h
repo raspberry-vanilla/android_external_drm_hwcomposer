@@ -462,6 +462,16 @@ class FakeDrmPlane : public DrmPlane {
     return is_valid_;
   }
 
+  void SetCrtcIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(crtc_property_, plane_id_, kFakePlaneCrtcPropId,
+                        "CRTC_ID", DRM_MODE_PROP_OBJECT, value);
+  }
+
+  void SetFbIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(fb_property_, plane_id_, kFakePlaneFbPropId, "FB_ID",
+                        DRM_MODE_PROP_OBJECT, value);
+  }
+
  private:
   const bool is_valid_;
   const uint32_t plane_id_;

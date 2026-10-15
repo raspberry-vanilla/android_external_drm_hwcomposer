@@ -656,11 +656,44 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
 
   // Disable all planes that were used in the previous commit which are no
   // longer being used.
-  return std::all_of(unused_planes.begin(), unused_planes.end(),
-                     [&request](auto &plane) {
-                       return plane->Get()->AtomicDisablePlane(
-                                  *request.property_set) == 0;
-                     });
+  if (!std::all_of(unused_planes.begin(), unused_planes.end(),
+                   [&request](auto &plane) {
+                     return plane->Get()->AtomicDisablePlane(
+                                *request.property_set) == 0;
+                   })) {
+    return false;
+  }
+
+  // On a full modeset, also disable any hardware planes that were left active
+  // on this CRTC prior to DrmAtomicStateManager's tracking (e.g. from
+  // bootloader handover) and are not already in used_planes or unused_planes.
+  if (args.display_mode && !args.seamless && pipe_->device != nullptr) {
+    const uint32_t crtc_id = pipe_->crtc->Get()->GetId();
+    for (const auto &plane : pipe_->device->GetPlanes()) {
+      if (plane->GetCrtcProperty().GetValue().value_or(0) != crtc_id ||
+          plane->GetFbProperty().GetValue().value_or(0) == 0) {
+        continue;
+      }
+      const bool
+          in_used = std::any_of(request.new_frame_state.used_planes.begin(),
+                                request.new_frame_state.used_planes.end(),
+                                [&plane](const auto &used) {
+                                  return used->Get() == plane.get();
+                                });
+      const bool in_unused = std::any_of(unused_planes.begin(),
+                                         unused_planes.end(),
+                                         [&plane](const auto &unused) {
+                                           return unused->Get() == plane.get();
+                                         });
+      if (!in_used && !in_unused) {
+        if (plane->AtomicDisablePlane(*request.property_set) != 0) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
 }
 
 std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
