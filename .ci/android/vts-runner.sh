@@ -213,7 +213,7 @@ function run_vts() {
     return 1
   fi
   local test_name=$1
-  local skip_file_name=${2:-vts-skips.txt}
+  local assumption_failures_file_name=${2:-vts-assumption-failures.txt}
   local gtest_filter=${3:-${GTEST_FILTER:-}}
   local results_log="vts_results_${test_name}"
   adb shell stop surfaceflinger
@@ -245,39 +245,16 @@ function run_vts() {
     return "${MISSING_RESULTS}";
   fi
 
-  mapfile -t expected_skips < <(
-    sed -nE '/^(#|[[:space:]]*$)/!{ s/^[[:space:]]+//; s/[[:space:]]+$//; p }' \
-      "${CI_PROJECT_DIR}/.ci/android/${skip_file_name}" | sort
-  )
-
-  local actual_skips_file="vts_results_${test_name}_actual_skips.txt"
+  local actual_assumption_failures_file="vts_results_${test_name}_actual_assumption_failures.txt"
   sed -n '/\[ *SKIPPED *\].*listed below:/,$p' \
-    "${RESULTS_DIR}/${results_log}" | sed '1d' > "${RESULTS_DIR}/${actual_skips_file}"
+    "${RESULTS_DIR}/${results_log}" | sed '1d' \
+    | sed -nE 's/^\[[[:space:]]*SKIPPED[[:space:]]*\][[:space:]]*(.*)$/\1/p' \
+    > "${RESULTS_DIR}/${actual_assumption_failures_file}"
 
-  mapfile -t actual_skips < <(
-    sed -nE 's/^\[[[:space:]]*SKIPPED[[:space:]]*\][[:space:]]*(.*)$/\1/p' \
-      "${RESULTS_DIR}/${actual_skips_file}" | sort
-  )
-
-  UNEXPECTED_SKIPS=0
-  if [[ "${expected_skips[*]}" != "${actual_skips[*]}" ]]; then
-    UNEXPECTED_SKIPS=1
-    echo "Unexpected changes to the skipped tests."
-    unexpected_run=$(comm -23 <(printf '%s\n' "${expected_skips[@]}" | sort) \
-        <(printf '%s\n' "${actual_skips[@]}"   | sort) || true)
-    unexpected_skip=$(comm -13 <(printf '%s\n' "${expected_skips[@]}" | sort) \
-        <(printf '%s\n' "${actual_skips[@]}"   | sort) || true)
-
-    if [[ -n $unexpected_run ]]; then
-      echo -e "\nTest(s) listed in ${skip_file_name}, were actually run: "
-      printf '%s\n' "$unexpected_run"
-    fi
-
-    if [[ -n $unexpected_skip ]]; then
-      echo -e "\nTest(s) not listed in ${skip_file_name}, were actually skipped:"
-      printf '%s\n' "$unexpected_skip"
-    fi
-  fi
+  check_expected_assumption_failures \
+    "${CI_PROJECT_DIR}/.ci/android/${assumption_failures_file_name}" \
+    "${RESULTS_DIR}/${actual_assumption_failures_file}"
+  UNEXPECTED_ASSUMPTION_FAILURES=$?
 
   # shellcheck disable=SC2251 # don't exit on failure
   ! grep -i "FAILED" "${RESULTS_DIR}/${results_log}"
@@ -288,7 +265,7 @@ function run_vts() {
 
   [ "${TIMED_OUT}" = "0" ] && \
   [ "${FAILED_TESTS}" = "0" ] && \
-  [ "${UNEXPECTED_SKIPS}" = "0" ]
+  [ "${UNEXPECTED_ASSUMPTION_FAILURES}" = "0" ]
   return $?
 }
 
