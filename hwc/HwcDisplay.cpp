@@ -393,7 +393,9 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
     return {};
   }
 
-  if (layers_.empty()) {
+  // Proceed if client_layer_ has a valid buffer even when layers_ is empty
+  // (e.g. pure client-target composition with zero HWC layers).
+  if (layers_.empty() && !client_layer_.IsLayerUsableAsDevice()) {
     ALOGV("No layers to validate.");
     return {};
   }
@@ -495,7 +497,9 @@ auto HwcDisplay::PresentStagedComposition(
     return true;
   }
 
-  if (layers_.empty()) {
+  // Commit client_layer_ when presenting a zero-layer composition that was
+  // rendered directly into the client target.
+  if (layers_.empty() && !client_layer_.IsLayerUsableAsDevice()) {
     ALOGV("No layers to present.");
     return true;
   }
@@ -1556,6 +1560,13 @@ HwcDisplay::CreateLayerToPlaneJoiningPlan(
         ALOGE("Invalid layer type: %d", static_cast<int>(type));
         continue;
     }
+  }
+
+  // When layers_ is empty, the loop above does not assign client_z_order. Place
+  // client_layer_ at z_order 0 so pure client-target compositions are committed
+  // to the primary plane.
+  if (layers_.empty() && client_layer_.IsLayerUsableAsDevice()) {
+    client_z_order = 0;
   }
 
   if (client_z_order.has_value()) {
