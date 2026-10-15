@@ -742,6 +742,11 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
+    // Re-register the VSync timestamp callback if VSync delivery was enabled
+    // prior to powering off the display.
+    if (vsync_event_en_) {
+      SetVsyncCallbacksEnabled(true);
+    }
     if (GetPipe().atomic_state_manager->IsActive()) {
       return HwcDisplay::Error::kNone;
     }
@@ -770,6 +775,12 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // update will try to set it to active again.
   if (!result.IsSuccess() && !enabled) {
     return HwcDisplay::Error::kBadParameter;
+  }
+  // Clear the VSyncWorker callback directly so VSync events stop firing while
+  // the display is powered off, while preserving vsync_event_en_ to restore
+  // callbacks when the display is powered back on.
+  if (!enabled && vsync_worker_) {
+    vsync_worker_->SetTimestampCallback(std::nullopt);
   }
   return HwcDisplay::Error::kNone;
 }

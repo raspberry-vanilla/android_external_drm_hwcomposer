@@ -19,9 +19,12 @@
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -56,6 +59,7 @@ constexpr uint32_t kRefresh60Hz = 60;
 constexpr uint32_t kRefresh120Hz = 120;
 constexpr uint32_t kTestFbId = 501;
 constexpr uint32_t kBytesPerPixel = 4;
+constexpr int kVsyncObservationWindowMs = 50;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -65,6 +69,7 @@ class TestDrmHwc : public DrmHwc {
   void SendVsyncEventToClient(DisplayHandle /*display_handle*/,
                               int64_t /*timestamp*/,
                               uint32_t /*vsync_period*/) const override {
+    ++vsync_count_;
   }
   void SendVsyncPeriodTimingChangedEventToClient(
       DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
@@ -78,6 +83,17 @@ class TestDrmHwc : public DrmHwc {
       DisplayHandle /*display_handle*/,
       std::optional<HdcpContentType> /*current_hdcp_level*/) override {
   }
+
+  void ResetVsyncCount() const {
+    vsync_count_.store(0);
+  }
+
+  int GetVsyncCount() const {
+    return vsync_count_.load();
+  }
+
+ private:
+  mutable std::atomic<int> vsync_count_{0};
 };
 
 }  // namespace
@@ -304,6 +320,25 @@ TEST_F(HwcDisplayTest,
   EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
                                                release_fences));
   EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+}
+
+TEST_F(HwcDisplayTest, SetPowerModeOffStopsVsyncCallbacks) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  display.SetVsyncCallbacksEnabled(true);
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+
+  hwc.ResetVsyncCount();
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kVsyncObservationWindowMs));
+  EXPECT_EQ(hwc.GetVsyncCount(), 0);
 }
 
 TEST_F(HwcDisplayTest, QueueSeamlessConfigUpdatesRequestedAndNextConfig) {
