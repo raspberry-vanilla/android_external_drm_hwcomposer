@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -360,6 +361,14 @@ class HwcDisplay : public ICompositorDisplay {
   void ApplyCommitChanges(const AtomicCommitArgs &a_args,
                           const AtomicCommitResult &result);
 
+  DisplayHandle GetHandle() const {
+    return handle_;
+  }
+
+  BootAnimationState GetBootAnimationState() const {
+    return boot_animation_state_;
+  }
+
   void SetBootAnimationState(BootAnimationState state) {
     boot_animation_state_ = state;
   }
@@ -449,7 +458,8 @@ class HwcDisplay : public ICompositorDisplay {
 
   const DisplayHandle handle_;
   bool is_virtual_;
-  BootAnimationState boot_animation_state_ = BootAnimationState::kInactive;
+  std::atomic<BootAnimationState> boot_animation_state_{
+      BootAnimationState::kInactive};
 
   std::map<ILayerId, HwcLayer> layers_;
   HwcLayer client_layer_;

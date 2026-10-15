@@ -113,9 +113,10 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // Should be done for all successful modesets (full and seamless).
   void LogRefreshRateChanges();
 
-  void StartBootAnimation();
-  void WaitForCompletionAndStopBootAnimation();
-  void StopBootAnimation();
+  bool InitEarlyBootAnimation(HwcDisplay *display);
+  void StartEarlyBootAnimation();
+  void WaitForCompletionAndStopEarlyBootAnimation();
+  void StopEarlyBootAnimation();
 
  private:
   // An additional layer to isolate the critical region for invoking hotplug

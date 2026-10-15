@@ -19,19 +19,34 @@
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include <android-base/file.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_mode.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 #include "compositor/DisplayInfo.h"
 #include "compositor/HdcpController.h"
+#include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcDisplayConfigs.h"
+#include "utils/TestUtils.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 
@@ -43,6 +58,13 @@ constexpr uint32_t kFirstEncoderId = 10;
 constexpr uint32_t kSecondEncoderId = 11;
 constexpr uint32_t kFirstConnectorId = 100;
 constexpr uint32_t kSecondConnectorId = 101;
+constexpr uint32_t kTestAnimWidth = 4;
+constexpr uint32_t kTestAnimHeight = 4;
+constexpr uint32_t kTestAnimFps = 240;
+constexpr uint32_t kTestRefresh60Hz = 60;
+constexpr uint32_t kTestRefresh120Hz = 120;
+constexpr size_t kTestBytesPerPixel = 4;
+constexpr uint8_t kTestPixelByte = 0x33;
 
 class RecordingDrmHwc : public DrmHwc {
  public:
@@ -73,6 +95,37 @@ class RecordingDrmHwc : public DrmHwc {
 }  // namespace
 
 struct DrmHwcTest : public ::testing::Test {
+  static void WriteValidRawAnimationFile(int fd, uint32_t num_frames = 2) {
+    struct PackedHeader {
+      char magic[4];
+      uint32_t width;
+      uint32_t height;
+      uint32_t fps;
+      uint32_t num_frames;
+      uint32_t format;
+      uint32_t hold_frame;
+      uint32_t hold_duration_ms;
+    } __attribute__((packed));
+
+    PackedHeader hdr{};
+    std::memcpy(hdr.magic, "RAWF", sizeof(hdr.magic));
+    hdr.width = kTestAnimWidth;
+    hdr.height = kTestAnimHeight;
+    hdr.fps = kTestAnimFps;
+    hdr.num_frames = num_frames;
+    hdr.format = DRM_FORMAT_ARGB8888;
+    hdr.hold_frame = 0;
+    hdr.hold_duration_ms = 0;
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(hdr.width) * hdr.height *
+                                    kTestBytesPerPixel * num_frames,
+                                kTestPixelByte);
+    ASSERT_EQ(write(fd, &hdr, sizeof(hdr)),
+              static_cast<ssize_t>(sizeof(hdr)));
+    ASSERT_EQ(write(fd, pixels.data(), pixels.size()),
+              static_cast<ssize_t>(pixels.size()));
+  }
+
   void SetUp() override {
     fake_device = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
     fake_device->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
@@ -106,6 +159,15 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().drms_.clear();
   }
 
+  std::shared_ptr<DrmDisplayPipeline> CreatePipelineWithModes(
+      std::vector<DrmMode> modes, bool is_external = false) const {
+    fake_device->AddPipelineResourcesWithModes(std::move(modes), is_external);
+    return fake_device->GetBackend().CreatePipeline(
+        *fake_device->GetConnectors().back());
+  }
+
+  ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
+                                              ""};
   std::unique_ptr<FakeDrmDevice> fake_device;
   RecordingDrmHwc hwc;
 };
@@ -339,6 +401,253 @@ TEST_F(DrmHwcTest,
 
   EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
   hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest, EarlyBootAnimationBindStartWaitStopAndRebindLifecycle) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  EXPECT_GE(sink->GetExecuteCommitCount(), 2U);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+
+  ASSERT_TRUE(primary->CreateLayer(1));
+  (void)primary->ValidateStagedComposition();
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  // Simulate UI restart or display rebind after early boot animation completed.
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  sink->ClearHistory();
+  hwc.StartEarlyBootAnimation();
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(DrmHwcTest,
+       StartEarlyBootAnimationOnHeadlessPrimaryMarksCompletedAndStaysInactive) {
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+
+  hwc.FinalizeDisplayBinding();
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_TRUE(primary->IsInHeadlessMode());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  hwc.StartEarlyBootAnimation();
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(DrmHwcTest,
+       StartEarlyBootAnimationOnExternalPrimaryMarksCompletedAndStaysInactive) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(external_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_FALSE(primary->IsInHeadlessMode());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  hwc.StartEarlyBootAnimation();
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+}
+
+TEST_F(DrmHwcTest, ReinitPrimaryDisplayBeforeStartPreservesBootAnimation) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+
+  // Re-initializing primary before StartEarlyBootAnimation() must keep
+  // boot_animation_ intact and must not mark vendor.hwc.bootanim.completed=1.
+  primary->SetPipeline(primary_pipe);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  EXPECT_GE(sink->GetExecuteCommitCount(), 2U);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+}
+
+TEST_F(DrmHwcTest,
+       StartEarlyBootAnimationContinuesWhenBestConfigSwitchFails) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  // Provide 60Hz preferred and 120Hz candidate so Start() attempts SetConfig().
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  const ConfigId preferred_id = primary->GetCurrentConfig()->id;
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  // Fail only the first commit (SetConfig to 120Hz), then let frame commits
+  // succeed on the existing 60Hz config.
+  sink->SetExecuteCommitHook(
+      [sink](
+          const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              /*args*/) {
+        sink->SetExecuteCommitHook(nullptr);
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            CommitStatus::Failure(-EINVAL));
+      });
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(primary->GetCurrentConfig()->id, preferred_id);
+  // 1 failed SetConfig commit + at least 2 presented animation frames.
+  EXPECT_GE(sink->GetExecuteCommitCount(), 3U);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+}
+
+TEST_F(DrmHwcTest,
+       SecondaryDisplayInitSetConfigFailurePreservesPrimaryBootAnimation) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto secondary_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(secondary_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  // Fail only the secondary display's initial SetConfig() commit during Init().
+  sink->SetExecuteCommitHook(
+      [sink](
+          const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              /*args*/) {
+        sink->SetExecuteCommitHook(nullptr);
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            CommitStatus::Failure(-EINVAL));
+      });
+
+  EXPECT_TRUE(hwc.BindDisplay(secondary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+
+  sink->ClearHistory();
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  EXPECT_GE(sink->GetExecuteCommitCount(), 2U);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+  EXPECT_EQ(primary->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
 }
 
 }  // namespace android::drm_hwcomposer

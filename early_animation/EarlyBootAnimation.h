@@ -42,7 +42,8 @@ class EarlyBootAnimation {
   friend class EarlyBootAnimationTest;
 
  public:
-  explicit EarlyBootAnimation(HwcDisplay* display);
+  [[nodiscard]] static std::unique_ptr<EarlyBootAnimation> CreateInstance(
+      HwcDisplay* display);
   ~EarlyBootAnimation();
 
   EarlyBootAnimation(const EarlyBootAnimation&) = delete;
@@ -55,6 +56,8 @@ class EarlyBootAnimation {
   void WaitForCompletion();
 
  private:
+  explicit EarlyBootAnimation(HwcDisplay* display);
+  [[nodiscard]] bool Init();
   enum class AnimationState {
     // Animation is completely inactive or terminated. The worker thread has
     // joined and all DRM framebuffers / dumb buffers have been freed or the
@@ -182,6 +185,7 @@ class EarlyBootAnimation {
   uint32_t offset_x_ = 0;
   uint32_t offset_y_ = 0;
   std::string animation_path_;
+  UniqueFd fd_ = MakeUniqueFd(-1);
 };
 
 }  // namespace android::drm_hwcomposer

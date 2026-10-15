@@ -269,7 +269,7 @@ ndk::ScopedAStatus ComposerClient::executeCommands(
     return ndk::ScopedAStatus::ok();
   }
 
-  hwc_->WaitForCompletionAndStopBootAnimation();
+  hwc_->WaitForCompletionAndStopEarlyBootAnimation();
 
   std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
   CommandResultWriter cmd_result_writer(results);
@@ -769,7 +769,7 @@ ndk::ScopedAStatus ComposerClient::setActiveConfigWithConstraints(
     return ToBinderStatus(hwc3::Error::kSeamlessNotAllowed);
   }
 
-  hwc_->WaitForCompletionAndStopBootAnimation();
+  hwc_->WaitForCompletionAndStopEarlyBootAnimation();
 
   std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
   HwcDisplay* display = GetDisplay(display_handle);
@@ -1067,7 +1067,7 @@ ndk::ScopedAStatus ComposerClient::setPowerMode(int64_t display_handle,
   }
 
   if (commit_required) {
-    hwc_->WaitForCompletionAndStopBootAnimation();
+    hwc_->WaitForCompletionAndStopEarlyBootAnimation();
   }
 
   {

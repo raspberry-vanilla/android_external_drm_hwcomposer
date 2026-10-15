@@ -86,6 +86,12 @@ class Properties {
   static void SetEarlyBootAnimationCompleted(bool completed);
 
   /**
+   * Determines whether the early boot animation has completed via the
+   * vendor.hwc.bootanim.completed system property.
+   */
+  static auto EarlyBootAnimationCompleted() -> bool;
+
+  /**
    * Retrieves the physical hardware hold time in milliseconds for the first
    * frame of the early boot animation via vendor.hwc.drm.early_boot_hold_ms.
    */

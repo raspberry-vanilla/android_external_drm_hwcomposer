@@ -83,12 +83,24 @@ constexpr bool IsHdrFormat(uint32_t format) {
 
 }  // namespace
 
+std::unique_ptr<EarlyBootAnimation> EarlyBootAnimation::CreateInstance(
+    HwcDisplay* display) {
+  auto anim = std::unique_ptr<EarlyBootAnimation>(
+      new EarlyBootAnimation(display));
+  if (!anim->Init()) {
+    return nullptr;
+  }
+  return anim;
+}
+
 EarlyBootAnimation::EarlyBootAnimation(HwcDisplay* display)
     : display_(display), animation_path_(Properties::EarlyBootAnimationPath()) {
 }
 
 EarlyBootAnimation::~EarlyBootAnimation() {
-  Stop();
+  if (state_ != AnimationState::kStopped) {
+    Stop();
+  }
 }
 
 uint32_t EarlyBootAnimation::CalculateMultiplier(float vrefresh,
@@ -112,36 +124,39 @@ std::chrono::nanoseconds EarlyBootAnimation::CalculateFrameDuration(
                                   std::max(1U, anim_fps));
 }
 
-bool EarlyBootAnimation::Start() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != AnimationState::kStopped || thread_.joinable()) {
-      ALOGE(
-          "EarlyBootAnimation: Attempting to start while animation is running");
-      return false;
-    }
-  }
-
+bool EarlyBootAnimation::Init() {
   UniqueFd fd = MakeUniqueFd(
       // NOLINTNEXTLINE(misc-include-cleaner)
       open(animation_path_.c_str(), O_RDONLY | O_CLOEXEC));
   if (!fd) {
     ALOGE("EarlyBootAnimation: Failed to open %s (errno=%d)",
           animation_path_.c_str(), errno);
-    Stop();
     return false;
   }
 
   if (!ReadHeader(*fd)) {
+    return false;
+  }
+
+  if (compressed_ && !ReadIndexTable(*fd)) {
+    return false;
+  }
+
+  fd_ = std::move(fd);
+  return true;
+}
+
+bool EarlyBootAnimation::Start() {
+  if (state_ != AnimationState::kStopped || !fd_) {
+    ALOGE("EarlyBootAnimation: Animation already started or not initialized");
     Stop();
     return false;
   }
 
-  if (compressed_) {
-    if (!ReadIndexTable(*fd)) {
-      Stop();
-      return false;
-    }
+  if (display_ == nullptr || display_->IsInHeadlessMode()) {
+    ALOGE("EarlyBootAnimation: No display configured");
+    Stop();
+    return false;
   }
 
   display_->SetBootAnimationState(HwcDisplay::BootAnimationState::kActive);
@@ -159,19 +174,26 @@ bool EarlyBootAnimation::Start() {
         current_config->id, current_config->mode.GetRawMode().hdisplay,
         current_config->mode.GetRawMode().vdisplay,
         current_config->mode.GetVRefresh());
-  // Attempt to set the config even if the best config is already current,
-  // because this allows the display to choose boot-specific color settings.
-  display_->SetConfig(best_config_id);
-  current_config = display_->GetCurrentConfig();
-  if (current_config == nullptr) {
-    ALOGE("EarlyBootAnimation: No current display config after SetConfig");
-    Stop();
-    return false;
+  if (best_config_id != current_config->id) {
+    const auto set_config_err = display_->SetConfig(best_config_id);
+    if (set_config_err != HwcDisplay::ConfigError::kNone) {
+      ALOGW(
+          "EarlyBootAnimation: Failed to switch to config %u, continuing with "
+          "config %u: err=%d",
+          best_config_id, current_config->id, static_cast<int>(set_config_err));
+    } else {
+      current_config = display_->GetCurrentConfig();
+      if (current_config == nullptr) {
+        ALOGE("EarlyBootAnimation: No current display config after SetConfig");
+        Stop();
+        return false;
+      }
+      ALOGD("EarlyBootAnimation: New config is %u (%ux%u @ %.2f Hz)",
+            current_config->id, current_config->mode.GetRawMode().hdisplay,
+            current_config->mode.GetRawMode().vdisplay,
+            current_config->mode.GetVRefresh());
+    }
   }
-  ALOGD("EarlyBootAnimation: New config is %u (%ux%u @ %.2f Hz)",
-        current_config->id, current_config->mode.GetRawMode().hdisplay,
-        current_config->mode.GetRawMode().vdisplay,
-        current_config->mode.GetVRefresh());
 
   // Match sleep duration to the panel's actual refresh rate to avoid clock
   // drift (e.g. 59.94Hz), and use multiplier for high refresh panels (e.g.
@@ -199,7 +221,7 @@ bool EarlyBootAnimation::Start() {
       header_.num_frames, static_cast<uint32_t>(header_.format));
 
   SetAnimationState(AnimationState::kRunning);
-  thread_ = std::thread(&EarlyBootAnimation::Loop, this, std::move(fd));
+  thread_ = std::thread(&EarlyBootAnimation::Loop, this, std::move(fd_));
   return true;
 }
 
@@ -291,11 +313,13 @@ void EarlyBootAnimation::SetAnimationState(AnimationState state) {
 }
 
 void EarlyBootAnimation::WaitForCompletion() {
+  if (state_ != AnimationState::kRunning) {
+    return;
+  }
   ATRACE_CALL();
   std::unique_lock<std::mutex> lock(mutex_);
   // Short-circuit if already completed or stopped.
-  if (state_ == AnimationState::kCompleted ||
-      (state_ == AnimationState::kStopped && !thread_.joinable())) {
+  if (state_ != AnimationState::kRunning) {
     return;
   }
 
@@ -334,20 +358,23 @@ void EarlyBootAnimation::WaitForCompletion() {
 }
 
 void EarlyBootAnimation::Stop() {
-  ATRACE_CALL();
-  SetAnimationState(AnimationState::kStopped);
-
   // Ensure teardown runs exactly once across concurrent callers (e.g.
   // boot_thread_ and SurfaceFlinger) without holding mutex_ while joining.
   std::call_once(stop_flag_, [this]() {
+    ATRACE_NAME("EarlyBootAnimation::Stop");
+    SetAnimationState(AnimationState::kStopped);
+
     ALOGD("EarlyBootAnimation: Stopping animation");
     if (thread_.joinable()) {
       ALOGD("EarlyBootAnimation: Joining thread");
       thread_.join();
     }
 
+    fd_.reset();
     FreeBuffers();
-    if (display_ != nullptr) {
+    if (display_ != nullptr &&
+        display_->GetBootAnimationState() ==
+            HwcDisplay::BootAnimationState::kActive) {
       display_->SetBootAnimationState(HwcDisplay::BootAnimationState::kCleanup);
     }
     Properties::SetEarlyBootAnimationCompleted(true);

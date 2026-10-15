@@ -19,8 +19,10 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -37,10 +39,42 @@
 #include <unistd.h>
 #include <xf86drmMode.h>
 
+#include "compositor/DisplayInfo.h"
+#include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
+#include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
+#include "utils/TestUtils.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
+
+namespace {
+
+class StubDrmHwc : public DrmHwc {
+ public:
+  bool HasCallback() const override {
+    return false;
+  }
+  void SendVsyncEventToClient(DisplayHandle /*display_handle*/,
+                              int64_t /*timestamp*/,
+                              uint32_t /*vsync_period*/) const override {
+  }
+  void SendVsyncPeriodTimingChangedEventToClient(
+      DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
+  }
+  void SendRefreshEventToClient(DisplayHandle /*display_handle*/) override {
+  }
+  void SendHotplugEventToClient(DisplayHandle /*display_handle*/,
+                                DisplayStatus /*display_status*/) override {
+  }
+  void SendHdcpLevelsChangedEventToClient(
+      DisplayHandle /*display_handle*/,
+      std::optional<HdcpContentType> /*current_hdcp_level*/) override {
+  }
+};
+
+}  // namespace
 
 class EarlyBootAnimationTest : public ::testing::Test {
  protected:
@@ -48,7 +82,31 @@ class EarlyBootAnimationTest : public ::testing::Test {
   using AnimationState = EarlyBootAnimation::AnimationState;
 
   void SetUp() override {
-    anim_ = std::make_unique<EarlyBootAnimation>(nullptr);
+    anim_ = std::unique_ptr<EarlyBootAnimation>(
+        new EarlyBootAnimation(nullptr));
+  }
+
+  void TearDown() override {
+    anim_.reset();
+    test_display_.reset();
+  }
+
+  HwcDisplay* CreatePrimaryDisplay() {
+    anim_.reset();
+    test_display_ = std::make_unique<HwcDisplay>(kPrimaryDisplay,
+                                                 /*is_virtual=*/false,
+                                                 &stub_hwc_);
+    return test_display_.get();
+  }
+
+  void RecreateAnim(HwcDisplay* display) {
+    anim_ = std::unique_ptr<EarlyBootAnimation>(
+        new EarlyBootAnimation(display));
+  }
+
+  bool CreateAnimInstance(HwcDisplay* display) {
+    anim_ = EarlyBootAnimation::CreateInstance(display);
+    return anim_ != nullptr;
   }
 
   static android::base::unique_fd CreateSeekableFdWithData(const void* data,
@@ -172,6 +230,10 @@ class EarlyBootAnimationTest : public ::testing::Test {
   }
 
  private:
+  ScopedTestProperty reset_bootanim_completed_{"vendor.hwc.bootanim.completed",
+                                               ""};
+  StubDrmHwc stub_hwc_;
+  std::unique_ptr<HwcDisplay> test_display_;
   std::unique_ptr<EarlyBootAnimation> anim_;
 };
 
@@ -535,6 +597,118 @@ TEST_F(EarlyBootAnimationTest, WaitForCompletionUnblocksOnStopOrCompleted) {
                      std::chrono::steady_clock::now() - start_time)
                      .count();
   EXPECT_LT(elapsed, 500);
+}
+
+TEST_F(EarlyBootAnimationTest, InitFailsWhenAnimationFileDoesNotExist) {
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path",
+                               "/tmp/nonexistent_drm_hwcomposer_bootanim.raw");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  HwcDisplay* display = CreatePrimaryDisplay();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  EXPECT_EQ(EarlyBootAnimation::CreateInstance(display), nullptr);
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_FALSE(Properties::EarlyBootAnimationCompleted());
+}
+
+TEST_F(EarlyBootAnimationTest, InitFailsWhenHeaderIsInvalid) {
+  TemporaryFile tf;
+  AnimationHeader corrupt{};
+  std::memcpy(corrupt.magic.data(), "BADM", 4);
+  corrupt.width = 16;
+  corrupt.height = 16;
+  corrupt.fps = 60;
+  corrupt.num_frames = 1;
+  corrupt.format = DRM_FORMAT_ARGB8888;
+  ASSERT_EQ(write(tf.fd, &corrupt, sizeof(corrupt)),
+            static_cast<ssize_t>(sizeof(corrupt)));
+
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+  EXPECT_EQ(EarlyBootAnimation::CreateInstance(nullptr), nullptr);
+}
+
+TEST_F(EarlyBootAnimationTest, CreateInstanceSucceedsWithValidRawfFile) {
+  TemporaryFile tf;
+  AnimationHeader valid{};
+  std::memcpy(valid.magic.data(), "RAWF", 4);
+  valid.width = 4;
+  valid.height = 4;
+  valid.fps = 60;
+  valid.num_frames = 1;
+  valid.format = DRM_FORMAT_ARGB8888;
+  std::vector<uint8_t> pixels(static_cast<size_t>(4) * 4 * 4, 0x7F);
+  ASSERT_EQ(write(tf.fd, &valid, sizeof(valid)),
+            static_cast<ssize_t>(sizeof(valid)));
+  ASSERT_EQ(write(tf.fd, pixels.data(), pixels.size()),
+            static_cast<ssize_t>(pixels.size()));
+
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+  ASSERT_TRUE(CreateAnimInstance(nullptr));
+  EXPECT_FALSE(IsCompressed());
+  EXPECT_EQ(GetHeader().width, 4U);
+  EXPECT_EQ(GetHeader().height, 4U);
+}
+
+TEST_F(EarlyBootAnimationTest,
+       StopTransitionsDisplayToCleanupOnlyWhenActive) {
+  HwcDisplay* display = CreatePrimaryDisplay();
+
+  // 1. When display is kInactive, Stop() must leave it kInactive.
+  display->SetBootAnimationState(HwcDisplay::BootAnimationState::kInactive);
+  RecreateAnim(display);
+  TriggerStop();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+
+  // 2. When display is kActive, Stop() transitions it to kCleanup.
+  Properties::SetEarlyBootAnimationCompleted(false);
+  display->SetBootAnimationState(HwcDisplay::BootAnimationState::kActive);
+  RecreateAnim(display);
+  TriggerStop();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+
+  // 3. When display is already kCleanup, Stop() leaves it kCleanup.
+  Properties::SetEarlyBootAnimationCompleted(false);
+  RecreateAnim(display);
+  TriggerStop();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+}
+
+TEST_F(EarlyBootAnimationTest, StartWithHeadlessDisplayFailsAndMarksCompleted) {
+  TemporaryFile tf;
+  AnimationHeader valid{};
+  std::memcpy(valid.magic.data(), "RAWF", 4);
+  valid.width = 4;
+  valid.height = 4;
+  valid.fps = 60;
+  valid.num_frames = 1;
+  valid.format = DRM_FORMAT_ARGB8888;
+  std::vector<uint8_t> pixels(static_cast<size_t>(4) * 4 * 4, 0x7F);
+  ASSERT_EQ(write(tf.fd, &valid, sizeof(valid)),
+            static_cast<ssize_t>(sizeof(valid)));
+  ASSERT_EQ(write(tf.fd, pixels.data(), pixels.size()),
+            static_cast<ssize_t>(pixels.size()));
+
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+
+  HwcDisplay* display = CreatePrimaryDisplay();
+  display->SetPipeline(nullptr);
+  ASSERT_TRUE(display->IsInHeadlessMode());
+
+  auto anim = EarlyBootAnimation::CreateInstance(display);
+  ASSERT_NE(anim, nullptr);
+  EXPECT_FALSE(anim->Start());
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
 }
 // NOLINTEND(readability-magic-numbers)
 

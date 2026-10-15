@@ -415,35 +415,57 @@ DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() 
   return events;
 }
 
-void DrmHwc::StartBootAnimation() {
-  if (!Properties::EarlyBootAnimationEnabled()) {
-    return;
+bool DrmHwc::InitEarlyBootAnimation(HwcDisplay *display) {
+  if (!Properties::EarlyBootAnimationEnabled() ||
+      Properties::EarlyBootAnimationCompleted()) {
+    return false;
   }
-  auto &primary_display = displays_[kPrimaryDisplay];
-  if (!primary_display || primary_display->IsInHeadlessMode()) {
+  if (display == nullptr || display->GetHandle() != kPrimaryDisplay ||
+      display->IsInHeadlessMode() ||
+      display->GetPipe().connector->Get()->IsExternal()) {
+    return false;
+  }
+  if (!boot_animation_) {
+    boot_animation_ = EarlyBootAnimation::CreateInstance(display);
+  }
+  if (!boot_animation_) {
     ALOGW(
-        "EarlyBootAnimation: Primary display unavailable or in headless mode, "
-        "skipping boot animation");
-    Properties::SetEarlyBootAnimationCompleted(false);
+        "EarlyBootAnimation: Failed to initialize boot animation on primary "
+        "display, skipping");
+    Properties::SetEarlyBootAnimationCompleted(true);
+    return false;
+  }
+  return true;
+}
+
+void DrmHwc::StartEarlyBootAnimation() {
+  if (!Properties::EarlyBootAnimationEnabled() ||
+      Properties::EarlyBootAnimationCompleted()) {
     return;
   }
   if (!boot_animation_) {
-    boot_animation_ = std::make_unique<EarlyBootAnimation>(
-        primary_display.get());
-    if (!boot_animation_->Start()) {
-      boot_animation_.reset();
+    auto *primary_display = GetDisplay(kPrimaryDisplay);
+    if (!InitEarlyBootAnimation(primary_display)) {
+      ALOGW(
+          "EarlyBootAnimation: Failed to initialize boot animation on primary "
+          "display, skipping");
+      Properties::SetEarlyBootAnimationCompleted(true);
+      return;
     }
+  }
+  if (!boot_animation_->Start()) {
+    boot_animation_.reset();
   }
 }
 
-void DrmHwc::WaitForCompletionAndStopBootAnimation() {
+void DrmHwc::WaitForCompletionAndStopEarlyBootAnimation() {
   if (boot_animation_) {
     boot_animation_->WaitForCompletion();
     boot_animation_->Stop();
   }
 }
 
-void DrmHwc::StopBootAnimation() {
+void DrmHwc::StopEarlyBootAnimation() {
   if (boot_animation_) {
     boot_animation_->Stop();
   }
