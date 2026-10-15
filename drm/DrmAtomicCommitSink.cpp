@@ -29,9 +29,10 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include <memory>
+#include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -107,8 +108,6 @@ CommitStatus CommitFrame(
     }
   }
 
-  const int error_buf_max_size = 64;
-  char err_buf[error_buf_max_size];
   uint32_t flags = seamless ? 0U : DRM_MODE_ATOMIC_ALLOW_MODESET;
   flags |= nonblock && !test_only ? DRM_MODE_ATOMIC_NONBLOCK : 0U;
   flags |= test_only ? DRM_MODE_ATOMIC_TEST_ONLY : 0U;
@@ -166,15 +165,13 @@ CommitStatus CommitFrame(
     ALOGE(
         "Seamless commit failed, retrying a full modeset (visual artifacts may "
         "be observed). Error: %s",
-        // NOLINTNEXTLINE(misc-include-cleaner)
-        strerror_r(errno, err_buf, error_buf_max_size));
+        std::generic_category().message(errno).c_str());
     err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
                               flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
   }
   if (err != 0) {
     ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
-          // NOLINTNEXTLINE(misc-include-cleaner)
-          strerror_r(errno, err_buf, error_buf_max_size));
+          std::generic_category().message(errno).c_str());
 
     return CommitStatus::Failure(errno);
   }
