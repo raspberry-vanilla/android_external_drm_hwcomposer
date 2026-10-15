@@ -314,6 +314,7 @@ cc_test_host {
         "compositor/GenericLayerMapperCompositionPlanner.cpp",
         "compositor/GenericLayerMapperCompositionPlannerTest.cpp",
         "compositor/HdcpController.cpp",
+        "compositor/HdcpControllerTest.cpp",
         "compositor/IntelMappingValidator.cpp",
         "compositor/IntelMappingValidatorTest.cpp",
         "compositor/LayerToPlaneJoiningPlan.cpp",

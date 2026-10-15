@@ -90,7 +90,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   /** Reads and returns the content protection property value from DRM. Returns
    * false if the property could not be read. Does not update the cached value.
    */
-  bool QueryContentProtectionEnabled();
+  virtual bool QueryContentProtectionEnabled();
 
   /** Returns the cached content protection property value. */
   bool IsContentProtectionEnabled() const;

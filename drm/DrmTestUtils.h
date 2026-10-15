@@ -72,6 +72,8 @@ constexpr uint32_t kFakePlaneSrcXPropId = 36;
 constexpr uint32_t kFakePlaneSrcYPropId = 37;
 constexpr uint32_t kFakePlaneSrcWPropId = 38;
 constexpr uint32_t kFakePlaneSrcHPropId = 39;
+constexpr uint32_t kFakeContentProtectionPropId = 40;
+constexpr uint32_t kFakeHdcpContentTypePropId = 41;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
 constexpr uint32_t kFakeConnectorMmWidth = 500;
@@ -363,6 +365,31 @@ class FakeDrmConnector : public DrmConnector {
     return height_;
   }
 
+  bool QueryContentProtectionEnabled() override {
+    return content_protection_property_.GetId() != 0 &&
+           content_protection_enabled_simulated_;
+  }
+
+  void SetContentProtectionEnabled(bool enabled) {
+    content_protection_enabled_simulated_ = enabled;
+  }
+
+  void SetContentProtectionPropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(content_protection_property_, connector_id_,
+                          kFakeContentProtectionPropId, "Content Protection",
+                          DRM_MODE_PROP_ENUM, 0);
+    }
+  }
+
+  void SetHdcpContentTypePropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(hdcp_content_type_property_, connector_id_,
+                          kFakeHdcpContentTypePropId, "HDCP Content Type",
+                          DRM_MODE_PROP_ENUM, 0);
+    }
+  }
+
   void SetModes(std::vector<DrmMode> modes) {
     modes_ = std::move(modes);
   }
@@ -382,6 +409,7 @@ class FakeDrmConnector : public DrmConnector {
   bool connected_ = true;
   int update_modes_result_ = 0;
   std::string name_ = "FakeConnector-1";
+  bool content_protection_enabled_simulated_ = false;
 };
 
 class FakeDrmEncoder : public DrmEncoder {
