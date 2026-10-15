@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "bufferinfo/BufferInfo.h"
@@ -65,6 +66,12 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
     state_manager.reset();
     pipeline.reset();
     fake_device.reset();
+  }
+
+  static DrmAtomicStateManager::DrmAtomicRequest* AsDrmRequest(
+      const std::unique_ptr<AtomicRequest>& req) {
+    void* raw = req.get();
+    return static_cast<DrmAtomicStateManager::DrmAtomicRequest*>(raw);
   }
 
   static LayerData CreateTestLayerData(uint32_t fb_id = kTestFbId1,
@@ -193,6 +200,57 @@ TEST_F(DrmAtomicStateManagerTest, PowerOffCommitDeactivatesDisplay) {
   ASSERT_NE(off_req, nullptr);
   state_manager->FinishPendingRequest(off_args, std::move(off_req));
   EXPECT_FALSE(state_manager->IsActive());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       TeardownAfterPowerOffIsNotSkippedAndClearsModeAndCrtc) {
+  // Step 1: Activate display with a modeset.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Step 2: Power off without teardown (ACTIVE=0, but CRTC_ID and MODE_ID
+  // remain bound).
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = false;
+
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  state_manager->FinishPendingRequest(off_args, std::move(off_req));
+  ASSERT_FALSE(state_manager->IsActive());
+
+  // Step 3: Teardown commit (power_mode = kOff, teardown = true) while already
+  // powered off must not be filtered out by CheckDoubleSettingState, and must
+  // clear connector CRTC_ID and CRTC MODE_ID.
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.teardown = true;
+
+  auto teardown_req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(teardown_req, nullptr);
+  auto* drm_req = AsDrmRequest(teardown_req);
+  const uint32_t conn_id = pipeline->connector->Get()->GetId();
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
+                                      kFakeConnectorCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcModePropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcOutFencePropId),
+            std::nullopt);
 }
 
 TEST_F(DrmAtomicStateManagerTest,
