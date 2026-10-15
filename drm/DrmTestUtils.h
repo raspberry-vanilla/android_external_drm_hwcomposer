@@ -367,6 +367,12 @@ class FakeDrmConnector : public DrmConnector {
     modes_ = std::move(modes);
   }
 
+  void SetCrtcIdPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(crtc_id_property_, connector_id_,
+                        kFakeConnectorCrtcPropId, "CRTC_ID",
+                        DRM_MODE_PROP_OBJECT, value);
+  }
+
  private:
   const uint32_t connector_id_;
   const uint32_t encoder_id_;

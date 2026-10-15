@@ -38,6 +38,8 @@ namespace android::drm_hwcomposer {
 namespace {
 
 constexpr uint32_t kOverlayPlaneId = 310;
+constexpr uint32_t kOrphanConnectorId = 105;
+constexpr uint32_t kOrphanEncoderId = 5;
 constexpr uint32_t kTestFbId1 = 501;
 constexpr uint32_t kTestFbId2 = 502;
 constexpr uint32_t kTestFbId3 = 503;
@@ -292,6 +294,38 @@ TEST_F(DrmAtomicStateManagerTest,
                                         std::move(clear_req));
   }
   EXPECT_FALSE(state_manager->IsActive());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       ModesetClearsOrphanedConnectorBoundToTargetCrtc) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  // Add a second connector on the same DrmDevice whose kernel CRTC_ID property
+  // still references our pipeline's CRTC (e.g. from bootloader or an unclean
+  // MST detach).
+  auto orphan_connector = std::make_unique<
+      FakeDrmConnector>(fake_device.get(), kOrphanEncoderId,
+                        /*is_external=*/true, kFakeConnectorMmWidth,
+                        kFakeConnectorMmHeight, kOrphanConnectorId);
+  orphan_connector->SetConnected(false);
+  orphan_connector->SetCrtcIdPropertyValue(crtc_id);
+  fake_device->AddConnector(std::move(orphan_connector));
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req, nullptr);
+  auto* drm_req = AsDrmRequest(req);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      kOrphanConnectorId,
+                                      kFakeConnectorCrtcPropId),
+            0ULL);
 }
 
 TEST_F(DrmAtomicStateManagerTest, RapidCreateAndDestroyDoesNotDeadlock) {

@@ -253,6 +253,22 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
       return false;
     }
   }
+  // Clear CRTC_ID on any other connector whose cached kernel state still
+  // references this CRTC (e.g. after an unclean MST detach or bootloader
+  // handover), otherwise drm_atomic_helper_check_modeset rejects the commit
+  // with -EINVAL due to conflicting encoders.
+  if (active && pipe_->device != nullptr) {
+    for (const auto &conn : pipe_->device->GetConnectors()) {
+      if (conn.get() == connector) {
+        continue;
+      }
+      if (conn->GetCrtcIdProperty().GetValue().value_or(0) == crtc->GetId()) {
+        if (!conn->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
+          return false;
+        }
+      }
+    }
+  }
 
   return true;
 }
