@@ -1920,11 +1920,20 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   if (!modeset_buffer)
     return std::nullopt;
 
+  auto fb = GetPipe().importer->GetOrCreateFbId(&modeset_buffer.value());
+  // Return nullopt if framebuffer import fails so we do not construct a
+  // LayerData with a null fb (which triggers an abort inside
+  // DrmAtomicStateManager).
+  if (!fb) {
+    ALOGE("Failed to import modeset buffer.");
+    return std::nullopt;
+  }
+
   auto modeset_layer = std::make_unique<HwcLayer>(this);
   modeset_layer->SetLayerProperties({
       .buffer = std::optional<HwcLayer::Buffer>({
           .bi = modeset_buffer.value(),
-          .fb = GetPipe().importer->GetOrCreateFbId(&modeset_buffer.value()),
+          .fb = std::move(fb),
           .fence = {},
       }),
       .blend_mode = BufferBlendMode::kNone,

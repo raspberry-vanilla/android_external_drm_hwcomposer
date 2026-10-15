@@ -760,4 +760,35 @@ TEST_F(HwcDisplayTest,
                                                release_fences));
 }
 
+TEST_F(HwcDisplayTest, CreateModesetCommitOmitsModesetLayerWhenFbImportFails) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  const ConfigId target_config_id = configs[1].id;
+
+  // Dumb buffer allocation succeeds, but FB import fails (e.g. during MST
+  // unplug or connector teardown). GetModesetLayerData must not produce a
+  // LayerData with .fb == nullptr that poisons the modeset composition plan.
+  fake_device->GetFakeFbImporter()->SetAllowImport(false);
+
+  auto commit_args = display.CreateModesetCommit(target_config_id);
+  ASSERT_TRUE(commit_args.has_value());
+  if (!commit_args.has_value()) {
+    return;
+  }
+  ASSERT_NE(commit_args->composition, nullptr);
+  for (const auto& joining : commit_args->composition->plan) {
+    EXPECT_NE(joining.layer.fb, nullptr);
+  }
+}
+
 }  // namespace android::drm_hwcomposer
