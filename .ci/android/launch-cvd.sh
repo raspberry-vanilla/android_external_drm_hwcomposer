@@ -73,6 +73,53 @@ function safe_adb() {
 
 export -f safe_adb
 
+# check_expected_assumption_failures <expected_file> <actual_file>
+function check_expected_assumption_failures() {
+  local expected_file="$1"
+  local actual_file="$2"
+  local expected_file_name="${expected_file##*/}"
+
+  mapfile -t expected_failures < <(
+    if [ -f "${expected_file}" ]; then
+      sed -nE '/^(#|[[:space:]]*$)/!{ s/^[[:space:]]+//; s/[[:space:]]+$//; p }' \
+        "${expected_file}" | sort
+    fi
+  )
+
+  mapfile -t actual_failures < <(
+    if [ -f "${actual_file}" ]; then
+      sed -nE '/^(#|[[:space:]]*$)/!{ s/^[[:space:]]+//; s/[[:space:]]+$//; p }' \
+        "${actual_file}" | sort
+    fi
+  )
+
+  if [[ "${expected_failures[*]:-}" != "${actual_failures[*]:-}" ]]; then
+    echo "Unexpected changes to the assumption-failed tests."
+    local unexpected_run unexpected_assumption_failure
+    unexpected_run=$(comm -23 \
+        <((( ${#expected_failures[@]} )) && printf '%s\n' "${expected_failures[@]}") \
+        <((( ${#actual_failures[@]} )) && printf '%s\n' "${actual_failures[@]}") || true)
+    unexpected_assumption_failure=$(comm -13 \
+        <((( ${#expected_failures[@]} )) && printf '%s\n' "${expected_failures[@]}") \
+        <((( ${#actual_failures[@]} )) && printf '%s\n' "${actual_failures[@]}") || true)
+
+    if [[ -n $unexpected_run ]]; then
+      echo -e "\nTest(s) listed in ${expected_file_name}, were actually run: "
+      printf '%s\n' "$unexpected_run"
+    fi
+
+    if [[ -n $unexpected_assumption_failure ]]; then
+      echo -e "\nTest(s) not listed in ${expected_file_name}, had assumption failures:"
+      printf '%s\n' "$unexpected_assumption_failure"
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+export -f check_expected_assumption_failures
+
 fdo_log_section_start_collapsed get_cuttlefish "get_cuttlefish"
 tar xf "/${CUTTLEFISH_TARBALL}" -C /
 fdo_log_section_end get_cuttlefish

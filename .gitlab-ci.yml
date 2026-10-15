@@ -18,8 +18,6 @@ variables:
   TOOLS_DIR: "android-tools"
   BINARIES_DIR: "android-binaries"
   RESULTS_DIR: "${CI_PROJECT_DIR}/results"
-  # Temporarily filter out HDCP negotiation tests until fixed in drmhwc
-  GTEST_FILTER: "-*StartHdcpNegotiation*"
 
 include:
   - project: 'freedesktop/ci-templates'

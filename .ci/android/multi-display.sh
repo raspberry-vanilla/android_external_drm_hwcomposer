@@ -12,7 +12,7 @@ reload_vkms
 export CONNECTOR_TYPES="eDP DP HDMIA"
 configure_vkms
 set +e
-run_vts "three-displays" "multi-display-skips.txt"
+run_vts "three-displays" "multi-display-assumption-failures.txt"
 # shellcheck disable=SC2034
 export EXIT_CODE=$?
 fdo_log_section_end three_displays
