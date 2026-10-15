@@ -31,6 +31,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
@@ -230,6 +231,34 @@ TEST_F(HwcDisplayTest, CreateValidateAndPresentDeviceLayerComposition) {
 
   EXPECT_TRUE(display.DestroyLayer(kLayerId));
   EXPECT_EQ(display.get_layer(kLayerId), nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       DeinitCoalescesPlaneDisableAndTeardownIntoSingleBlockingCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  display.Deinit();
+
+  ASSERT_EQ(sink->GetExecuteCommitCount(), 1U);
+  const auto& history = sink->GetCommitHistory();
+  ASSERT_EQ(history.size(), 1U);
+  ASSERT_EQ(history[0].size(), 1U);
+  const auto& deinit_args = history[0][0];
+  EXPECT_TRUE(deinit_args.blocking);
+  EXPECT_TRUE(deinit_args.teardown);
+  EXPECT_EQ(deinit_args.power_mode, PowerMode::kOff);
+  ASSERT_NE(deinit_args.composition, nullptr);
+  EXPECT_TRUE(deinit_args.composition->plan.empty());
 }
 
 TEST_F(HwcDisplayTest, QueueSeamlessConfigUpdatesRequestedAndNextConfig) {

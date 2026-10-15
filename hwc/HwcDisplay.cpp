@@ -804,10 +804,13 @@ void HwcDisplay::Deinit() {
           .SetRefreshCallbackForConnector(connector->GetId(), nullptr);
     }
 
+    // Pass an empty composition plan alongside power_mode = kOff and
+    // teardown = true so SetCompositionIfNeeded disables all previously used
+    // planes in the same blocking commit that tears down the CRTC and
+    // connector.
     AtomicCommitArgs a_args{};
+    a_args.blocking = true;
     a_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
-    ExecuteAtomicCommit(a_args);
-    a_args.composition = {};
     a_args.power_mode = PowerMode::kOff;
     a_args.teardown = true;
     ExecuteAtomicCommit(a_args);
