@@ -195,6 +195,47 @@ TEST_F(DrmAtomicStateManagerTest, PowerOffCommitDeactivatesDisplay) {
   EXPECT_FALSE(state_manager->IsActive());
 }
 
+TEST_F(DrmAtomicStateManagerTest,
+       EmptyCompositionWhilePoweredOffDoesNotForceDisplayActive) {
+  // Step 1: Activate display with a modeset.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Step 2: Power off with teardown (MODE_ID=0, CRTC_ID=0, ACTIVE=0).
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = true;
+
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  state_manager->FinishPendingRequest(off_args, std::move(off_req));
+  ASSERT_FALSE(state_manager->IsActive());
+
+  // Step 3: Commit an empty plane-disabling composition while powered off
+  // (without display_mode or explicit power_mode). It must not force
+  // PowerMode::kOn (which sets ACTIVE=1 with MODE_ID=0 and fails with -EINVAL).
+  AtomicCommitArgs clear_planes_args{};
+  clear_planes_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto clear_req = state_manager->GetAtomicModeReqForArgs(clear_planes_args);
+  EXPECT_NE(clear_planes_args.power_mode, PowerMode::kOn);
+  if (clear_req != nullptr) {
+    state_manager->FinishPendingRequest(clear_planes_args,
+                                        std::move(clear_req));
+  }
+  EXPECT_FALSE(state_manager->IsActive());
+}
+
 TEST_F(DrmAtomicStateManagerTest, RapidCreateAndDestroyDoesNotDeadlock) {
   for (int i = 0; i < kRapidCreateDestroyCount; ++i) {
     auto manager = DrmAtomicStateManager::CreateInstance(pipeline.get());

@@ -647,7 +647,13 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  if (!committed_frame_state_.crtc_active_state) {
+  // Only auto-enable the CRTC when the commit sets a mode or presents a
+  // non-empty plane composition. Teardown or plane-clearing commits (empty
+  // composition plan) on an inactive CRTC must not force PowerMode::kOn.
+  if (!committed_frame_state_.crtc_active_state && !args.power_mode &&
+      !args.teardown &&
+      (args.display_mode.has_value() ||
+       (args.composition && !args.composition->plan.empty()))) {
     // Force args.power_mode if the display is not active and there are other
     // things to commit.
     args.power_mode = PowerMode::kOn;
