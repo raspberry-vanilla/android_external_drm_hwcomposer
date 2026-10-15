@@ -308,4 +308,37 @@ TEST_F(DrmHwcTest,
   ResetResManDevices();
 }
 
+TEST_F(DrmHwcTest,
+       PrimaryDisconnectPromotesSecondaryAndDisconnectsOldHandleFirst) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+
+  // Unbinding primary while external remains connected promotes external to
+  // kPrimaryDisplay (handle 0). FlushHotplugEvents must dispatch
+  // (1, kDisconnected) before (0, kConnected).
+  hwc.hotplug_events.clear();
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kDisconnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
 }  // namespace android::drm_hwcomposer
