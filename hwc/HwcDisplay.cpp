@@ -120,6 +120,23 @@ void UpdateClientTargetIfNeeded(const HwcLayer &client_layer,
     composition_plan->plan[*client_z].layer = client_layer.GetLayerData();
 }
 
+bool IsUnscaledFullScreenDeviceLayer(const HwcLayer &layer, uint32_t width,
+                                     uint32_t height) {
+  if (!layer.IsLayerUsableAsDevice()) {
+    return false;
+  }
+  const LayerData &layer_data = layer.GetLayerData();
+  if (!layer_data.bi || layer_data.bi->width != width ||
+      layer_data.bi->height != height ||
+      layer_data.pi.RequireScalingOrPhasing()) {
+    return false;
+  }
+  const IRect full_screen_rect{0, 0, static_cast<int32_t>(width),
+                               static_cast<int32_t>(height)};
+  return !layer_data.pi.display_frame.i_rect ||
+         *layer_data.pi.display_frame.i_rect == full_screen_rect;
+}
+
 }  // namespace
 
 auto HwcDisplay::GetDisplayName() const -> std::string {
@@ -1989,6 +2006,68 @@ auto HwcDisplay::GetWritebackBufferFormat() const -> BufferFormat {
                                              : BufferFormat::kRgba8888;
 }
 
+bool HwcDisplay::CanReuseLayerForModeset(uint32_t width,
+                                         uint32_t height) const {
+  const HwcDisplayConfig *active_config = GetCurrentConfig();
+  // Reuse an existing layer only when the CRTC is already active at the
+  // target resolution. After a teardown (power-off), cached buffers may
+  // contain stale content that we do not want to rescan on modeset.
+  return active_config != nullptr &&
+         GetPipe().atomic_state_manager->IsActive() &&
+         active_config->mode.GetRawMode().hdisplay == width &&
+         active_config->mode.GetRawMode().vdisplay == height;
+}
+
+std::optional<LayerData> HwcDisplay::FindFullScreenDeviceLayerForModeset(
+    uint32_t width, uint32_t height) const {
+  for (const HwcLayer *layer : GetOrderLayersByZPos()) {
+    if (!IsUnscaledFullScreenDeviceLayer(*layer, width, height)) {
+      continue;
+    }
+    LayerData modeset_layer_data = layer->GetLayerData();
+    // Clear acquire_fence because the layer buffer was already acquired and
+    // presented on a previous frame.
+    modeset_layer_data.acquire_fence = {};
+    return modeset_layer_data;
+  }
+  return std::nullopt;
+}
+
+std::optional<LayerData> HwcDisplay::GetExistingModesetLayerData(
+    uint32_t width, uint32_t height) const {
+  if (!CanReuseLayerForModeset(width, height)) {
+    return std::nullopt;
+  }
+
+  // Prefer client_layer_ immediately only when client composition is active
+  // on the current frame. During pure DEVICE composition
+  // (!NeedsClientLayerUpdate()), client_layer_ is either unpopulated or holds
+  // a stale client target buffer from an earlier CLIENT-composited frame.
+  const bool is_client_composition_active = NeedsClientLayerUpdate() ||
+                                            layers_.empty();
+  if (is_client_composition_active && client_layer_.IsLayerUsableAsDevice()) {
+    ALOGV("Use existing client_layer for config.");
+    return client_layer_.GetLayerData();
+  }
+
+  // Search active layers for an unscaled full-screen DEVICE layer matching
+  // the target mode dimensions so same-resolution modesets (such as
+  // refresh-rate switches on external displays) continue scanning out the
+  // active buffer rather than flashing a stale client target or a zero-filled
+  // dumb buffer.
+  if (auto device_layer = FindFullScreenDeviceLayerForModeset(width, height)) {
+    ALOGV("Use existing device layer for config.");
+    return device_layer;
+  }
+
+  if (client_layer_.IsLayerUsableAsDevice()) {
+    ALOGV("Use existing client_layer for config.");
+    return client_layer_.GetLayerData();
+  }
+
+  return std::nullopt;
+}
+
 std::optional<LayerData> HwcDisplay::GetModesetLayerData(
     const HwcDisplayConfig *new_config) {
   if (IsInHeadlessMode()) {
@@ -1998,16 +2077,9 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   const uint32_t new_width = new_config->mode.GetRawMode().hdisplay;
   const uint32_t new_height = new_config->mode.GetRawMode().vdisplay;
 
-  const HwcDisplayConfig *active_config = GetCurrentConfig();
-  if (client_layer_.IsLayerUsableAsDevice() && active_config &&
-      // Reuse the client layer only when the CRTC is already active. After a
-      // teardown (power-off), the cached buffer may contain stale content that
-      // we do not want to rescan on modeset.
-      GetPipe().atomic_state_manager->IsActive() &&
-      active_config->mode.GetRawMode().hdisplay == new_width &&
-      active_config->mode.GetRawMode().vdisplay == new_height) {
-    ALOGV("Use existing client_layer for config.");
-    return client_layer_.GetLayerData();
+  if (auto existing_layer = GetExistingModesetLayerData(new_width,
+                                                        new_height)) {
+    return existing_layer;
   }
 
   ALOGV("Allocate modeset buffer.");

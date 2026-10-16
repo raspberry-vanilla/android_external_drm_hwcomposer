@@ -412,8 +412,14 @@ class HwcDisplay : public ICompositorDisplay {
 
   uint32_t GetCurrentVsyncPeriodNs() const;
 
-  // Returns a client's layer if one was already provided and its size matches
-  // the new config, otherwise allocates a new one.
+  bool CanReuseLayerForModeset(uint32_t width, uint32_t height) const;
+  std::optional<LayerData> FindFullScreenDeviceLayerForModeset(
+      uint32_t width, uint32_t height) const;
+  std::optional<LayerData> GetExistingModesetLayerData(uint32_t width,
+                                                       uint32_t height) const;
+
+  // Returns an existing on-screen layer if the display is active at the target
+  // resolution, otherwise allocates a new modeset dumb buffer.
   std::optional<LayerData> GetModesetLayerData(
       const HwcDisplayConfig *new_config);
 

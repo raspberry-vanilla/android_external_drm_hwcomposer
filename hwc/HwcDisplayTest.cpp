@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -130,6 +131,32 @@ class TestDrmHwc : public DrmHwc {
   mutable std::atomic<int> vsync_count_{0};
   std::atomic<int> refresh_count_{0};
 };
+
+HwcLayer::LayerProperties CreateFullScreenFhdLayerProperties(
+    std::shared_ptr<FakeFbIdHandle> fb) {
+  BufferInfo bi{};
+  bi.width = kFhdWidth;
+  bi.height = kFhdHeight;
+  bi.format = DRM_FORMAT_ABGR8888;
+  bi.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bi.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{
+      .bi = bi,
+      .fb = std::move(fb),
+      .fence = {},
+  };
+  props.display_frame = {
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned},
+  };
+  props.source_crop = {
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat},
+  };
+  props.blend_mode = BufferBlendMode::kNone;
+  props.composition_type = CompositionType::kDevice;
+  return props;
+}
 
 }  // namespace
 
@@ -1521,6 +1548,125 @@ TEST_F(HwcDisplayTest, BlockingSetConfigResetsLastPresentedComposition) {
   sink->ClearHistory();
   (void)display.ValidateStagedComposition();
   EXPECT_GT(sink->GetTestCommitCount(), 0U);
+}
+
+TEST_F(HwcDisplayTest, SameResolutionModesetReusesActiveDeviceLayer) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_config_id = display.GetCurrentConfig()->id;
+  ConfigId fhd_120_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.id != initial_config_id) {
+      fhd_120_config_id = cfg.id;
+      break;
+    }
+  }
+  ASSERT_NE(fhd_120_config_id, 0U);
+
+  constexpr ILayerId kLayerId = 1;
+  constexpr uint32_t kDeviceLayerFbId = 777;
+  const auto device_fb = std::make_shared<FakeFbIdHandle>(kDeviceLayerFbId);
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  auto* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  layer->SetLayerProperties(CreateFullScreenFhdLayerProperties(device_fb));
+
+  // Present a full-screen DEVICE layer while client_layer_ has no buffer set.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_FALSE(display.GetClientLayer().IsLayerUsableAsDevice());
+
+  const size_t imports_before_modeset = fake_device->GetFakeFbImporter()
+                                            ->GetImportCount();
+  sink->ClearHistory();
+
+  // Switching to 1080p120 on an external display performs a blocking modeset at
+  // the same resolution and must reuse the active DEVICE layer rather than
+  // allocating and importing a zero-filled dumb buffer.
+  EXPECT_EQ(display.SetConfig(fhd_120_config_id),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(fake_device->GetFakeFbImporter()->GetImportCount(),
+            imports_before_modeset);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().back().empty());
+  const auto& modeset_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(modeset_args.composition, nullptr);
+  ASSERT_EQ(modeset_args.composition->plan.size(), 1U);
+  EXPECT_EQ(modeset_args.composition->plan[0].layer.fb, device_fb);
+}
+
+TEST_F(HwcDisplayTest,
+       SameResolutionModesetPrefersActiveDeviceLayerOverStaleClientLayer) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_config_id = display.GetCurrentConfig()->id;
+  ConfigId fhd_120_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.id != initial_config_id) {
+      fhd_120_config_id = cfg.id;
+      break;
+    }
+  }
+  ASSERT_NE(fhd_120_config_id, 0U);
+
+  constexpr ILayerId kLayerId = 1;
+  constexpr uint32_t kDeviceLayerFbId = 777;
+  constexpr uint32_t kStaleClientFbId = 666;
+  const auto device_fb = std::make_shared<FakeFbIdHandle>(kDeviceLayerFbId);
+  const auto stale_client_fb = std::make_shared<FakeFbIdHandle>(
+      kStaleClientFbId);
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  auto* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  layer->SetLayerProperties(CreateFullScreenFhdLayerProperties(device_fb));
+
+  // Populate client_layer_ with a stale buffer from an earlier CLIENT frame,
+  // then validate and present a pure DEVICE frame (!NeedsClientLayerUpdate()).
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(stale_client_fb));
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_TRUE(display.GetClientLayer().IsLayerUsableAsDevice());
+  EXPECT_FALSE(display.NeedsClientLayerUpdate());
+
+  sink->ClearHistory();
+  EXPECT_EQ(display.SetConfig(fhd_120_config_id),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().back().empty());
+  const auto& modeset_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(modeset_args.composition, nullptr);
+  ASSERT_EQ(modeset_args.composition->plan.size(), 1U);
+  EXPECT_EQ(modeset_args.composition->plan[0].layer.fb, device_fb);
 }
 
 }  // namespace android::drm_hwcomposer
