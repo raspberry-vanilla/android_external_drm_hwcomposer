@@ -93,6 +93,7 @@ class TestDrmHwc : public DrmHwc {
       DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
   }
   void SendRefreshEventToClient(DisplayHandle /*display_handle*/) override {
+    ++refresh_count_;
   }
   void SendHotplugEventToClient(DisplayHandle /*display_handle*/,
                                 DisplayStatus /*display_status*/) override {
@@ -112,6 +113,14 @@ class TestDrmHwc : public DrmHwc {
     return vsync_count_.load();
   }
 
+  void ResetRefreshCount() {
+    refresh_count_.store(0);
+  }
+
+  int GetRefreshCount() const {
+    return refresh_count_.load();
+  }
+
   // NOLINTBEGIN(cppcoreguidelines-non-private-member-variables-in-classes)
   std::optional<HdcpContentType> last_hdcp_level;
   int hdcp_callback_count = 0;
@@ -119,6 +128,7 @@ class TestDrmHwc : public DrmHwc {
 
  private:
   mutable std::atomic<int> vsync_count_{0};
+  std::atomic<int> refresh_count_{0};
 };
 
 }  // namespace
@@ -1413,6 +1423,104 @@ TEST_F(HwcDisplayTest, FrameUpdateDoesNotStageModesetWhenDisplayIsPoweredOff) {
   EXPECT_FALSE(frame_args.display_config_id.has_value());
   EXPECT_FALSE(frame_args.power_mode.has_value());
   EXPECT_FALSE(frame_args.blocking);
+}
+
+TEST_F(HwcDisplayTest, BlockingSetConfigRequestsClientRefresh) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetNextTestStatus(CommitStatus::Failure(-EINVAL));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  sink->SetNextTestStatus(CommitStatus::Success());
+
+  ConfigId hd_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.mode.GetRawMode().hdisplay == kHdWidth) {
+      hd_config_id = cfg.id;
+      break;
+    }
+  }
+  ASSERT_NE(hd_config_id, 0U);
+
+  hwc.ResetRefreshCount();
+  EXPECT_EQ(display.SetConfig(hd_config_id), HwcDisplay::ConfigError::kNone);
+  EXPECT_GT(hwc.GetRefreshCount(), 0);
+}
+
+TEST_F(HwcDisplayTest, BlockingSetConfigResetsLastPresentedComposition) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetNextTestStatus(CommitStatus::Failure(-EINVAL));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  sink->SetNextTestStatus(CommitStatus::Success());
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  auto* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+
+  BufferInfo bi{};
+  bi.width = kFhdWidth;
+  bi.height = kFhdHeight;
+  bi.format = DRM_FORMAT_ABGR8888;
+  bi.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bi.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{
+      .bi = bi,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  props.display_frame = {
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned},
+  };
+  props.source_crop = {
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat},
+  };
+  props.blend_mode = BufferBlendMode::kNone;
+  props.composition_type = CompositionType::kDevice;
+  layer->SetLayerProperties(props);
+
+  // Present a frame at 1080p60 so last_presented_composition_ is populated.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+
+  ConfigId hd_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.mode.GetRawMode().hdisplay == kHdWidth) {
+      hd_config_id = cfg.id;
+      break;
+    }
+  }
+  ASSERT_NE(hd_config_id, 0U);
+
+  // Blocking modeset to 720p60 must reset last_presented_composition_ so the
+  // next ValidateStagedComposition() runs a test commit rather than
+  // short-circuiting on the pre-modeset cache.
+  EXPECT_EQ(display.SetConfig(hd_config_id), HwcDisplay::ConfigError::kNone);
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  EXPECT_GT(sink->GetTestCommitCount(), 0U);
 }
 
 }  // namespace android::drm_hwcomposer

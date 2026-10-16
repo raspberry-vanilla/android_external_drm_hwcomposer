@@ -347,9 +347,16 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
   staged_power_mode_.reset();
+  // CreateModesetCommit() may scan out a temporary zero-filled dumb buffer or
+  // disable planes when the resolution changes. Invalidate the cached
+  // composition and request a client refresh so SurfaceFlinger presents a real
+  // frame for the new mode instead of leaving the temporary modeset buffer on
+  // screen.
+  last_presented_composition_.Reset();
   // set new vsync period
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   hwc_->LogRefreshRateChanges();
+  hwc_->SendRefreshEventToClient(handle_);
   return ConfigError::kNone;
 }
 
@@ -1761,6 +1768,15 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
     active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
     staged_mode_config_id_.reset();
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
+    // When a modeset commit is executed alongside a power transition (such as
+    // CreateModesetCommit() rather than a seamless frame-update modeset that
+    // already carries the client's validated composition), invalidate the
+    // cached composition and request a refresh so SurfaceFlinger presents a
+    // fresh frame for the newly active configuration.
+    if (a_args.power_mode.has_value()) {
+      last_presented_composition_.Reset();
+      hwc_->SendRefreshEventToClient(handle_);
+    }
   }
 
   if (a_args.hdcp_content_type.has_value() ||
