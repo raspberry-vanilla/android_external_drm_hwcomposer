@@ -37,8 +37,8 @@ class AtomicCommitSink {
   virtual CommitStatusOr<
       std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
-      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
-          args) = 0;
+      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
+      const = 0;
 };
 
 }  // namespace android::drm_hwcomposer

@@ -46,12 +46,25 @@
 #include "utils/log.h"
 
 namespace android::drm_hwcomposer {
-namespace {
 
-CommitStatus CommitFrame(
+// libdrm's drmModeAtomicCommit() returns 0 on success, -errno from DRM_IOCTL(),
+// or -1 with errno set on early allocation failure. Capture and normalize the
+// return code before ~ScopedTrace() exits the caller's ATRACE_NAME() scope and
+// writes to the trace marker fd, which can clobber thread-local errno.
+int DrmAtomicCommitSink::AtomicCommit(int fd, drmModeAtomicReqPtr req,
+                                      uint32_t flags, void *user_data) const {
+  const int err = drmModeAtomicCommit(fd, req, flags, user_data);
+  if (err == -1 && errno != 0) {
+    return -errno;
+  }
+  return err;
+}
+
+CommitStatus DrmAtomicCommitSink::CommitFrame(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args,
     bool test_only,
-    std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> &results) {
+    std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> &results)
+    const {
   if (args.empty()) {
     return CommitStatus::InternalFailure();
   }
@@ -113,7 +126,7 @@ CommitStatus CommitFrame(
   flags |= test_only ? DRM_MODE_ATOMIC_TEST_ONLY : 0U;
   {
     ATRACE_NAME((nonblock ? "Commit_nonblock" : "Commit_block"));
-    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
+    err = AtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
   }
 
   if (test_only) {
@@ -165,15 +178,15 @@ CommitStatus CommitFrame(
     ALOGE(
         "Seamless commit failed, retrying a full modeset (visual artifacts may "
         "be observed). Error: %s",
-        std::generic_category().message(errno).c_str());
-    err = drmModeAtomicCommit(*drm->GetFd(), pset.get(),
-                              flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
+        std::generic_category().message(-err).c_str());
+    err = AtomicCommit(*drm->GetFd(), pset.get(),
+                       flags | DRM_MODE_ATOMIC_ALLOW_MODESET, drm);
   }
   if (err != 0) {
-    ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, errno,
-          std::generic_category().message(errno).c_str());
+    ALOGE("Failed to commit pset ret=%d errno=%d strerror=%s\n", err, -err,
+          std::generic_category().message(-err).c_str());
 
-    return CommitStatus::Failure(errno);
+    return CommitStatus::Failure(err);
   }
   for (const auto &[atomic_state_manager, arg] : args) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -186,9 +199,9 @@ CommitStatus CommitFrame(
   return CommitStatus::Success();
 }
 
-void CleanUpFailedRequest(
-    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>
-        &args) {
+void DrmAtomicCommitSink::CleanUpFailedRequest(
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args)
+    const {
   // Disable the hw used by the last active composition. This allows us to
   // signal the release fences from that composition to avoid hanging.
   std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> cl_args;
@@ -204,8 +217,6 @@ void CleanUpFailedRequest(
   }
 }
 
-}  // namespace
-
 CommitStatus DrmAtomicCommitSink::TestAtomicCommit(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args)
     const {
@@ -216,8 +227,8 @@ CommitStatus DrmAtomicCommitSink::TestAtomicCommit(
 
 CommitStatusOr<std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>>
 DrmAtomicCommitSink::ExecuteAtomicCommit(
-    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>>
-        &args) {
+    const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args)
+    const {
   std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>> results;
   auto commit_status = CommitFrame(args, /*test_only =*/false, results);
   if (!commit_status.success) {

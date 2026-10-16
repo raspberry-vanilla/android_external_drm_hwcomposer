@@ -28,7 +28,10 @@
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/AtomicCommitSink.h"
 #include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
+#include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
@@ -450,6 +453,28 @@ TEST_F(DrmAtomicStateManagerTest,
   orig_args.composition = req_args.composition;
   state_manager->FinishPendingRequest(orig_args, std::move(req));
   state_manager->WaitLastFrame();
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkPreservesNegativeErrnoFromDrmModeAtomicCommit) {
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan(kTestFbId1);
+
+  const CommitStatus test_status = sink.TestAtomicCommit(
+      {{state_manager.get(), modeset_args}});
+  EXPECT_FALSE(test_status.success);
+  EXPECT_LT(test_status.error_code, 0);
+
+  const auto exec_status = sink.ExecuteAtomicCommit(
+      {{state_manager.get(), modeset_args}});
+  EXPECT_FALSE(exec_status.IsSuccess());
+  EXPECT_EQ(exec_status.GetStatus().error_code, test_status.error_code);
 }
 
 }  // namespace android::drm_hwcomposer

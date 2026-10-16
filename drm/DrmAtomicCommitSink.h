@@ -16,14 +16,19 @@
 
 #pragma once
 
+#include <xf86drmMode.h>
+
+#include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "drm/AtomicCommitSink.h"
 #include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
 
 namespace android::drm_hwcomposer {
 class DrmAtomicCommitSink : public AtomicCommitSink {
+ public:
   CommitStatus TestAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
       const override;
@@ -31,6 +36,20 @@ class DrmAtomicCommitSink : public AtomicCommitSink {
       std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
-      override;
+      const override;
+
+ protected:
+  virtual int AtomicCommit(int fd, drmModeAtomicReqPtr req, uint32_t flags,
+                           void* user_data) const;
+
+ private:
+  CommitStatus CommitFrame(
+      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args,
+      bool test_only,
+      std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>& results)
+      const;
+  void CleanUpFailedRequest(
+      const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
+      const;
 };
 }  // namespace android::drm_hwcomposer

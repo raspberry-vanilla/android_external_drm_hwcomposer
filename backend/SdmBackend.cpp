@@ -457,7 +457,7 @@ class SdmAtomicCommitSink : public AtomicCommitSink {
       std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
-      override {
+      const override {
     std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>> results;
     ALOGW_IF(args.size() > 1, "Multi-display atomic commit not supported");
     for (auto [state_manager, commit_args] : args) {

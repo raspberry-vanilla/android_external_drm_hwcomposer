@@ -181,7 +181,7 @@ class FakeAtomicCommitSink : public AtomicCommitSink {
       std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>
   ExecuteAtomicCommit(
       const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>& args)
-      override {
+      const override {
     ++execute_commit_count_;
     commit_history_.emplace_back();
     for (const auto& [manager, commit_args] : args) {
@@ -283,10 +283,10 @@ class FakeAtomicCommitSink : public AtomicCommitSink {
  private:
   bool drive_state_manager_ = false;
   mutable size_t test_commit_count_ = 0;
-  size_t execute_commit_count_ = 0;
+  mutable size_t execute_commit_count_ = 0;
   mutable std::vector<AtomicCommitArgs> last_test_args_;
-  std::vector<std::vector<AtomicCommitArgs>> commit_history_;
-  std::vector<std::vector<AtomicCommitArgs>> effective_commit_history_;
+  mutable std::vector<std::vector<AtomicCommitArgs>> commit_history_;
+  mutable std::vector<std::vector<AtomicCommitArgs>> effective_commit_history_;
   CommitStatus next_test_status_ = CommitStatus::Success();
   CommitStatus next_execute_status_ = CommitStatus::Success();
   std::function<CommitStatus(
@@ -544,6 +544,12 @@ class FakeDrmDevice : public DrmDevice {
  public:
   explicit FakeDrmDevice(ResourceManager* res_man = nullptr)
       : DrmDevice(res_man, 0) {
+    // Provide a valid open file descriptor so libdrm entry points (such as
+    // drmModeAtomicCommit) do not fail with -EBADF before reaching the ioctl
+    // path.
+    int zero_fd = 0;
+    const SharedFd non_owning_stdin(&zero_fd, [](const int*) {});
+    fd_ = MakeSharedFd(DupFd(non_owning_stdin));
     backend_ = std::make_unique<GenericBackend>(*this);
     auto sink = std::make_unique<FakeAtomicCommitSink>();
     fake_sink_ = sink.get();
