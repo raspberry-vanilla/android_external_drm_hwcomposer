@@ -791,4 +791,115 @@ TEST_F(HwcDisplayTest, CreateModesetCommitOmitsModesetLayerWhenFbImportFails) {
   }
 }
 
+TEST_F(HwcDisplayTest, FailedModesetCommitDoesNotCorruptStagedConfigState) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_config_id = display.GetCurrentConfig()->id;
+  const ConfigId target_config_id = (configs[0].id == initial_config_id)
+                                        ? configs[1].id
+                                        : configs[0].id;
+
+  // Simulate atomic commit failure (-EINVAL) during modeset (as in
+  // ComposerClient::SetActiveConfigs -> CreateModesetCommit +
+  // ExecuteAtomicCommit).
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-EINVAL));
+
+  auto commit_args = display.CreateModesetCommit(target_config_id);
+  ASSERT_TRUE(commit_args.has_value());
+  if (!commit_args.has_value()) {
+    return;
+  }
+  auto status_or_results = fake_device->GetAtomicCommitSink()
+                               .ExecuteAtomicCommit(
+                                   {{display.GetPipe()
+                                         .atomic_state_manager.get(),
+                                     *commit_args}});
+  EXPECT_FALSE(status_or_results.IsSuccess());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, initial_config_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_config_id);
+}
+
+TEST_F(HwcDisplayTest, FailedModesetResetsPreviouslyQueuedStagedConfig) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  // Seamless transitions are only valid across modes with identical resolution.
+  fake_device->GetFakeAtomicCommitSink()->SetTestCommitHook(
+      [](const auto& args) {
+        for (const auto& [manager, commit_args] : args) {
+          if (commit_args.seamless && commit_args.display_mode.has_value() &&
+              commit_args.display_mode->GetRawMode().hdisplay != kFhdWidth) {
+            return CommitStatus::Failure(-EINVAL);
+          }
+        }
+        return CommitStatus::Success();
+      });
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 3U);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId seamless_id = configs[1].id;
+  const ConfigId modeset_id = configs[2].id;
+
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(seamless_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, seamless_id);
+
+  // Even when a blocking SetConfig fails, any previously queued staged config
+  // is now stale and must be reset.
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-EINVAL));
+  EXPECT_EQ(display.SetConfig(modeset_id),
+            HwcDisplay::ConfigError::kConfigFailed);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, initial_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_id);
+}
+
+TEST_F(HwcDisplayTest, FailedInitialModesetInInitKeepsValidActiveConfigId) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  // Simulate initial modeset failure during Init() (e.g. ENOSPC on MST hub).
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-ENOSPC));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 1U);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, configs[0].id);
+}
+
 }  // namespace android::drm_hwcomposer
