@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "compositor/HdcpController.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmTestUtils.h"
 #include "hwc/HwcDisplay.h"
@@ -167,6 +168,54 @@ TEST_F(DrmHwcTest, ActiveDisplayCountsAndDumpState) {
   EXPECT_EQ(counts.num_active_external_displays, 1);
   EXPECT_EQ(counts.num_virtual_displays, 0);
   EXPECT_FALSE(hwc.DumpState().empty());
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest, HotplugHdcpNegotiationStartsOnlyOnExternalSstDisplays) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+
+  // Set up HDCP properties
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* external_connector = static_cast<FakeDrmConnector*>(
+      external_pipe->connector->Get());
+  external_connector->SetContentProtectionPropertySupported(true);
+  external_connector->SetHdcpContentTypePropertySupported(true);
+
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* internal_connector = static_cast<FakeDrmConnector*>(
+      primary_pipe->connector->Get());
+  internal_connector->SetContentProtectionPropertySupported(true);
+  internal_connector->SetHdcpContentTypePropertySupported(true);
+
+  // Bind internal display
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  // Verify internal display skips HDCP
+  auto* primary_display = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary_display, nullptr);
+  const auto* internal_hdcp_controller = primary_display->GetHdcpController();
+  ASSERT_NE(internal_hdcp_controller, nullptr);
+  EXPECT_EQ(internal_hdcp_controller->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+
+  // Bind external display
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  // Verify external display starts HDCP negotiation
+  auto* external_display = hwc.GetDisplay(1);
+  ASSERT_NE(external_display, nullptr);
+  const auto* external_hdcp_controller = external_display->GetHdcpController();
+  ASSERT_NE(external_hdcp_controller, nullptr);
+  EXPECT_EQ(external_hdcp_controller->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
 
   EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
   EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));

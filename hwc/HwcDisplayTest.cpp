@@ -33,6 +33,7 @@
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
+#include "compositor/HdcpController.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -44,6 +45,8 @@
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
+constexpr int kMaxRetries = 20;
+constexpr int kRetryDelayMs = 20;
 
 namespace {
 
@@ -81,7 +84,9 @@ class TestDrmHwc : public DrmHwc {
   }
   void SendHdcpLevelsChangedEventToClient(
       DisplayHandle /*display_handle*/,
-      std::optional<HdcpContentType> /*current_hdcp_level*/) override {
+      std::optional<HdcpContentType> current_hdcp_level) override {
+    last_hdcp_level = current_hdcp_level;
+    hdcp_callback_count++;
   }
 
   void ResetVsyncCount() const {
@@ -91,6 +96,11 @@ class TestDrmHwc : public DrmHwc {
   int GetVsyncCount() const {
     return vsync_count_.load();
   }
+
+  // NOLINTBEGIN(cppcoreguidelines-non-private-member-variables-in-classes)
+  std::optional<HdcpContentType> last_hdcp_level;
+  int hdcp_callback_count = 0;
+  // NOLINTEND(cppcoreguidelines-non-private-member-variables-in-classes)
 
  private:
   mutable std::atomic<int> vsync_count_{0};
@@ -367,6 +377,164 @@ TEST_F(HwcDisplayTest, QueueSeamlessConfigUpdatesRequestedAndNextConfig) {
   EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
   ASSERT_NE(display.GetNextConfig(), nullptr);
   EXPECT_EQ(display.GetNextConfig()->id, next_id);
+}
+
+TEST_F(HwcDisplayTest, StartHdcpRepeatedNotifications) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  // Enable HDCP properties on the fake connector
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_connector = static_cast<FakeDrmConnector*>(
+      pipeline->connector->Get());
+  fake_connector->SetContentProtectionPropertySupported(true);
+  fake_connector->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  EXPECT_TRUE(display.StartHdcp());
+
+  // Simulate successful negotiation
+  fake_connector->SetContentProtectionEnabled(true);
+
+  // Setup a basic layer to trigger a frame update commit
+  constexpr ILayerId kLayerId = 1;
+  display.CreateLayer(kLayerId);
+  HwcLayer* layer = display.get_layer(kLayerId);
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{.bi = bo,
+                                  .fb = std::make_shared<FakeFbIdHandle>(
+                                      kTestFbId)};
+  props.composition_type = CompositionType::kDevice;
+  props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  layer->SetLayerProperties(props);
+
+  fake_device->GetFakeAtomicCommitSink()->ClearHistory();
+  display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  display.PresentStagedComposition(std::nullopt, present_fence, release_fences);
+
+  const auto& history = fake_device->GetFakeAtomicCommitSink()
+                            ->GetCommitHistory();
+  ASSERT_FALSE(history.empty());
+  ASSERT_FALSE(history.back().empty());
+  auto args = history.back().front();
+
+  EXPECT_EQ(args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(args.hdcp_content_type, HdcpContentType::kType1);
+
+  ASSERT_NE(display.GetHdcpController(), nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  const_cast<HdcpController*>(display.GetHdcpController())->Requested();
+
+  // Wait for the background thread to process the callback
+  
+  
+  for (int i = 0; i < kMaxRetries; ++i) {
+    if (hwc.last_hdcp_level == HdcpContentType::kType1)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+
+  int count_before = hwc.hdcp_callback_count;
+  EXPECT_TRUE(display.StartHdcp());
+  EXPECT_EQ(hwc.hdcp_callback_count, count_before + 1);
+  EXPECT_EQ(hwc.last_hdcp_level, HdcpContentType::kType1);
+}
+
+TEST_F(HwcDisplayTest, StopHdcpTeardown) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_connector = static_cast<FakeDrmConnector*>(
+      pipeline->connector->Get());
+  fake_connector->SetContentProtectionPropertySupported(true);
+  fake_connector->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  EXPECT_TRUE(display.StartHdcp());
+
+  fake_connector->SetContentProtectionEnabled(true);
+
+  constexpr ILayerId kLayerId = 1;
+  display.CreateLayer(kLayerId);
+  HwcLayer* layer = display.get_layer(kLayerId);
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{.bi = bo,
+                                  .fb = std::make_shared<FakeFbIdHandle>(
+                                      kTestFbId)};
+  props.composition_type = CompositionType::kDevice;
+  props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  layer->SetLayerProperties(props);
+
+  fake_device->GetFakeAtomicCommitSink()->ClearHistory();
+  display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  display.PresentStagedComposition(std::nullopt, present_fence, release_fences);
+
+  ASSERT_NE(display.GetHdcpController(), nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  const_cast<HdcpController*>(display.GetHdcpController())->Requested();
+  
+  
+  for (int i = 0; i < kMaxRetries; ++i) {
+    if (hwc.last_hdcp_level == HdcpContentType::kType1)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+
+  EXPECT_TRUE(display.StopHdcp());
+  
+  
+  for (int i = 0; i < kMaxRetries; ++i) {
+    if (hwc.last_hdcp_level == std::nullopt)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+
+  EXPECT_EQ(hwc.last_hdcp_level, std::nullopt);
+
+  fake_device->GetFakeAtomicCommitSink()->ClearHistory();
+  display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence_2;
+  std::vector<HwcDisplay::ReleaseFence> release_fences_2;
+  display.PresentStagedComposition(std::nullopt, present_fence_2,
+                                   release_fences_2);
+
+  const auto& history2 = fake_device->GetFakeAtomicCommitSink()
+                             ->GetCommitHistory();
+  ASSERT_FALSE(history2.empty());
+  auto args2 = history2.back().front();
+  EXPECT_NE(args2.content_protection, ContentProtection::kDesired);
 }
 
 }  // namespace android::drm_hwcomposer

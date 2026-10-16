@@ -39,6 +39,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -94,8 +95,8 @@ auto DrmDevice::Init(const char *path) -> int {
     // NOLINTNEXTLINE(misc-include-cleaner)
     fd_ = MakeSharedFd(open(path, O_RDWR | O_CLOEXEC));
     if (!fd_) {
-      // NOLINTNEXTLINE(concurrency-mt-unsafe): Fixme
-      ALOGE("Failed to open dri %s: %s", path, strerror(errno));
+      ALOGE("Failed to open dri %s: %s", path,
+            std::generic_category().message(errno).c_str());
       return -ENODEV;
     }
 
