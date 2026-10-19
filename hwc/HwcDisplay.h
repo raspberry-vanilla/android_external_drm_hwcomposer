@@ -132,7 +132,7 @@ class HwcDisplay : public ICompositorDisplay {
       const HwcLayer &cursor_layer) const override;
 
   /* SetPipeline should be carefully used only by DrmHwcTwo hotplug handlers */
-  void SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
+  bool SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline);
 
   CommitStatus TestComposition(
       CompositionPlanner::ValidatedComposition &composition) const override;

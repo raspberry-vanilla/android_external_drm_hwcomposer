@@ -650,4 +650,92 @@ TEST_F(DrmHwcTest,
             HwcDisplay::BootAnimationState::kCleanup);
 }
 
+TEST_F(DrmHwcTest, ZeroModeExternalConnectorIsIgnoredDuringHotplug) {
+  auto dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* dev_ptr = dev.get();
+  dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+
+  dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kSharedCrtcId));
+  dev->AddPlane(std::make_unique<FakeDrmPlane>(*dev, DRM_PLANE_TYPE_PRIMARY,
+                                               /*is_valid=*/true,
+                                               kSharedPlaneId));
+  dev->AddEncoder(
+      std::make_unique<FakeDrmEncoder>(kFirstEncoderId, kSharedCrtcId));
+
+  // External connector reports connected with 0 valid modes (e.g. transient DP
+  // AUX / DDC timeout on initial HPD).
+  auto
+      ext_conn_uptr = std::make_unique<FakeDrmConnector>(dev.get(),
+                                                         kFirstEncoderId,
+                                                         /*is_external=*/true,
+                                                         kFakeConnectorMmWidth,
+                                                         kFakeConnectorMmHeight,
+                                                         kFirstConnectorId);
+  ext_conn_uptr->SetModes({});
+  ext_conn_uptr->SetConnected(true);
+  auto* ext_conn = ext_conn_uptr.get();
+  dev->AddConnector(std::move(ext_conn_uptr));
+
+  AddDeviceToResMan(std::move(dev));
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+
+  // The 0-mode external connector must not be recorded in attached_pipelines_
+  // or bound as a fake 1024x768 HEADLESS-MODE external display.
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  ASSERT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_TRUE(hwc.GetDisplay(kPrimaryDisplay)->IsInHeadlessMode());
+
+  dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
+TEST_F(DrmHwcTest, ExternalConnectorBindsOnRetryAfterZeroModeHotplug) {
+  auto dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* dev_ptr = dev.get();
+  dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+
+  dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kSharedCrtcId));
+  dev->AddPlane(std::make_unique<FakeDrmPlane>(*dev, DRM_PLANE_TYPE_PRIMARY,
+                                               /*is_valid=*/true,
+                                               kSharedPlaneId));
+  dev->AddEncoder(
+      std::make_unique<FakeDrmEncoder>(kFirstEncoderId, kSharedCrtcId));
+
+  auto
+      ext_conn_uptr = std::make_unique<FakeDrmConnector>(dev.get(),
+                                                         kFirstEncoderId,
+                                                         /*is_external=*/true,
+                                                         kFakeConnectorMmWidth,
+                                                         kFakeConnectorMmHeight,
+                                                         kFirstConnectorId);
+  ext_conn_uptr->SetModes({});
+  ext_conn_uptr->SetConnected(true);
+  auto* ext_conn = ext_conn_uptr.get();
+  dev->AddConnector(std::move(ext_conn_uptr));
+
+  AddDeviceToResMan(std::move(dev));
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+
+  // When a follow-up hotplug arrives after EDID/mode probing succeeds,
+  // ResourceManager must bind the connector and expose its real mode.
+  ext_conn->SetModes({CreateFakeDrmMode()});
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  ASSERT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_FALSE(hwc.GetDisplay(kPrimaryDisplay)->IsInHeadlessMode());
+  EXPECT_EQ(hwc.GetDisplay(kPrimaryDisplay)->GetSize(),
+            std::make_pair(uint32_t{kFakeDefaultModeWidth},
+                           uint32_t{kFakeDefaultModeHeight}));
+
+  dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
 }  // namespace android::drm_hwcomposer

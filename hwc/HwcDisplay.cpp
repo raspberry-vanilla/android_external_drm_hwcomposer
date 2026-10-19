@@ -817,21 +817,40 @@ bool HwcDisplay::GetDisplayEnabled() const {
   return GetPipe().atomic_state_manager->IsActive();
 }
 
-void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
+bool HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   Deinit();
 
   pipeline_ = std::move(pipeline);
 
   if (pipeline_ != nullptr || handle_ == kPrimaryDisplay) {
     bool success = Init();
-    ALOGE_IF(!success, "Failed to init HwcDisplay after setting pipeline.");
+    if (!success) {
+      ALOGE("Failed to init HwcDisplay after setting pipeline.");
+      // Clean up partial state and detach the failed pipeline. External
+      // displays remain unbound so ResourceManager can retry on a later hotplug
+      // uevent (e.g. after a transient 0-mode EDID/AUX read failure resolves),
+      // whereas kPrimaryDisplay must re-initialize in headless mode so
+      // SurfaceFlinger always has an active primary display.
+      Deinit();
+      pipeline_.reset();
+      if (handle_ == kPrimaryDisplay) {
+        ALOGI(
+            "Re-initializing primary display in headless mode after pipeline "
+            "init failure.");
+        Init();
+        hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+      }
+      return false;
+    }
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
     if (pipeline_) {
       LogModesOnHotplug();
     }
-  } else {
-    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+    return true;
   }
+
+  hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  return true;
 }
 
 void HwcDisplay::Deinit() {

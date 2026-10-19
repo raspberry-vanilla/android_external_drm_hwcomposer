@@ -372,8 +372,18 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
                "Failed to create pipeline for connector %s",
                conn->GetName().c_str());
       if (pipeline) {
-        frontend_interface_->BindDisplay(pipeline);
-        attached_pipelines_[conn] = std::move(pipeline);
+        // Record the connector in attached_pipelines_ only if display
+        // initialization succeeded. Leaving it unattached ensures subsequent
+        // hotplug uevents re-attempt pipeline creation and binding once valid
+        // modes are available.
+        if (frontend_interface_->BindDisplay(pipeline)) {
+          attached_pipelines_[conn] = std::move(pipeline);
+        } else {
+          ALOGW(
+              "Failed to bind display for connector %s; leaving connector "
+              "unattached for subsequent hotplug retry.",
+              conn->GetName().c_str());
+        }
       }
     } else {
       frontend_interface_->UnbindDisplay(it->second);
