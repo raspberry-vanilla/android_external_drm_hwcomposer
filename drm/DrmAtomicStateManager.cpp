@@ -398,6 +398,7 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
   }
 
   if (!use_log_gamma && (!gamma_lut_prop || !lut_size.has_value())) {
+    ALOGV("Missing optional GAMMA_LUT property");
     return true;
   }
 
