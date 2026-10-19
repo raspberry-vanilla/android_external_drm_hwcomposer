@@ -140,13 +140,13 @@ CommitStatus DrmAtomicCommitSink::CommitFrame(
   // later in the kernel's commit worker. This gap is typically < 1ms but
   // becomes more frequent at high resolutions (e.g. 8K) where commit
   // processing takes longer.
-  if (err != 0 && errno == EBUSY && nonblock) {
+  if (err == -EBUSY && nonblock) {
     // Time out after approximately 30s (9375 * 3.2ms) of retries.
     static constexpr int kMaxBusyRetries = 9375;
     static constexpr int kInitialRetryUs = 200;
     int retry = 0;
     for (retry = 0; retry < kMaxBusyRetries; retry++) {
-      if (err == 0 || errno != EBUSY) {
+      if (err != -EBUSY) {
         // Only log of retries that were unusually long to prevent noisy
         // logging.
         ALOGI_IF(retry > 4, "Kernel recovered from EBUSY after %d attempts.",
@@ -161,11 +161,11 @@ CommitStatus DrmAtomicCommitSink::CommitFrame(
       }
       {
         ATRACE_NAME("EbusyRetryCommit");
-        err = drmModeAtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
+        err = AtomicCommit(*drm->GetFd(), pset.get(), flags, drm);
       }
     }
 
-    if (err != 0 && errno == EBUSY && retry >= kMaxBusyRetries) {
+    if (err == -EBUSY && retry >= kMaxBusyRetries) {
       ALOGE(
           "Could not recover from kernel EBUSY after %d attempts. Shutting "
           "down.",
