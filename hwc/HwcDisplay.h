@@ -448,6 +448,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   int64_t staged_mode_change_time_{};
   std::optional<ConfigId> staged_mode_config_id_{};
+  std::optional<PowerMode> staged_power_mode_{};
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 

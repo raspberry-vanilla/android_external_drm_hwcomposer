@@ -315,11 +315,13 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     return ConfigError::kBadConfig;
   }
 
-  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
+  ALOGW_IF(staged_mode_config_id_ && *staged_mode_config_id_ != config,
+           "overriding staged_mode_config_id_");
   staged_mode_config_id_.reset();
 
   if (IsInHeadlessMode()) {
     active_config_id_ = config;
+    staged_power_mode_.reset();
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -344,6 +346,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
+  staged_power_mode_.reset();
   // set new vsync period
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   hwc_->LogRefreshRateChanges();
@@ -740,6 +743,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   }
 
   if (IsInHeadlessMode()) {
+    staged_power_mode_.reset();
     return HwcDisplay::Error::kNone;
   }
   bool enabled = mode != PowerMode::kOff;
@@ -753,6 +757,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
       SetVsyncCallbacksEnabled(true);
     }
     if (GetPipe().atomic_state_manager->IsActive()) {
+      staged_power_mode_.reset();
       return HwcDisplay::Error::kNone;
     }
 
@@ -760,7 +765,15 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     if (last_requested_config) {
       if (SetConfig(last_requested_config->id) != ConfigError::kNone) {
         ALOGE("Failed to set config to re-enable display after teardown.");
+        staged_power_mode_ = mode;
         return HwcDisplay::Error::kBadParameter;
+      }
+      // SetConfig() executes a blocking modeset commit with PowerMode::kOn,
+      // which already activates the CRTC in KMS (unless the display is in
+      // headless mode). Return early to avoid issuing a redundant empty atomic
+      // commit below.
+      if (GetPipe().atomic_state_manager->IsActive()) {
+        return HwcDisplay::Error::kNone;
       }
     }
   }
@@ -770,17 +783,23 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   a_args.blocking = true;
   a_args.power_mode = mode;
   if (!enabled) {
+    staged_power_mode_.reset();
     a_args.teardown = true;
   }
 
   const auto result = ExecuteAtomicCommit(a_args);
   ALOGE_IF(!result.IsSuccess(), "Failed to set display active: %s. err=%d",
            enabled ? "enabled" : "disabled", result.GetStatus().error_code);
-  // If setting to |enabled|, log the error and return true. The next frame
-  // update will try to set it to active again.
-  if (!result.IsSuccess() && !enabled) {
-    return HwcDisplay::Error::kBadParameter;
+  // If setting to |enabled|, log the error and stage the power mode so the
+  // next frame update retries activating the display.
+  if (!result.IsSuccess()) {
+    if (!enabled) {
+      return HwcDisplay::Error::kBadParameter;
+    }
+    staged_power_mode_ = mode;
+    return HwcDisplay::Error::kNone;
   }
+  staged_power_mode_.reset();
   // Clear the VSyncWorker callback directly so VSync events stop firing while
   // the display is powered off, while preserving vsync_event_en_ to restore
   // callbacks when the display is powered back on.
@@ -836,6 +855,7 @@ void HwcDisplay::Deinit() {
     ExecuteAtomicCommit(a_args);
 
     validated_composition_.reset();
+    staged_power_mode_.reset();
     flatcon_.reset();
     hdcpcon_.reset();
     backlight_controller_.reset();
@@ -1077,13 +1097,17 @@ bool HwcDisplay::Init() {
 
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
+    ALOGW(
+        "Failed to set preferred config %u during Init on display %d; keeping "
+        "display initialized for subsequent userspace modesets.",
+        configs_.preferred_config_id, static_cast<int>(handle_));
+    staged_power_mode_ = PowerMode::kOn;
     if (boot_state == BootAnimationState::kActive) {
       SetBootAnimationState(BootAnimationState::kInactive);
       if (hwc_ != nullptr) {
         hwc_->StopEarlyBootAnimation();
       }
     }
-    return false;
   }
 
   if (!IsInHeadlessMode() && GetPipe().connector->Get()->IsInternal()) {
@@ -1501,6 +1525,24 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.seamless = true;
   }
 
+  // If enabling the display failed in Init() or SetPowerMode(),
+  // staged_power_mode_ holds the pending power mode so the next frame update
+  // retries activating the CRTC as a blocking full modeset with a valid
+  // display_mode.
+  if (staged_power_mode_) {
+    if (!a_args.display_mode) {
+      const auto *current_config = GetCurrentConfig();
+      if (current_config == nullptr) {
+        return std::nullopt;
+      }
+      a_args.display_mode = current_config->mode;
+      a_args.display_config_id = current_config->id;
+    }
+    a_args.power_mode = staged_power_mode_;
+    a_args.seamless = false;
+    a_args.blocking = true;
+  }
+
   auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
                              : HdcpController::HdcpState::kUndesired;
   if (hdcp_state == HdcpController::HdcpState::kDesired) {
@@ -1678,6 +1720,9 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
 void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
                                     const AtomicCommitResult &result) {
   writeback_complete_fence_ = result.writeback_complete_fence;
+  if (a_args.power_mode) {
+    staged_power_mode_.reset();
+  }
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.
     uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();

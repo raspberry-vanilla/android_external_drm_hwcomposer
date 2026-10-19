@@ -1150,4 +1150,269 @@ TEST_F(HwcDisplayTest,
   EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
 }
 
+TEST_F(HwcDisplayTest, InitPreservesConfigsWhenPreferredModesetFails) {
+  constexpr uint16_t kUhdWidth = 3840;
+  constexpr uint16_t kUhdHeight = 2160;
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kUhdWidth, kUhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "2160p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz, 0, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-ENOSPC));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  EXPECT_FALSE(display.IsInHeadlessMode());
+  EXPECT_EQ(display.GetDisplayConfigs().size(), 2U);
+}
+
+TEST_F(HwcDisplayTest,
+       SetConfigActivatesDisplayAfterPreferredModesetFailsInInit) {
+  constexpr uint16_t kUhdWidth = 3840;
+  constexpr uint16_t kUhdHeight = 2160;
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kUhdWidth, kUhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "2160p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz, 0, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-ENOSPC));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  ConfigId fallback_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.mode.GetRawMode().hdisplay == kFhdWidth) {
+      fallback_config_id = cfg.id;
+      break;
+    }
+  }
+  ASSERT_NE(fallback_config_id, 0U);
+
+  sink->SetNextExecuteStatus(CommitStatus::Success());
+  EXPECT_EQ(display.SetConfig(fallback_config_id),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, fallback_config_id);
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+}
+
+TEST_F(HwcDisplayTest,
+       FrameUpdateActivatesInactiveDisplayAfterPreferredModesetFailsInInit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  // Simulate initial preferred-mode SetConfig failure during Init() (e.g.
+  // -ENOSPC while another MST stream is temporarily occupying link bandwidth).
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-ENOSPC));
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  EXPECT_FALSE(display.IsInHeadlessMode());
+  EXPECT_FALSE(display.GetDisplayEnabled());
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  // Bandwidth becomes available (e.g. sibling MST display lowers resolution on
+  // user login), and SurfaceFlinger validates + presents a frame at the
+  // already-selected config without issuing a new SetConfig or SetPowerMode.
+  sink->SetNextExecuteStatus(CommitStatus::Success());
+  sink->ClearHistory();
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  props.composition_type = CompositionType::kDevice;
+  props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  props.blend_mode = BufferBlendMode::kPreMult;
+  props.z_order = 0;
+  layer->SetLayerProperties(props);
+
+  auto validate_res = display.ValidateStagedComposition();
+  EXPECT_TRUE(validate_res.changed_layers.empty());
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_TRUE(display.GetDisplayEnabled());
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_EQ(sink->GetCommitHistory()[0].size(), 1U);
+  const auto& first_frame_args = sink->GetCommitHistory()[0][0];
+  EXPECT_TRUE(first_frame_args.display_mode.has_value());
+  EXPECT_EQ(first_frame_args.power_mode, PowerMode::kOn);
+  EXPECT_FALSE(first_frame_args.seamless);
+  EXPECT_TRUE(first_frame_args.blocking);
+}
+
+TEST_F(HwcDisplayTest, FrameUpdateActivatesDisplayAfterSetPowerModeOnFails) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  EXPECT_EQ(display.SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  // Simulate SetPowerMode(kOn) failing (e.g. -ENOSPC during dock resume). It
+  // must stage PowerMode::kOn so the next frame update retries activating the
+  // display.
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-ENOSPC));
+  EXPECT_EQ(display.SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kBadParameter);
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  sink->SetNextExecuteStatus(CommitStatus::Success());
+  sink->ClearHistory();
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  props.composition_type = CompositionType::kDevice;
+  props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  props.blend_mode = BufferBlendMode::kPreMult;
+  props.z_order = 0;
+  layer->SetLayerProperties(props);
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_TRUE(display.GetDisplayEnabled());
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_EQ(sink->GetCommitHistory()[0].size(), 1U);
+  const auto& frame_args = sink->GetCommitHistory()[0][0];
+  EXPECT_TRUE(frame_args.display_mode.has_value());
+  EXPECT_EQ(frame_args.power_mode, PowerMode::kOn);
+  EXPECT_FALSE(frame_args.seamless);
+  EXPECT_TRUE(frame_args.blocking);
+}
+
+TEST_F(HwcDisplayTest, FrameUpdateDoesNotStageModesetWhenDisplayIsPoweredOff) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  EXPECT_EQ(display.SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  sink->ClearHistory();
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+  props.composition_type = CompositionType::kDevice;
+  props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  props.source_crop = SrcRectInfo{
+      .f_rect = FRect{0.0F, 0.0F, kFhdWidthFloat, kFhdHeightFloat}};
+  props.blend_mode = BufferBlendMode::kPreMult;
+  props.z_order = 0;
+  layer->SetLayerProperties(props);
+
+  // Without a pending staged_power_mode_, CreateFrameUpdateCommit() must not
+  // stage power_mode, display_mode, or a blocking modeset on an intentionally
+  // powered-off display.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  (void)display.PresentStagedComposition(std::nullopt, present_fence,
+                                         release_fences);
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_EQ(sink->GetCommitHistory()[0].size(), 1U);
+  const auto& frame_args = sink->GetCommitHistory()[0][0];
+  EXPECT_FALSE(frame_args.display_mode.has_value());
+  EXPECT_FALSE(frame_args.display_config_id.has_value());
+  EXPECT_FALSE(frame_args.power_mode.has_value());
+  EXPECT_FALSE(frame_args.blocking);
+}
+
 }  // namespace android::drm_hwcomposer
