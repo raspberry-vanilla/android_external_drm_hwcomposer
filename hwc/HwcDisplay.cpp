@@ -312,6 +312,10 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     ALOGE("Could not find active mode for %u", config);
     return ConfigError::kBadConfig;
   }
+
+  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
+  staged_mode_config_id_.reset();
+
   if (IsInHeadlessMode()) {
     active_config_id_ = config;
     hwc_->LogRefreshRateChanges();
@@ -338,7 +342,6 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
-  staged_mode_config_id_.reset();
   // set new vsync period
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   hwc_->LogRefreshRateChanges();
@@ -1057,6 +1060,7 @@ bool HwcDisplay::Init() {
       return false;
     }
     configs_ = std::move(*configs);
+    active_config_id_ = configs_.preferred_config_id;
   }
 
   InitForcedColorMode();
@@ -1285,8 +1289,6 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateModesetCommit(
     return std::nullopt;
   }
 
-  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
-  staged_mode_config_id_ = configId;
   const auto *config = GetConfig(configId);
   if (config == nullptr) {
     ALOGE("Could not find active mode for %u", configId);
@@ -1326,6 +1328,7 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   }
 
   args.display_mode = config->mode;
+  args.display_config_id = config->id;
   args.power_mode = PowerMode::kOn;
   args.composition = LayerToPlaneJoiningPlan::
       CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers));
@@ -1484,6 +1487,7 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     }
 
     a_args.display_mode = staged_config->mode;
+    a_args.display_config_id = staged_config->id;
     a_args.seamless = true;
   }
 
@@ -1675,12 +1679,12 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
                                                           prev_vperiod_ns);
     }
 
-    // If staged_mode_config_id_ is nullopt that indicates a logic error.
-    ALOGE_IF(!staged_mode_config_id_,
-             "a_args.display_mode is set but staged_mode_config_id_ is not.");
+    // If display_config_id is nullopt that indicates a logic error.
+    ALOGE_IF(!a_args.display_config_id,
+             "a_args.display_mode is set but a_args.display_config_id is not.");
     // Update the active_config_id and update the vsync period for the
     // VsyncWorker.
-    active_config_id_ = staged_mode_config_id_.value_or(active_config_id_);
+    active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
     staged_mode_config_id_.reset();
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
   }
@@ -1923,11 +1927,20 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   if (!modeset_buffer)
     return std::nullopt;
 
+  auto fb = GetPipe().importer->GetOrCreateFbId(&modeset_buffer.value());
+  // Return nullopt if framebuffer import fails so we do not construct a
+  // LayerData with a null fb (which triggers an abort inside
+  // DrmAtomicStateManager).
+  if (!fb) {
+    ALOGE("Failed to import modeset buffer.");
+    return std::nullopt;
+  }
+
   auto modeset_layer = std::make_unique<HwcLayer>(this);
   modeset_layer->SetLayerProperties({
       .buffer = std::optional<HwcLayer::Buffer>({
           .bi = modeset_buffer.value(),
-          .fb = GetPipe().importer->GetOrCreateFbId(&modeset_buffer.value()),
+          .fb = std::move(fb),
           .fence = {},
       }),
       .blend_mode = BufferBlendMode::kNone,

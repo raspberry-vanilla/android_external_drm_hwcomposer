@@ -305,6 +305,10 @@ DrmEncoder *DrmDevice::FindEncoderById(uint32_t id) const {
 
 int DrmDevice::GetProperty(uint32_t obj_id, uint32_t obj_type,
                            const char *prop_name, DrmProperty *property) const {
+  if (!GetFd()) {
+    return -ENODEV;
+  }
+
   drmModeObjectPropertiesPtr props = nullptr;
 
   props = drmModeObjectGetProperties(*GetFd(), obj_id, obj_type);

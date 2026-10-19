@@ -25,6 +25,9 @@ namespace android::drm_hwcomposer {
 std::vector<LayerMapping> CursorLayerMapper::AssignLayers(
     const std::vector<LayerMapping>& layers,
     const MappingValidator& validator) const {
+  if (layers.empty()) {
+    return layers;
+  }
   std::vector<LayerMapping> new_mapping = layers;
   LayerMapping& highest_zpos_layer = new_mapping.back();
   if (highest_zpos_layer.composition_type == CompositionType::kClient) {

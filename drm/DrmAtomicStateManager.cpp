@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#undef NDEBUG /* Required for assert to work */
-
 #define ATRACE_TAG ATRACE_TAG_GRAPHICS
 
 #include "DrmAtomicStateManager.h"
@@ -27,7 +25,6 @@
 #include <utils/Trace.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -842,9 +839,14 @@ AtomicCommitResult DrmAtomicStateManager::FinishPendingRequest(
     cv_.notify_all();
   } else {
     const std::lock_guard lock(mutex_);
+    // Synchronous commits wait for KMS completion in the kernel and replace
+    // frame_objects_ with the newly active state. Synchronize frames_tracked_
+    // with frames_staged_ so WaitLastFrame() and ThreadFn() do not treat prior
+    // non-blocking frames as still in flight.
     last_present_fence_ = {};
     frame_objects_ = {};
     frame_objects_.emplace(std::move(request->used_kms_objects));
+    frames_tracked_ = frames_staged_;
   }
   return result;
 }
@@ -906,14 +908,24 @@ void DrmAtomicStateManager::ThreadFn() {
 }
 
 void DrmAtomicStateManager::CleanupPriorFrameResources() {
-  assert(frames_staged_ - frames_tracked_ == 1);
-  assert(last_present_fence_);
-  assert(frame_objects_.size() > 1);
-
   // NOLINTNEXTLINE(misc-const-correctness)
   ATRACE_NAME("CleanupPriorFrameResources");
-  frames_tracked_++;
-  frame_objects_.pop();
+  // Log unexpected frame-tracking state instead of aborting the HWC service,
+  // and drain all retired frame_objects_ entries except the currently active
+  // scanout frame.
+  ALOGE_IF(frames_staged_ - frames_tracked_ != 1,
+           "CleanupPriorFrameResources: unexpected frame delta "
+           "(frames_staged_=%d, frames_tracked_=%d)",
+           frames_staged_, frames_tracked_);
+  ALOGE_IF(!last_present_fence_,
+           "CleanupPriorFrameResources: missing last_present_fence_");
+  ALOGE_IF(frame_objects_.size() <= 1,
+           "CleanupPriorFrameResources: expected > 1 frame_objects_, got %zu",
+           frame_objects_.size());
+  frames_tracked_ = frames_staged_;
+  while (frame_objects_.size() > 1) {
+    frame_objects_.pop();
+  }
   last_present_fence_ = {};
 }
 

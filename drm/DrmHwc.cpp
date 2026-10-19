@@ -129,8 +129,19 @@ void DrmHwc::FlushHotplugEvents() {
     return;
   }
   auto events = hotplug_event_queue_.RetrieveAndFlush();
+  // Pass 1: Dispatch all kDisconnected events first so SurfaceFlinger retires
+  // old display handles and active port entries before processing new connects.
   for (const auto &[handle, status] : events) {
-    SendHotplugEventToClient(handle, status);
+    if (status == DisplayStatus::kDisconnected) {
+      SendHotplugEventToClient(handle, status);
+    }
+  }
+  // Pass 2: Dispatch kConnected (and link training failure) events after all
+  // disconnects have been delivered.
+  for (const auto &[handle, status] : events) {
+    if (status != DisplayStatus::kDisconnected) {
+      SendHotplugEventToClient(handle, status);
+    }
   }
 }
 

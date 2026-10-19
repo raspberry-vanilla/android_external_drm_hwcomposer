@@ -49,6 +49,7 @@ struct AtomicCommitArgs {
   bool teardown = false;
   bool seamless = false;
   std::optional<DrmMode> display_mode;
+  std::optional<int32_t> display_config_id;
   std::optional<PowerMode> power_mode;
   std::shared_ptr<LayerToPlaneJoiningPlan> composition;
   std::shared_ptr<const HalColorTransformMatrix> color_matrix;

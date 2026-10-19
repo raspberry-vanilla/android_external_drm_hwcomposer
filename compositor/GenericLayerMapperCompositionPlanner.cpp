@@ -65,8 +65,11 @@ CompositionPlanner::CompositionTypeMap ToCompositionTypes(
   return composition_types;
 }
 
-// Requires z-ordered, non-empty |layers|.
+// Requires z-ordered |layers|.
 const HwcLayer* GetCursorLayer(const std::vector<LayerMapping>& layers) {
+  if (layers.empty()) {
+    return nullptr;
+  }
   // If a cursor layer is present, it has the highest Z-order.
   const auto& cursor_candidate = layers.back();
   return cursor_candidate.layer->GetSfType() == CompositionType::kCursor
@@ -75,6 +78,9 @@ const HwcLayer* GetCursorLayer(const std::vector<LayerMapping>& layers) {
 }
 
 bool IsCursorPlaneUsed(const std::vector<LayerMapping>& layers) {
+  if (layers.empty()) {
+    return false;
+  }
   // |layers| is sorted from lowest to highest Z. If a cursor is present, then
   // it must have the highest Z and therefore can only exist at the back.
   return layers.back().composition_type == CompositionType::kCursor;

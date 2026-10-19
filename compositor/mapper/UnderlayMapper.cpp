@@ -109,6 +109,9 @@ bool IsUnderlayHotspot(const std::vector<LayerMapping>& layers) {
 std::vector<LayerMapping> UnderlayMapper::AssignLayers(
     const std::vector<LayerMapping>& layers,
     const MappingValidator& validator) const {
+  if (layers.empty()) {
+    return layers;
+  }
   std::vector<LayerMapping> new_mapping = layers;
 
   // Hole-punched underlay candidate from SurfaceFlinger, if present, will

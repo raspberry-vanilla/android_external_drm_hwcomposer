@@ -32,6 +32,7 @@
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 
@@ -371,6 +372,84 @@ TEST_F(DrmAtomicStateManagerTest, RapidCreateAndDestroyDoesNotDeadlock) {
     ASSERT_NE(manager, nullptr);
     EXPECT_FALSE(manager->IsActive());
   }
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       NonBlockingCommitFollowedByBlockingAndNonBlockingDoesNotAbort) {
+  // 1. Initial blocking modeset (frames_staged_ = 0, frames_tracked_ = 0)
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req0, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(req0));
+
+  // 2. Non-blocking commit without present fence (frames_staged_ becomes 1,
+  // while frames_tracked_ stays 0).
+  AtomicCommitArgs nonblock1{};
+  nonblock1.blocking = false;
+  nonblock1.composition = CreateSinglePlanePlan(kTestFbId2);
+  auto req1 = state_manager->GetAtomicModeReqForArgs(nonblock1);
+  ASSERT_NE(req1, nullptr);
+  state_manager->FinishPendingRequest(nonblock1, std::move(req1));
+
+  // 3. Blocking commit resets frame_objects_ to size 1 and synchronizes
+  // frames_tracked_ = frames_staged_.
+  AtomicCommitArgs blocking2{};
+  blocking2.blocking = true;
+  blocking2.composition = CreateSinglePlanePlan(kTestFbId3);
+  auto req2 = state_manager->GetAtomicModeReqForArgs(blocking2);
+  ASSERT_NE(req2, nullptr);
+  state_manager->FinishPendingRequest(blocking2, std::move(req2));
+
+  // 4. Next non-blocking commit with a valid out_fence_address increments
+  // frames_staged_ to 2 and wakes CleanupPriorFrameResources().
+  int zero_fd = 0;
+  const SharedFd non_owning_stdin(&zero_fd, [](const int*) {});
+  const int fence_fd = DupFd(non_owning_stdin);
+  ASSERT_GE(fence_fd, 0);
+
+  AtomicCommitArgs nonblock3{};
+  nonblock3.blocking = false;
+  nonblock3.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req3 = state_manager->GetAtomicModeReqForArgs(nonblock3);
+  ASSERT_NE(req3, nullptr);
+  auto* drm_req3 = AsDrmRequest(req3);
+  drm_req3->out_fence_address = fence_fd;
+  state_manager->FinishPendingRequest(nonblock3, std::move(req3));
+  state_manager->WaitLastFrame();
+  EXPECT_TRUE(state_manager->IsActive());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       NonBlockingCommitOnEmptyFrameObjectsDoesNotAbort) {
+  // Simulate DrmAtomicCommitSink::CommitFrame copying args by value so
+  // GetAtomicModeReqForArgs sets power_mode = kOn on the copy, and then
+  // CleanUpFailedRequest calling FinishPendingRequest with the original args
+  // (blocking == false, power_mode == std::nullopt) when frame_objects_ is
+  // still empty.
+  AtomicCommitArgs req_args{};
+  req_args.blocking = false;
+  req_args.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req = state_manager->GetAtomicModeReqForArgs(req_args);
+  ASSERT_NE(req, nullptr);
+
+  int zero_fd = 0;
+  const SharedFd non_owning_stdin(&zero_fd, [](const int*) {});
+  const int fence_fd = DupFd(non_owning_stdin);
+  ASSERT_GE(fence_fd, 0);
+
+  auto* drm_req = AsDrmRequest(req);
+  drm_req->out_fence_address = fence_fd;
+
+  AtomicCommitArgs orig_args{};
+  orig_args.blocking = false;
+  orig_args.composition = req_args.composition;
+  state_manager->FinishPendingRequest(orig_args, std::move(req));
+  state_manager->WaitLastFrame();
 }
 
 }  // namespace android::drm_hwcomposer
