@@ -205,10 +205,20 @@ void DrmAtomicCommitSink::CleanUpFailedRequest(
   // Disable the hw used by the last active composition. This allows us to
   // signal the release fences from that composition to avoid hanging.
   std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> cl_args;
-  for (const auto &[atomic_state_manager, _] : args) {
+  for (const auto &[atomic_state_manager, arg] : args) {
+    // Only disable planes when an ordinary pageflip composition commit fails on
+    // an already-active display.
+    if (!atomic_state_manager->IsActive() || arg.display_mode.has_value() ||
+        arg.power_mode.has_value() || arg.teardown) {
+      continue;
+    }
     AtomicCommitArgs cl_arg{};
+    cl_arg.blocking = true;
     cl_arg.composition = std::make_shared<LayerToPlaneJoiningPlan>();
     cl_args.emplace_back(atomic_state_manager, cl_arg);
+  }
+  if (cl_args.empty()) {
+    return;
   }
   std::vector<std::pair<AtomicStateManager *, AtomicCommitResult>>
       unused_result;

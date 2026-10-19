@@ -28,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
@@ -57,6 +58,26 @@ constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
 constexpr uint32_t kTestVRefresh = 60;
 constexpr int kRapidCreateDestroyCount = 16;
+
+class RecordingAtomicStateManager : public DrmAtomicStateManager {
+ public:
+  explicit RecordingAtomicStateManager(DrmDisplayPipeline* pipe)
+      : DrmAtomicStateManager(pipe) {
+  }
+
+  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
+      AtomicCommitArgs& args) override {
+    recorded_args_.push_back(args);
+    return DrmAtomicStateManager::GetAtomicModeReqForArgs(args);
+  }
+
+  const std::vector<AtomicCommitArgs>& GetRecordedArgs() const {
+    return recorded_args_;
+  }
+
+ private:
+  std::vector<AtomicCommitArgs> recorded_args_;
+};
 
 class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
  public:
@@ -648,6 +669,72 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(blocking_res.GetStatus().error_code, -EBUSY);
   EXPECT_EQ(sink_blocking.GetNonBlockCalls(), 0U);
   EXPECT_EQ(sink_blocking.GetTotalCalls(), 2U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkSkipsPlaneCleanupOnFailedModeset) {
+  RecordingAtomicStateManager recording_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = recording_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  recording_manager.FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(recording_manager.IsActive());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 1U);
+
+  // A failed modeset commit on an active display must not trigger a follow-up
+  // plane-disable commit in CleanUpFailedRequest().
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs failed_modeset{};
+  failed_modeset.blocking = true;
+  failed_modeset.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                  kTestVRefresh);
+  failed_modeset.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  const auto modeset_res = sink.ExecuteAtomicCommit(
+      {{&recording_manager, failed_modeset}});
+  EXPECT_FALSE(modeset_res.IsSuccess());
+  EXPECT_EQ(recording_manager.GetRecordedArgs().size(), 2U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkCleansUpPlanesOnFailedPageflip) {
+  RecordingAtomicStateManager recording_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = recording_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  recording_manager.FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(recording_manager.IsActive());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 1U);
+
+  // A failed regular composition commit (no display_mode, power_mode, or
+  // teardown) on an active display must trigger CleanUpFailedRequest() with an
+  // empty composition plan so prior release fences can signal.
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs failed_pageflip{};
+  failed_pageflip.blocking = true;
+  failed_pageflip.composition = CreateSinglePlanePlan(kTestFbId3);
+
+  const auto pageflip_res = sink.ExecuteAtomicCommit(
+      {{&recording_manager, failed_pageflip}});
+  EXPECT_FALSE(pageflip_res.IsSuccess());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 3U);
+  ASSERT_NE(recording_manager.GetRecordedArgs().back().composition, nullptr);
+  EXPECT_TRUE(
+      recording_manager.GetRecordedArgs().back().composition->plan.empty());
 }
 
 }  // namespace android::drm_hwcomposer
