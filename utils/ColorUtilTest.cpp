@@ -864,6 +864,20 @@ TEST(ColorUtilTest, UseLogGammaLutSysprop) {
   }
 }
 
+TEST(ColorUtilTest, EarlyBootAnimationBrightnessNitsSysprop) {
+  EXPECT_EQ(Properties::EarlyBootAnimationBrightnessNits(), 170);
+
+  {
+    ScopedTestProperty prop("vendor.hwc.drm.bootanim.brightness_nits", "162");
+    EXPECT_EQ(Properties::EarlyBootAnimationBrightnessNits(), 162);
+  }
+  {
+    ScopedTestProperty prop("vendor.hwc.drm.bootanim.brightness_nits",
+                            "invalid");
+    EXPECT_EQ(Properties::EarlyBootAnimationBrightnessNits(), 170);
+  }
+}
+
 TEST(ColorUtilTest, FloatEqualsEpsilonBoundary) {
   constexpr float kMachineEpsilon = std::numeric_limits<float>::epsilon();
   // Framework color matrix calculations (e.g. chromatic adaptation matrix

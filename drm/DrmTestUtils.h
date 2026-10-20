@@ -16,11 +16,15 @@
 #pragma once
 
 #include <drm/drm_mode.h>
+#include <fcntl.h>  // IWYU pragma: keep
+#include <sys/types.h>
+#include <unistd.h>
 #include <xf86drmMode.h>
 
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -47,6 +51,7 @@
 #include "drm/DrmPlane.h"
 #include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 
@@ -557,6 +562,11 @@ class FakeDrmDevice : public DrmDevice {
     return {&blob_ids_.back(), [](uint32_t* /*it*/) {}};
   }
 
+  class FakeDumbBufferFd : public PrimeFdsSharedBase {
+   public:
+    SharedFd fd;
+  };
+
   std::optional<BufferInfo> CreateDumbBuffer(
       uint32_t width, uint32_t height, uint32_t format,
       uint32_t /*prime_fd_flags*/) override {
@@ -568,7 +578,25 @@ class FakeDrmDevice : public DrmDevice {
     bo.height = height;
     bo.format = format;
     bo.pitches[0] = width * kFakeBytesPerPixel;
-    bo.prime_fds[0] = 1;
+    bo.sizes[0] = bo.pitches[0] * height;
+    int raw_fd = -1;
+    if (std::FILE* tmp = std::tmpfile(); tmp != nullptr) {
+      // NOLINTNEXTLINE(misc-include-cleaner)
+      raw_fd = fcntl(fileno(tmp), F_DUPFD_CLOEXEC, 0);
+      std::fclose(tmp);
+    }
+    if (raw_fd >= 0 &&
+        ftruncate(raw_fd, static_cast<off_t>(bo.sizes[0])) == 0) {
+      auto holder = std::make_shared<FakeDumbBufferFd>();
+      holder->fd = MakeSharedFd(raw_fd);
+      bo.prime_fds[0] = raw_fd;
+      bo.fds_shared = std::move(holder);
+    } else {
+      if (raw_fd >= 0) {
+        close(raw_fd);
+      }
+      bo.prime_fds[0] = 1;
+    }
     return bo;
   }
 

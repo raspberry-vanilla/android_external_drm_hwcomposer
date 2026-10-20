@@ -46,17 +46,17 @@ namespace aidl::android::hardware::graphics::composer3::impl {
 Composer::Composer()
     : early_hwc_(std::make_shared<DrmHwcThree>()), weak_hwc_(early_hwc_) {
   early_hwc_->GetResMan().Init();
-  early_hwc_->StartBootAnimation();
+  early_hwc_->StartEarlyBootAnimation();
   boot_thread_ = std::thread([this]() {
     if (auto hwc = weak_hwc_.lock()) {
-      hwc->WaitForCompletionAndStopBootAnimation();
+      hwc->WaitForCompletionAndStopEarlyBootAnimation();
     }
   });
 }
 
 Composer::~Composer() {
   if (auto hwc = weak_hwc_.lock()) {
-    hwc->StopBootAnimation();
+    hwc->StopEarlyBootAnimation();
   }
   if (boot_thread_.joinable()) {
     boot_thread_.join();

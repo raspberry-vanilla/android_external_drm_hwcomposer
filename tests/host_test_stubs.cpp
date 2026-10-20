@@ -18,6 +18,11 @@
 #include <sync/sync.h>
 
 #include <cstdint>
+#if defined(ANDROID) && !defined(__BIONIC__)
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#endif
 #include <functional>
 #include <memory>
 #include <utility>
@@ -41,6 +46,36 @@ struct sync_file_info* sync_file_info(int32_t /*fd*/) {
 
 void sync_file_info_free(struct sync_file_info* /*info*/) {
 }
+
+#if defined(ANDROID) && !defined(__BIONIC__)
+// Override libbase's weak host property stubs so ScopedTestProperty can set
+// and clear read-only ("ro.*") properties across multiple unit tests.
+// NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,concurrency-mt-unsafe)
+int __system_property_set(const char* key, const char* value) {
+  if (key == nullptr || *key == '\0') {
+    return -1;
+  }
+  if (value == nullptr || *value == '\0') {
+    return unsetenv(key);
+  }
+  return setenv(key, value, 1);
+}
+
+int __system_property_get(const char* key, char* value) {
+  constexpr size_t kPropValueMax = 92;
+  if (key == nullptr || value == nullptr) {
+    return 0;
+  }
+  const char* prop = std::getenv(key);
+  if (prop == nullptr) {
+    *value = '\0';
+    return 0;
+  }
+  std::snprintf(value, kPropValueMax, "%s", prop);
+  return static_cast<int>(std::strlen(value));
+}
+// NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,concurrency-mt-unsafe)
+#endif
 
 }  // extern "C"
 

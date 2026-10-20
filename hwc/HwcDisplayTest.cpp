@@ -23,14 +23,19 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include <android-base/file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
@@ -47,7 +52,9 @@
 #include "hwc/HwcBufferCache.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "utils/TestUtils.h"
 #include "utils/fd.h"
+#include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
 constexpr int kMaxRetries = 20;
@@ -67,6 +74,9 @@ constexpr uint32_t kRefresh60Hz = 60;
 constexpr uint32_t kRefresh120Hz = 120;
 constexpr uint32_t kTestFbId = 501;
 constexpr uint32_t kBytesPerPixel = 4;
+constexpr uint32_t kTestAnimWidth = 4;
+constexpr uint32_t kTestAnimHeight = 4;
+constexpr uint8_t kTestPixelByte = 0x55;
 constexpr int kVsyncObservationWindowMs = 50;
 
 class TestDrmHwc : public DrmHwc {
@@ -114,14 +124,54 @@ class TestDrmHwc : public DrmHwc {
 }  // namespace
 
 struct HwcDisplayTest : public ::testing::Test {
+  static void WriteValidRawAnimationFile(int fd) {
+    struct PackedHeader {
+      char magic[4];
+      uint32_t width;
+      uint32_t height;
+      uint32_t fps;
+      uint32_t num_frames;
+      uint32_t format;
+      uint32_t hold_frame;
+      uint32_t hold_duration_ms;
+    } __attribute__((packed));
+
+    PackedHeader hdr{};
+    std::memcpy(hdr.magic, "RAWF", sizeof(hdr.magic));
+    hdr.width = kTestAnimWidth;
+    hdr.height = kTestAnimHeight;
+    hdr.fps = kRefresh60Hz;
+    hdr.num_frames = 1;
+    hdr.format = DRM_FORMAT_ARGB8888;
+    hdr.hold_frame = 0;
+    hdr.hold_duration_ms = 0;
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(hdr.width) * hdr.height *
+                                    kBytesPerPixel,
+                                kTestPixelByte);
+    ASSERT_EQ(write(fd, &hdr, sizeof(hdr)),
+              static_cast<ssize_t>(sizeof(hdr)));
+    ASSERT_EQ(write(fd, pixels.data(), pixels.size()),
+              static_cast<ssize_t>(pixels.size()));
+  }
+
   void SetUp() override {
     fake_device = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
     fake_device->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
   }
 
   void TearDown() override {
+    hwc.StopEarlyBootAnimation();
+    test_display.reset();
     hwc.DeinitDisplays();
     fake_device.reset();
+  }
+
+  HwcDisplay* CreatePrimaryDisplay() {
+    hwc.StopEarlyBootAnimation();
+    test_display = std::make_unique<HwcDisplay>(kPrimaryDisplay,
+                                                /*is_virtual=*/false, &hwc);
+    return test_display.get();
   }
 
   std::shared_ptr<DrmDisplayPipeline> CreatePipelineWithModes(
@@ -131,8 +181,11 @@ struct HwcDisplayTest : public ::testing::Test {
         *fake_device->GetConnectors().back());
   }
 
+  ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
+                                              ""};
   std::unique_ptr<FakeDrmDevice> fake_device;
   TestDrmHwc hwc;
+  std::unique_ptr<HwcDisplay> test_display;
 };
 
 TEST_F(HwcDisplayTest, HeadlessPrimaryDisplayInitializationAndPowerModes) {
@@ -900,6 +953,201 @@ TEST_F(HwcDisplayTest, FailedInitialModesetInInitKeepsValidActiveConfigId) {
   ASSERT_EQ(configs.size(), 1U);
   ASSERT_NE(display.GetCurrentConfig(), nullptr);
   EXPECT_EQ(display.GetCurrentConfig()->id, configs[0].id);
+}
+
+TEST_F(HwcDisplayTest, StandardBootAnimationStateLifecycle) {
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "0");
+  ScopedTestProperty exit_prop("service.bootanim.exit", "0");
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  EXPECT_EQ(display.GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+
+  // Create two layers so one remains for validation after the bootanimation
+  // layer is destroyed.
+  constexpr ILayerId kBootAnimLayerId = 1;
+  constexpr ILayerId kSystemUiLayerId = 2;
+  ASSERT_TRUE(display.CreateLayer(kBootAnimLayerId));
+  ASSERT_TRUE(display.CreateLayer(kSystemUiLayerId));
+
+  // Destroying the first layer signals standard boot animation exit -> kCleanup
+  EXPECT_TRUE(display.DestroyLayer(kBootAnimLayerId));
+  EXPECT_EQ(display.GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+
+  // Next ValidateStagedComposition transitions kCleanup -> kInactive.
+  (void)display.ValidateStagedComposition();
+  EXPECT_EQ(display.GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(HwcDisplayTest,
+       StandardBootAnimationInactiveWhenCompletedOrExternalOrHeadless) {
+  // 1. Standard boot animation already completed (e.g. UI restart or VTS test).
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "0");
+  {
+    ScopedTestProperty exit_prop("service.bootanim.exit", "1");
+
+    auto internal_pipe = CreatePipelineWithModes(
+        {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                           DRM_MODE_TYPE_PREFERRED, "1080p60")},
+        /*is_external=*/false);
+    HwcDisplay internal_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+    internal_display.SetPipeline(internal_pipe);
+    EXPECT_EQ(internal_display.GetBootAnimationState(),
+              HwcDisplay::BootAnimationState::kInactive);
+  }
+
+  // 2. External display when boot animation is not yet completed stays
+  // kInactive.
+  ScopedTestProperty exit_prop("service.bootanim.exit", "0");
+  auto external_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  HwcDisplay external_display(1, /*is_virtual=*/false, &hwc);
+  external_display.SetPipeline(external_pipe);
+  EXPECT_EQ(external_display.GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  // 3. Headless display stays kInactive.
+  HwcDisplay headless_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  headless_display.SetPipeline(nullptr);
+  EXPECT_EQ(headless_display.GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(HwcDisplayTest,
+       EarlyBootAnimationInitSuccessSetsActiveAndIgnoresDestroyLayer) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd);
+
+  // Set service.bootanim.exit=1 to verify early boot path ignores the standard
+  // boot animation property.
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+  ScopedTestProperty exit_prop("service.bootanim.exit", "1");
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  HwcDisplay* display = CreatePrimaryDisplay();
+  display->SetPipeline(pipeline);
+
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+
+  // Layer destruction must NOT transition early boot animation state.
+  constexpr ILayerId kLayerId1 = 1;
+  constexpr ILayerId kLayerId2 = 2;
+  ASSERT_TRUE(display->CreateLayer(kLayerId1));
+  ASSERT_TRUE(display->CreateLayer(kLayerId2));
+  EXPECT_TRUE(display->DestroyLayer(kLayerId1));
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+
+  // Stopping early boot animation transitions kActive -> kCleanup.
+  hwc.StopEarlyBootAnimation();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+
+  // Next ValidateStagedComposition transitions kCleanup -> kInactive.
+  (void)display->ValidateStagedComposition();
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(HwcDisplayTest, EarlyBootAnimationInitFailureLeavesStateInactive) {
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path",
+                               "/tmp/nonexistent_drm_hwcomposer_bootanim.raw");
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  HwcDisplay* display = CreatePrimaryDisplay();
+  display->SetPipeline(pipeline);
+
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
+}
+
+TEST_F(HwcDisplayTest,
+       EarlyBootAnimationAlreadyCompletedLeavesStateInactiveOnReinit) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd);
+
+  // Start with early boot animation active on the primary display instance,
+  // then re-initialize the same HwcDisplay instance after completion.
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+  ScopedTestProperty exit_prop("service.bootanim.exit", "0");
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  HwcDisplay* display = CreatePrimaryDisplay();
+  display->SetPipeline(pipeline);
+  ASSERT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kActive);
+
+  // Stop early boot animation (state becomes kCleanup, completed=1), then
+  // re-initialize the same HwcDisplay instance.
+  hwc.StopEarlyBootAnimation();
+  ASSERT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kCleanup);
+  ASSERT_TRUE(Properties::EarlyBootAnimationCompleted());
+
+  display->SetPipeline(pipeline);
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+
+  // Re-initializing from kActive to headless (nullptr) also resets to
+  // kInactive.
+  display->SetBootAnimationState(HwcDisplay::BootAnimationState::kActive);
+  display->SetPipeline(nullptr);
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+}
+
+TEST_F(HwcDisplayTest,
+       InitSetConfigFailureResetsBootAnimationStateAndStopsBootAnim) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd);
+
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-EINVAL));
+
+  HwcDisplay* display = CreatePrimaryDisplay();
+  display->SetPipeline(pipeline);
+
+  EXPECT_EQ(display->GetBootAnimationState(),
+            HwcDisplay::BootAnimationState::kInactive);
+  EXPECT_TRUE(Properties::EarlyBootAnimationCompleted());
 }
 
 }  // namespace android::drm_hwcomposer

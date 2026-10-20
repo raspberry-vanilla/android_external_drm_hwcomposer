@@ -213,13 +213,15 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
-void HwcDisplay::SetHdrHeadroom() {
+auto HwcDisplay::GetMaxLuminance() const -> float {
   float hdr_luminance[3]{kDefaultMaxLuminance, kDefaultMaxLuminance, 0.F};
   GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
                              &hdr_luminance[2]);
-  float max_lum = hdr_luminance[0] > 0.F ? hdr_luminance[0]
-                                         : kDefaultMaxLuminance;
-  hdr_headroom_ = max_lum / kHdrReferenceLuminance;
+  return hdr_luminance[0] > 0.F ? hdr_luminance[0] : kDefaultMaxLuminance;
+}
+
+void HwcDisplay::SetHdrHeadroom() {
+  hdr_headroom_ = GetMaxLuminance() / kHdrReferenceLuminance;
 }
 
 void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
@@ -253,7 +255,7 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
       }
 
       // TODO(b/553171429): Clean up sentinel once early boot animation is active.
-      if (boot_animation_state_ == BootAnimationState::kActive) {
+      if (GetBootAnimationState() == BootAnimationState::kActive) {
         hdr_headroom_ = {};
         SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kSmpte170M);
         min_bpc_ = 8;
@@ -412,7 +414,7 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
                                        CompositionType::kClient);
   }
 
-  if (boot_animation_state_ == BootAnimationState::kCleanup) {
+  if (GetBootAnimationState() == BootAnimationState::kCleanup) {
     SetBootAnimationState(BootAnimationState::kInactive);
     if (has_hdr_support_) {
       SetOutputType(OutputType::kSystem);
@@ -951,13 +953,6 @@ void HwcDisplay::InitHdrSupported() {
 }
 
 bool HwcDisplay::Init() {
-  SetBootAnimationState(IsInHeadlessMode() ||
-                                pipeline_->connector->Get()->IsExternal() ||
-                                (Properties::BootAnimationCompleted() &&
-                                 !Properties::EarlyBootAnimationEnabled())
-                            ? BootAnimationState::kInactive
-                            : BootAnimationState::kActive);
-
   if (!is_virtual_) {
     vsync_worker_ = VSyncWorker::CreateInstance(pipeline_);
     if (!vsync_worker_) {
@@ -1068,11 +1063,29 @@ bool HwcDisplay::Init() {
   InitWcgSupported();
   InitHdrSupported();
 
+  auto boot_state = BootAnimationState::kInactive;
+  if (!IsInHeadlessMode() && !pipeline_->connector->Get()->IsExternal()) {
+    if (Properties::EarlyBootAnimationEnabled()) {
+      if (hwc_ != nullptr && hwc_->InitEarlyBootAnimation(this)) {
+        boot_state = BootAnimationState::kActive;
+      }
+    } else if (!Properties::BootAnimationCompleted()) {
+      boot_state = BootAnimationState::kActive;
+    }
+  }
+  SetBootAnimationState(boot_state);
+
   static constexpr ColorMode kDefaultColorMode = ColorMode::kSrgb;
   SetColorMode(kDefaultColorMode, ui::RenderIntent::COLORIMETRIC);
 
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
+    if (boot_state == BootAnimationState::kActive) {
+      SetBootAnimationState(BootAnimationState::kInactive);
+      if (hwc_ != nullptr) {
+        hwc_->StopEarlyBootAnimation();
+      }
+    }
     return false;
   }
 
@@ -1114,7 +1127,7 @@ auto HwcDisplay::DestroyLayer(ILayerId layer_id) -> bool {
   // TODO(b/553171429): Clean up sentinel once early boot animation is active.
   // BootAnimation creates a single surface for its entire lifecycle and drops
   // it on exit. Use the first layer destruction as the completion signal.
-  if (boot_animation_state_ == BootAnimationState::kActive &&
+  if (GetBootAnimationState() == BootAnimationState::kActive &&
       !Properties::EarlyBootAnimationEnabled()) {
     SetBootAnimationState(BootAnimationState::kCleanup);
   }
