@@ -23,14 +23,11 @@
 #include <cstdlib>
 #include <cstring>
 #endif
-#include <functional>
 #include <memory>
-#include <utility>
 
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "bufferinfo/GrallocBufferHandle.h"
-#include "drm/UEventListener.h"
 
 struct sync_file_info;
 
@@ -80,23 +77,6 @@ int __system_property_get(const char* key, char* value) {
 }  // extern "C"
 
 namespace android::drm_hwcomposer {
-
-class UEvent {};
-
-UEventListener::UEventListener(std::function<void()> hotplug_handler)
-    : hotplug_handler_(std::move(hotplug_handler)) {
-}
-
-UEventListener::~UEventListener() = default;
-
-auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
-    -> std::shared_ptr<UEventListener> {
-  if (!hotplug_handler) {
-    return {};
-  }
-  return std::shared_ptr<UEventListener>(
-      new UEventListener(std::move(hotplug_handler)));
-}
 
 std::unique_ptr<BufferInfoGetter> BufferInfoMapperMetadata::CreateInstance() {
   return nullptr;

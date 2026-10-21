@@ -159,6 +159,11 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->connection == DRM_MODE_CONNECTED;
   }
 
+  virtual bool IsUnknownConnection() const {
+    return connector_ != nullptr &&
+           connector_->connection == DRM_MODE_UNKNOWNCONNECTION;
+  }
+
   virtual uint32_t GetMmWidth() const;
   virtual uint32_t GetMmHeight() const;
 

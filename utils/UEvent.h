@@ -16,16 +16,29 @@
 
 #pragma once
 
+#if !defined(__GLIBC__)
 #include <asm-generic/poll.h>
+#include <asm-generic/socket.h>
 #include <linux/eventfd.h>
-#include <linux/netlink.h>
+#endif
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if defined(__GLIBC__) && !defined(_UAPI_LINUX_SOCKET_H)
+#define _UAPI_LINUX_SOCKET_H
+using __kernel_sa_family_t = unsigned short;
+#define DRM_HWC_DEFINED_UAPI_LINUX_SOCKET_H
+#endif
+#include <linux/netlink.h>
+#if defined(DRM_HWC_DEFINED_UAPI_LINUX_SOCKET_H)
+#undef _UAPI_LINUX_SOCKET_H
+#undef DRM_HWC_DEFINED_UAPI_LINUX_SOCKET_H
+#endif
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -48,6 +61,12 @@ class UEvent {
       return {};
     }
 
+    constexpr int kNetlinkRecvBufferSize = 1024 * 1024;
+    if (setsockopt(*fd, SOL_SOCKET, SO_RCVBUF, &kNetlinkRecvBufferSize,
+                   sizeof(kNetlinkRecvBufferSize)) != 0) {
+      ALOGW("Failed to set uevent socket SO_RCVBUF: errno=%i", errno);
+    }
+
     struct sockaddr_nl addr {};
     addr.nl_family = AF_NETLINK;
     addr.nl_pid = 0;
@@ -60,6 +79,13 @@ class UEvent {
       return {};
     }
 
+    return CreateInstanceWithFd(std::move(fd));
+  }
+
+  static auto CreateInstanceWithFd(UniqueFd fd) -> std::unique_ptr<UEvent> {
+    if (!fd) {
+      return {};
+    }
     auto stop_event_fd = MakeUniqueFd(eventfd(0, EFD_CLOEXEC));
     if (!stop_event_fd) {
       ALOGE("Failed to create eventfd: errno=%i", errno);
@@ -70,30 +96,18 @@ class UEvent {
   }
 
   auto ReadNext() -> std::optional<std::string> {
-    constexpr int kUEventBufferSize = 1024;
-    char buffer[kUEventBufferSize];
+    return ReadNextWithTimeout(-1);
+  }
 
-    if (!WaitForData()) {
+  auto ReadNextWithTimeout(int timeout_ms) -> std::optional<std::string> {
+    if (!WaitForData(timeout_ms)) {
       return {};
     }
+    return ReadPacket();
+  }
 
-    ssize_t ret = 0;
-    ret = read(*fd_, &buffer, sizeof(buffer));
-    if (ret == 0)
-      return {};
-
-    if (ret < 0) {
-      ALOGE("Got error reading uevent %zd", ret);
-      return {};
-    }
-
-    for (int i = 0; i < ret - 1; i++) {
-      if (buffer[i] == '\0') {
-        buffer[i] = '\n';
-      }
-    }
-
-    return std::string(buffer, ret);
+  auto ReadNextNonBlocking() -> std::optional<std::string> {
+    return ReadNextWithTimeout(0);
   }
 
   void Stop() {
@@ -115,18 +129,48 @@ class UEvent {
   UEvent(UniqueFd &fd, UniqueFd &stop_event_fd)
       : fd_(std::move(fd)), stop_event_fd_(std::move(stop_event_fd)) {};
 
+  auto ReadPacket() -> std::optional<std::string> {
+    constexpr size_t kUEventBufferSize = 4096;
+    char buffer[kUEventBufferSize];
+
+    ssize_t ret = recv(*fd_, &buffer, sizeof(buffer), MSG_TRUNC);
+    if (ret == 0) {
+      return {};
+    }
+
+    if (ret < 0) {
+      if (errno == ENOBUFS) {
+        ALOGW("UEvent netlink socket overflow (ENOBUFS); synthesizing rescan");
+        return std::string("DEVTYPE=drm_minor\nHOTPLUG=1\n");
+      }
+      ALOGE("Got error reading uevent: errno=%d", errno);
+      return {};
+    }
+
+    if (static_cast<size_t>(ret) > sizeof(buffer)) {
+      ALOGW("UEvent packet truncated (%zd > %zu bytes)", ret, sizeof(buffer));
+      ret = static_cast<ssize_t>(sizeof(buffer));
+    }
+
+    for (ssize_t i = 0; i < ret; i++) {
+      if (buffer[i] == '\0') {
+        buffer[i] = '\n';
+      }
+    }
+
+    return std::string(buffer, static_cast<size_t>(ret));
+  }
+
   // Returns true if there is data to be read off of fd_.
-  bool WaitForData() {
+  bool WaitForData(int timeout_ms) {
     struct pollfd poll_fds[kNumFds];
     poll_fds[kFdIdx].fd = *fd_;
     poll_fds[kFdIdx].events = POLLIN;
     poll_fds[kStopEventFdIdx].fd = *stop_event_fd_;
     poll_fds[kStopEventFdIdx].events = POLLIN;
 
-    const int ret = poll(poll_fds, kNumFds, -1);
+    const int ret = poll(poll_fds, kNumFds, timeout_ms);
     if (ret == 0) {
-      // Timeout shouldn't happen, but return here anyways.
-      ALOGE("Timed out polling uevent.");
       return false;
     }
     if (ret < 1) {
@@ -141,8 +185,9 @@ class UEvent {
       return false;
     }
 
-    // Return true if there is data to read.
-    return (poll_fds[kFdIdx].revents & POLLIN) != 0;
+    // Return true if there is data or a socket error (such as ENOBUFS) to
+    // read so ReadPacket() can clear sk_err and synthesize a rescan.
+    return (poll_fds[kFdIdx].revents & (POLLIN | POLLERR)) != 0;
   }
 
   UniqueFd fd_;

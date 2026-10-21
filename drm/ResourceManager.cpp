@@ -280,16 +280,18 @@ void ResourceManager::Init() {
   } else {
     {
       std::scoped_lock lock(GetMainLock());
-      uevent_listener_ = UEventListener::CreateInstance([this] {
+      uevent_listener_ = UEventListener::CreateInstance([this]() -> bool {
+        bool any_connector_unsettled = false;
         {
           std::scoped_lock lock(GetMainLock());
           for (auto &drm : drms_) {
             auto stale_connectors = drm->RefreshConnectors();
             DetachStalePipelines(stale_connectors);
           }
-          UpdateFrontendDisplays();
+          any_connector_unsettled = UpdateFrontendDisplays();
         }
         frontend_interface_->FlushHotplugEvents();
+        return any_connector_unsettled;
       });
 
       UpdateFrontendDisplays();
@@ -333,8 +335,9 @@ auto ResourceManager::GetTimeMonotonicNs() -> int64_t {
   return (int64_t(ts.tv_sec) * kNsInSec) + int64_t(ts.tv_nsec);
 }
 
-void ResourceManager::UpdateFrontendDisplays() {
+bool ResourceManager::UpdateFrontendDisplays() {
   auto ordered_connectors = GetOrderedConnectors();
+  bool any_connector_unsettled = false;
 
   // Pass 1: Update modes and properties on all connectors and detach any
   // disconnected connectors first so their shared CRTCs, encoders, and planes
@@ -343,7 +346,9 @@ void ResourceManager::UpdateFrontendDisplays() {
     if (conn == nullptr) {
       continue;
     }
-    conn->UpdateModesAndProperties();
+    if (conn->UpdateModesAndProperties() != 0 || conn->IsUnknownConnection()) {
+      any_connector_unsettled = true;
+    }
     if (!conn->IsConnected()) {
       auto it = attached_pipelines_.find(conn);
       if (it != attached_pipelines_.end()) {
@@ -358,8 +363,13 @@ void ResourceManager::UpdateFrontendDisplays() {
   // connector state already probed in Pass 1.
   for (auto *conn : ordered_connectors) {
     ProcessHotplugForConnector(conn, /*update_modes=*/false);
+    if (conn != nullptr && conn->IsConnected() &&
+        attached_pipelines_.count(conn) == 0) {
+      any_connector_unsettled = true;
+    }
   }
   frontend_interface_->FinalizeDisplayBinding();
+  return any_connector_unsettled;
 }
 
 void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,

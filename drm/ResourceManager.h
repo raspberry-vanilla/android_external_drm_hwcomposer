@@ -111,7 +111,7 @@ class ResourceManager {
   friend struct DrmHwcTest;
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
-  void UpdateFrontendDisplays();
+  bool UpdateFrontendDisplays();
   void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);

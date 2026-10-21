@@ -53,9 +53,11 @@
 #include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
 #include "drm/ResourceManager.h"
+#include "drm/UEventListener.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "utils/TestUtils.h"
+#include "utils/UEvent.h"
 #include "utils/fd.h"
 #include "utils/properties.h"
 
@@ -931,6 +933,15 @@ TEST_F(DrmHwcTest, DelayedEdidRecoveryFlushesHotplugEventsToClient) {
 
 namespace {
 
+std::string MakeUEventPacket(std::initializer_list<std::string_view> fields) {
+  std::string packet;
+  for (const auto field : fields) {
+    packet.append(field.data(), field.size());
+    packet.push_back('\0');
+  }
+  return packet;
+}
+
 class BackendHotplugTestBackend : public GenericBackend {
  public:
   explicit BackendHotplugTestBackend(DrmDevice& drm) : GenericBackend(drm) {
@@ -995,4 +1006,148 @@ TEST_F(DrmHwcTest,
 
   DeInitResManForTest();
 }
+
+TEST_F(DrmHwcTest,
+       UEventReadNextConvertsTrailingNullByteAndSupportsLargePackets) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  // 1. Standard kernel uevent packet ends with a trailing '\0' byte.
+  const std::string short_packet = MakeUEventPacket({
+      "change@/devices/pci0000:00/drm/card0",
+      "ACTION=change",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+      "CONNECTOR=120",
+  });
+  ASSERT_EQ(write(*write_fd, short_packet.data(), short_packet.size()),
+            static_cast<ssize_t>(short_packet.size()));
+
+  auto parsed_short = uevent->ReadNext();
+  ASSERT_TRUE(parsed_short.has_value());
+  if (!parsed_short) {
+    return;
+  }
+  EXPECT_EQ(parsed_short->find('\0'), std::string::npos)
+      << "UEvent::ReadNext() left an un-converted trailing NUL byte in string";
+
+  // 2. Large kernel uevent packet (> 1024 bytes, e.g. long PCIe/USB4 DEVPATH)
+  // with HOTPLUG=1 near the end of the packet.
+  constexpr size_t kLongDevpathPaddingLen = 1100;
+  constexpr size_t kLegacyBufferLimit = 1024U;
+  const std::string large_header = "change@" +
+                                   std::string(kLongDevpathPaddingLen, 'a');
+  const std::string large_packet = MakeUEventPacket({
+      large_header,
+      "ACTION=change",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+  ASSERT_GT(large_packet.size(), kLegacyBufferLimit);
+  ASSERT_EQ(write(*write_fd, large_packet.data(), large_packet.size()),
+            static_cast<ssize_t>(large_packet.size()));
+
+  auto parsed_large = uevent->ReadNext();
+  ASSERT_TRUE(parsed_large.has_value());
+  if (!parsed_large) {
+    return;
+  }
+  EXPECT_NE(parsed_large->find("HOTPLUG=1"), std::string::npos)
+      << "UEvent::ReadNext() truncated a >1024-byte netlink uevent packet";
+}
+
+TEST_F(DrmHwcTest, UEventListenerDoesNotSwallowRapidUnplugReplugWithin200ms) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<bool> connector_connected{true};
+  std::atomic<int> observed_disconnects{0};
+  std::atomic<int> observed_connects{0};
+
+  auto listener = UEventListener::CreateInstance(
+      [&]() {
+        if (connector_connected.load()) {
+          ++observed_connects;
+        } else {
+          ++observed_disconnects;
+        }
+      },
+      std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kRapidHotplugGapMs = 50;
+  const std::string hotplug_uevent = MakeUEventPacket({
+      "change@/devices/drm/card0",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+
+  // Unplug at t = 0ms, then replug 50ms later (< 200ms).
+  connector_connected.store(false);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRapidHotplugGapMs));
+
+  connector_connected.store(true);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRapidHotplugGapMs));
+  listener.reset();
+
+  EXPECT_GE(observed_disconnects.load(), 1)
+      << "UEventListener 200ms sleep swallowed the sub-200ms unplug state";
+  EXPECT_GE(observed_connects.load(), 1);
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerRunsSettleRetryOnlyWhenHandlerReportsUnsettledConnector) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<bool> report_unsettled{false};
+  std::atomic<int> handler_calls{0};
+  auto listener = UEventListener::CreateInstance(
+      [&]() -> bool {
+        ++handler_calls;
+        return report_unsettled.exchange(false);
+      },
+      std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kPostSettleWaitMs = 250;
+  const std::string hotplug_uevent = MakeUEventPacket({
+      "change@/devices/drm/card0",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+
+  // 1. When all connectors are settled (handler returns false), no 200ms
+  // settle retry should run.
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  EXPECT_EQ(handler_calls.load(), 1);
+
+  // 2. When a connector is still unsettled (handler returns true on first
+  // pass), UEventListener must run the post-200ms settle retry.
+  handler_calls.store(0);
+  report_unsettled.store(true);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  listener.reset();
+  EXPECT_EQ(handler_calls.load(), 2);
+}
+
 }  // namespace android::drm_hwcomposer

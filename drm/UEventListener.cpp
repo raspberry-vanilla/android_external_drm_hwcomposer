@@ -16,12 +16,14 @@
 
 #include "UEventListener.h"
 
-#include <sys/types.h>
-#include <unistd.h>
-
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -30,17 +32,27 @@
 
 namespace android::drm_hwcomposer {
 
-UEventListener::UEventListener(std::function<void()> hotplug_handler)
+UEventListener::UEventListener(HotplugHandler hotplug_handler)
     : hotplug_handler_(std::move(hotplug_handler)) {
 }
 
 UEventListener::~UEventListener() {
   exit_ = true;
-  uevent_->Stop();
-  thread_.join();
+  if (uevent_) {
+    uevent_->Stop();
+  }
+  if (thread_.joinable()) {
+    thread_.join();
+  }
 }
 
-auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
+auto UEventListener::CreateInstance(HotplugHandler hotplug_handler)
+    -> std::shared_ptr<UEventListener> {
+  return CreateInstance(std::move(hotplug_handler), nullptr);
+}
+
+auto UEventListener::CreateInstance(HotplugHandler hotplug_handler,
+                                    std::unique_ptr<UEvent> uevent)
     -> std::shared_ptr<UEventListener> {
   if (!hotplug_handler) {
     ALOGE("Invalid hotplug handler");
@@ -50,7 +62,7 @@ auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
   auto uel = std::shared_ptr<UEventListener>(
       new UEventListener(std::move(hotplug_handler)));
 
-  uel->uevent_ = UEvent::CreateInstance();
+  uel->uevent_ = uevent ? std::move(uevent) : UEvent::CreateInstance();
   if (!uel->uevent_) {
     ALOGE("Failed to create UEvent");
     return {};
@@ -61,28 +73,94 @@ auto UEventListener::CreateInstance(std::function<void()> hotplug_handler)
 }
 
 void UEventListener::ThreadFn() {
+  constexpr int kSettleDelayMs = 200;
+  auto has_field = [](std::string_view event_str, std::string_view field) {
+    size_t pos = 0;
+    while (pos < event_str.size()) {
+      size_t end = event_str.find('\n', pos);
+      if (end == std::string_view::npos) {
+        end = event_str.size();
+      }
+      if (event_str.substr(pos, end - pos) == field) {
+        return true;
+      }
+      pos = end + 1;
+    }
+    return false;
+  };
+  auto is_drm_hotplug = [&has_field](const std::optional<std::string> &event) {
+    if (!event) {
+      return false;
+    }
+    const bool is_drm_minor = has_field(*event, "DEVTYPE=drm_minor");
+    const bool is_hotplug = has_field(*event, "HOTPLUG=1");
+    if (is_drm_minor && is_hotplug) {
+      return true;
+    }
+    // DEVTYPE=drm_connector handling is added in commit 16
+    return false;
+  };
+
   while (!exit_) {
     auto uevent_str = uevent_->ReadNext();
     if (exit_) {
       break;
     }
-    if (!uevent_str) {
+    if (!is_drm_hotplug(uevent_str)) {
       continue;
     }
 
-    auto drm_event = uevent_str->find("DEVTYPE=drm_minor") != std::string::npos;
-    auto hotplug_event = uevent_str->find("HOTPLUG=1") != std::string::npos;
-
-    if (drm_event && hotplug_event) {
-      constexpr useconds_t kDelayAfterUeventUs = 200000;
-      /* We need some delay to ensure DrmConnector::UpdateModesAndProperties()
-       * will query correct modes list, otherwise at least RPI4 board may report
-       * 0 modes */
-      usleep(kDelayAfterUeventUs);
+    while (!exit_) {
+      // Drain any back-to-back uevents already queued in the socket buffer.
+      while (!exit_) {
+        auto queued = uevent_->ReadNextNonBlocking();
+        if (!queued) {
+          break;
+        }
+      }
       if (exit_) {
         break;
       }
-      hotplug_handler_();
+
+      const bool needs_settle_retry = hotplug_handler_();
+
+      // Wait up to 200ms from the end of this hotplug pass for either a
+      // follow-up hotplug uevent (e.g. a rapid unplug/replug or multi-stream
+      // MST burst) or a quiet settle timeout (ensuring boards like RPI4 that
+      // report 0 modes or unknown connection status on the initial pulse are
+      // re-probed after 200ms). Use a fixed steady_clock deadline so unrelated
+      // non-DRM uevents do not reset the 200ms window.
+      const auto settle_deadline = std::chrono::steady_clock::now() +
+                                   std::chrono::milliseconds(kSettleDelayMs);
+      bool saw_followup_hotplug = false;
+      while (!exit_) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= settle_deadline) {
+          break;
+        }
+        const auto remaining_ms = std::chrono::duration_cast<
+                                      std::chrono::milliseconds>(
+                                      settle_deadline - now)
+                                      .count();
+        const int timeout_ms = std::max(1, static_cast<int>(remaining_ms));
+        auto followup = uevent_->ReadNextWithTimeout(timeout_ms);
+        if (exit_ || !followup) {
+          break;
+        }
+        if (is_drm_hotplug(followup)) {
+          saw_followup_hotplug = true;
+          break;
+        }
+      }
+      if (exit_) {
+        break;
+      }
+      if (!saw_followup_hotplug) {
+        if (needs_settle_retry) {
+          hotplug_handler_();
+        }
+        break;
+      }
     }
   }
 
