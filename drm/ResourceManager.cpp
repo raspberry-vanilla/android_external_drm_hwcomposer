@@ -267,20 +267,23 @@ void ResourceManager::Init() {
       drm->GetBackend().SetHotplugHandler(std::move(hotplug_handler));
     }
   } else {
-    uevent_listener_ = UEventListener::CreateInstance([this] {
-      {
-        std::scoped_lock lock(GetMainLock());
-        for (auto &drm : drms_) {
-          auto stale_connectors = drm->RefreshConnectors();
-          DetachStalePipelines(stale_connectors);
+    {
+      std::scoped_lock lock(GetMainLock());
+      uevent_listener_ = UEventListener::CreateInstance([this] {
+        {
+          std::scoped_lock lock(GetMainLock());
+          for (auto &drm : drms_) {
+            auto stale_connectors = drm->RefreshConnectors();
+            DetachStalePipelines(stale_connectors);
+          }
+          UpdateFrontendDisplays();
         }
-        UpdateFrontendDisplays();
-      }
-      frontend_interface_->FlushHotplugEvents();
-    });
+        frontend_interface_->FlushHotplugEvents();
+      });
 
-    UpdateFrontendDisplays();
-    MaybeScheduleDelayedEdidRecovery();
+      UpdateFrontendDisplays();
+      MaybeScheduleDelayedEdidRecovery();
+    }
     frontend_interface_->FlushHotplugEvents();
   }
 

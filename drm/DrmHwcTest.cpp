@@ -17,24 +17,34 @@
 #include "drm/DrmHwc.h"
 
 #include <gtest/gtest.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <xf86drmMode.h>
 
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <android-base/file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
-#include <sys/types.h>
-#include <unistd.h>
 
+#include "backend/GenericBackend.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/HdcpController.h"
 #include "drm/AtomicStateManager.h"
@@ -46,6 +56,7 @@
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "utils/TestUtils.h"
+#include "utils/fd.h"
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
@@ -138,8 +149,11 @@ struct DrmHwcTest : public ::testing::Test {
   std::shared_ptr<DrmDisplayPipeline> CreatePipeline(
       bool is_external = false) const {
     fake_device->AddPipelineResources(is_external);
-    return fake_device->GetBackend().CreatePipeline(
-        *fake_device->GetConnectors().back());
+    return CreatePipeline(*fake_device->GetConnectors().back());
+  }
+
+  std::shared_ptr<DrmDisplayPipeline> CreatePipeline(DrmConnector& conn) const {
+    return fake_device->GetBackend().CreatePipeline(conn);
   }
 
   void AddDeviceToResMan(std::unique_ptr<DrmDevice> dev) {
@@ -155,6 +169,7 @@ struct DrmHwcTest : public ::testing::Test {
   }
 
   void ResetResManDevices() {
+    hwc.GetResMan().CancelDelayedEdidRecovery();
     hwc.GetResMan().DetachAllFrontendDisplays();
     hwc.GetResMan().drms_.clear();
   }
@@ -168,6 +183,32 @@ struct DrmHwcTest : public ::testing::Test {
 
   ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
                                               ""};
+  void TriggerDelayedEdidRecovery() {
+    hwc.GetResMan().MaybeScheduleDelayedEdidRecovery();
+  }
+
+  void WaitDelayedEdidRecovery() {
+    constexpr int kPollSleepMs = 10;
+    while (true) {
+      {
+        std::scoped_lock lock(hwc.GetResMan().edid_recovery_mutex_);
+        if (!hwc.GetResMan().edid_recovery_pending_) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
+    }
+    hwc.GetResMan().CancelDelayedEdidRecovery();
+  }
+
+  void InitResManForTest() {
+    hwc.GetResMan().Init();
+  }
+
+  void DeInitResManForTest() {
+    hwc.GetResMan().DeInit();
+  }
+
   std::unique_ptr<FakeDrmDevice> fake_device;
   RecordingDrmHwc hwc;
 };
@@ -736,6 +777,93 @@ TEST_F(DrmHwcTest, ExternalConnectorBindsOnRetryAfterZeroModeHotplug) {
 
   dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
   ResetResManDevices();
+}
+
+TEST_F(DrmHwcTest, HotplugEventQueuePreservesConnectBeforeLinkTrainingFailed) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+
+  // Simulate ResourceManager::ProcessHotplugForConnector attaching an external
+  // display whose link-status is immediately BAD in the same hotplug pass:
+  // BindDisplay() queues (1, kConnected) and NotifyDisplayLinkStatus() queues
+  // (1, kLinkTrainingFailed) before FlushHotplugEvents() runs.
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.NotifyDisplayLinkStatus(external_pipe);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 3U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[2],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugEventQueuePreservesDisconnectBeforeReconnectOnSameHandle) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  // Queue kDisconnected followed by kConnected for the same handle before
+  // FlushHotplugEvents() runs. Both transitions must be delivered in order.
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kDisconnected);
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay, DrmHwc::DisplayStatus::kConnected);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kDisconnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugEventQueueDoesNotInvertConnectBeforeDisconnectOnSameHandle) {
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(external_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  // Queue kConnected followed by kDisconnected for the same handle before
+  // FlushHotplugEvents() runs. The stale kConnected entry must be dropped so
+  // FlushHotplugEvents() does not sort kDisconnected ahead of kConnected and
+  // report a phantom reconnect for a disconnected display.
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay, DrmHwc::DisplayStatus::kConnected);
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kDisconnected);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kDisconnected));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
 }
 
 }  // namespace android::drm_hwcomposer

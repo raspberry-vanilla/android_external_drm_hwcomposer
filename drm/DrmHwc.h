@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
@@ -123,7 +124,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // event callbacks from the main mutex.
   class HotplugEventQueue {
    public:
-    using Events = std::map<DisplayHandle, DisplayStatus>;
+    using Events = std::vector<std::pair<DisplayHandle, DisplayStatus>>;
 
     void Add(DisplayHandle display_handle, DisplayStatus display_status);
     Events RetrieveAndFlush();
