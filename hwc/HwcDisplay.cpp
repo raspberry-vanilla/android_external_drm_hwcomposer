@@ -120,6 +120,23 @@ void UpdateClientTargetIfNeeded(const HwcLayer &client_layer,
     composition_plan->plan[*client_z].layer = client_layer.GetLayerData();
 }
 
+bool IsUnscaledFullScreenDeviceLayer(const HwcLayer &layer, uint32_t width,
+                                     uint32_t height) {
+  if (!layer.IsLayerUsableAsDevice()) {
+    return false;
+  }
+  const LayerData &layer_data = layer.GetLayerData();
+  if (!layer_data.bi || layer_data.bi->width != width ||
+      layer_data.bi->height != height ||
+      layer_data.pi.RequireScalingOrPhasing()) {
+    return false;
+  }
+  const IRect full_screen_rect{0, 0, static_cast<int32_t>(width),
+                               static_cast<int32_t>(height)};
+  return !layer_data.pi.display_frame.i_rect ||
+         *layer_data.pi.display_frame.i_rect == full_screen_rect;
+}
+
 }  // namespace
 
 auto HwcDisplay::GetDisplayName() const -> std::string {
@@ -315,11 +332,13 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     return ConfigError::kBadConfig;
   }
 
-  ALOGW_IF(staged_mode_config_id_, "overriding staged_mode_config_id_");
+  ALOGW_IF(staged_mode_config_id_ && *staged_mode_config_id_ != config,
+           "overriding staged_mode_config_id_");
   staged_mode_config_id_.reset();
 
   if (IsInHeadlessMode()) {
     active_config_id_ = config;
+    staged_power_mode_.reset();
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -344,9 +363,17 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
+  staged_power_mode_.reset();
+  // CreateModesetCommit() may scan out a temporary zero-filled dumb buffer or
+  // disable planes when the resolution changes. Invalidate the cached
+  // composition and request a client refresh so SurfaceFlinger presents a real
+  // frame for the new mode instead of leaving the temporary modeset buffer on
+  // screen.
+  last_presented_composition_.Reset();
   // set new vsync period
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   hwc_->LogRefreshRateChanges();
+  hwc_->SendRefreshEventToClient(handle_);
   return ConfigError::kNone;
 }
 
@@ -743,6 +770,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   }
 
   if (IsInHeadlessMode()) {
+    staged_power_mode_.reset();
     return HwcDisplay::Error::kNone;
   }
   bool enabled = mode != PowerMode::kOff;
@@ -756,6 +784,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
       SetVsyncCallbacksEnabled(true);
     }
     if (GetPipe().atomic_state_manager->IsActive()) {
+      staged_power_mode_.reset();
       return HwcDisplay::Error::kNone;
     }
 
@@ -763,7 +792,15 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     if (last_requested_config) {
       if (SetConfig(last_requested_config->id) != ConfigError::kNone) {
         ALOGE("Failed to set config to re-enable display after teardown.");
+        staged_power_mode_ = mode;
         return HwcDisplay::Error::kBadParameter;
+      }
+      // SetConfig() executes a blocking modeset commit with PowerMode::kOn,
+      // which already activates the CRTC in KMS (unless the display is in
+      // headless mode). Return early to avoid issuing a redundant empty atomic
+      // commit below.
+      if (GetPipe().atomic_state_manager->IsActive()) {
+        return HwcDisplay::Error::kNone;
       }
     }
   }
@@ -773,17 +810,23 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   a_args.blocking = true;
   a_args.power_mode = mode;
   if (!enabled) {
+    staged_power_mode_.reset();
     a_args.teardown = true;
   }
 
   const auto result = ExecuteAtomicCommit(a_args);
   ALOGE_IF(!result.IsSuccess(), "Failed to set display active: %s. err=%d",
            enabled ? "enabled" : "disabled", result.GetStatus().error_code);
-  // If setting to |enabled|, log the error and return true. The next frame
-  // update will try to set it to active again.
-  if (!result.IsSuccess() && !enabled) {
-    return HwcDisplay::Error::kBadParameter;
+  // If setting to |enabled|, log the error and stage the power mode so the
+  // next frame update retries activating the display.
+  if (!result.IsSuccess()) {
+    if (!enabled) {
+      return HwcDisplay::Error::kBadParameter;
+    }
+    staged_power_mode_ = mode;
+    return HwcDisplay::Error::kNone;
   }
+  staged_power_mode_.reset();
   // Clear the VSyncWorker callback directly so VSync events stop firing while
   // the display is powered off, while preserving vsync_event_en_ to restore
   // callbacks when the display is powered back on.
@@ -801,21 +844,40 @@ bool HwcDisplay::GetDisplayEnabled() const {
   return GetPipe().atomic_state_manager->IsActive();
 }
 
-void HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
+bool HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   Deinit();
 
   pipeline_ = std::move(pipeline);
 
   if (pipeline_ != nullptr || handle_ == kPrimaryDisplay) {
     bool success = Init();
-    ALOGE_IF(!success, "Failed to init HwcDisplay after setting pipeline.");
+    if (!success) {
+      ALOGE("Failed to init HwcDisplay after setting pipeline.");
+      // Clean up partial state and detach the failed pipeline. External
+      // displays remain unbound so ResourceManager can retry on a later hotplug
+      // uevent (e.g. after a transient 0-mode EDID/AUX read failure resolves),
+      // whereas kPrimaryDisplay must re-initialize in headless mode so
+      // SurfaceFlinger always has an active primary display.
+      Deinit();
+      pipeline_.reset();
+      if (handle_ == kPrimaryDisplay) {
+        ALOGI(
+            "Re-initializing primary display in headless mode after pipeline "
+            "init failure.");
+        Init();
+        hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+      }
+      return false;
+    }
     hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
     if (pipeline_) {
       LogModesOnHotplug();
     }
-  } else {
-    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+    return true;
   }
+
+  hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  return true;
 }
 
 void HwcDisplay::Deinit() {
@@ -839,6 +901,7 @@ void HwcDisplay::Deinit() {
     ExecuteAtomicCommit(a_args);
 
     validated_composition_.reset();
+    staged_power_mode_.reset();
     flatcon_.reset();
     hdcpcon_.reset();
     backlight_controller_.reset();
@@ -1080,13 +1143,17 @@ bool HwcDisplay::Init() {
 
   if (SetConfig(configs_.preferred_config_id) !=
       HwcDisplay::ConfigError::kNone) {
+    ALOGW(
+        "Failed to set preferred config %u during Init on display %d; keeping "
+        "display initialized for subsequent userspace modesets.",
+        configs_.preferred_config_id, static_cast<int>(handle_));
+    staged_power_mode_ = PowerMode::kOn;
     if (boot_state == BootAnimationState::kActive) {
       SetBootAnimationState(BootAnimationState::kInactive);
       if (hwc_ != nullptr) {
         hwc_->StopEarlyBootAnimation();
       }
     }
-    return false;
   }
 
   if (!IsInHeadlessMode() && GetPipe().connector->Get()->IsInternal()) {
@@ -1504,6 +1571,24 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.seamless = true;
   }
 
+  // If enabling the display failed in Init() or SetPowerMode(),
+  // staged_power_mode_ holds the pending power mode so the next frame update
+  // retries activating the CRTC as a blocking full modeset with a valid
+  // display_mode.
+  if (staged_power_mode_) {
+    if (!a_args.display_mode) {
+      const auto *current_config = GetCurrentConfig();
+      if (current_config == nullptr) {
+        return std::nullopt;
+      }
+      a_args.display_mode = current_config->mode;
+      a_args.display_config_id = current_config->id;
+    }
+    a_args.power_mode = staged_power_mode_;
+    a_args.seamless = false;
+    a_args.blocking = true;
+  }
+
   auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
                              : HdcpController::HdcpState::kUndesired;
   if (hdcp_state == HdcpController::HdcpState::kDesired) {
@@ -1681,6 +1766,9 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
 void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
                                     const AtomicCommitResult &result) {
   writeback_complete_fence_ = result.writeback_complete_fence;
+  if (a_args.power_mode) {
+    staged_power_mode_.reset();
+  }
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.
     uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
@@ -1700,6 +1788,15 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
     active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
     staged_mode_config_id_.reset();
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
+    // When a modeset commit is executed alongside a power transition (such as
+    // CreateModesetCommit() rather than a seamless frame-update modeset that
+    // already carries the client's validated composition), invalidate the
+    // cached composition and request a refresh so SurfaceFlinger presents a
+    // fresh frame for the newly active configuration.
+    if (a_args.power_mode.has_value()) {
+      last_presented_composition_.Reset();
+      hwc_->SendRefreshEventToClient(handle_);
+    }
   }
 
   if (a_args.hdcp_content_type.has_value() ||
@@ -1912,6 +2009,68 @@ auto HwcDisplay::GetWritebackBufferFormat() const -> BufferFormat {
                                              : BufferFormat::kRgba8888;
 }
 
+bool HwcDisplay::CanReuseLayerForModeset(uint32_t width,
+                                         uint32_t height) const {
+  const HwcDisplayConfig *active_config = GetCurrentConfig();
+  // Reuse an existing layer only when the CRTC is already active at the
+  // target resolution. After a teardown (power-off), cached buffers may
+  // contain stale content that we do not want to rescan on modeset.
+  return active_config != nullptr &&
+         GetPipe().atomic_state_manager->IsActive() &&
+         active_config->mode.GetRawMode().hdisplay == width &&
+         active_config->mode.GetRawMode().vdisplay == height;
+}
+
+std::optional<LayerData> HwcDisplay::FindFullScreenDeviceLayerForModeset(
+    uint32_t width, uint32_t height) const {
+  for (const HwcLayer *layer : GetOrderLayersByZPos()) {
+    if (!IsUnscaledFullScreenDeviceLayer(*layer, width, height)) {
+      continue;
+    }
+    LayerData modeset_layer_data = layer->GetLayerData();
+    // Clear acquire_fence because the layer buffer was already acquired and
+    // presented on a previous frame.
+    modeset_layer_data.acquire_fence = {};
+    return modeset_layer_data;
+  }
+  return std::nullopt;
+}
+
+std::optional<LayerData> HwcDisplay::GetExistingModesetLayerData(
+    uint32_t width, uint32_t height) const {
+  if (!CanReuseLayerForModeset(width, height)) {
+    return std::nullopt;
+  }
+
+  // Prefer client_layer_ immediately only when client composition is active
+  // on the current frame. During pure DEVICE composition
+  // (!NeedsClientLayerUpdate()), client_layer_ is either unpopulated or holds
+  // a stale client target buffer from an earlier CLIENT-composited frame.
+  const bool is_client_composition_active = NeedsClientLayerUpdate() ||
+                                            layers_.empty();
+  if (is_client_composition_active && client_layer_.IsLayerUsableAsDevice()) {
+    ALOGV("Use existing client_layer for config.");
+    return client_layer_.GetLayerData();
+  }
+
+  // Search active layers for an unscaled full-screen DEVICE layer matching
+  // the target mode dimensions so same-resolution modesets (such as
+  // refresh-rate switches on external displays) continue scanning out the
+  // active buffer rather than flashing a stale client target or a zero-filled
+  // dumb buffer.
+  if (auto device_layer = FindFullScreenDeviceLayerForModeset(width, height)) {
+    ALOGV("Use existing device layer for config.");
+    return device_layer;
+  }
+
+  if (client_layer_.IsLayerUsableAsDevice()) {
+    ALOGV("Use existing client_layer for config.");
+    return client_layer_.GetLayerData();
+  }
+
+  return std::nullopt;
+}
+
 std::optional<LayerData> HwcDisplay::GetModesetLayerData(
     const HwcDisplayConfig *new_config) {
   if (IsInHeadlessMode()) {
@@ -1921,16 +2080,9 @@ std::optional<LayerData> HwcDisplay::GetModesetLayerData(
   const uint32_t new_width = new_config->mode.GetRawMode().hdisplay;
   const uint32_t new_height = new_config->mode.GetRawMode().vdisplay;
 
-  const HwcDisplayConfig *active_config = GetCurrentConfig();
-  if (client_layer_.IsLayerUsableAsDevice() && active_config &&
-      // Reuse the client layer only when the CRTC is already active. After a
-      // teardown (power-off), the cached buffer may contain stale content that
-      // we do not want to rescan on modeset.
-      GetPipe().atomic_state_manager->IsActive() &&
-      active_config->mode.GetRawMode().hdisplay == new_width &&
-      active_config->mode.GetRawMode().vdisplay == new_height) {
-    ALOGV("Use existing client_layer for config.");
-    return client_layer_.GetLayerData();
+  if (auto existing_layer = GetExistingModesetLayerData(new_width,
+                                                        new_height)) {
+    return existing_layer;
   }
 
   ALOGV("Allocate modeset buffer.");

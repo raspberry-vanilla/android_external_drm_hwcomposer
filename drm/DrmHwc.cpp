@@ -169,7 +169,15 @@ bool DrmHwc::BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
         pipeline->connector->Get()->GetName().c_str(), (int)disp_handle,
         disp_handle == kPrimaryDisplay ? " (Primary)" : "");
 
-  displays_[disp_handle]->SetPipeline(pipeline);
+  if (!displays_[disp_handle]->SetPipeline(pipeline)) {
+    // Remove the uninitialized external HwcDisplay entry so it is not exposed
+    // to SurfaceFlinger; kPrimaryDisplay is retained because SetPipeline()
+    // falls back to headless mode on handle 0.
+    if (disp_handle != kPrimaryDisplay) {
+      displays_.erase(disp_handle);
+    }
+    return false;
+  }
   display_handles_[pipeline] = disp_handle;
 
   RequestHdcpNegotiation(disp_handle);

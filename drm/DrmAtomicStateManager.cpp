@@ -133,7 +133,11 @@ auto DrmAtomicStateManager::GetOrCreateBlob(const Key &key,
 
 DrmAtomicStateManager::~DrmAtomicStateManager() {
   StopThread();
-  thread_.join();
+  // Subclasses in unit tests may construct DrmAtomicStateManager directly
+  // without calling Init() to start thread_.
+  if (thread_.joinable()) {
+    thread_.join();
+  }
 }
 
 void DrmAtomicStateManager::WaitLastFrame() {

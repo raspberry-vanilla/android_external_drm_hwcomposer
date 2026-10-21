@@ -115,6 +115,10 @@ class DrmAtomicStateManager : public AtomicStateManager {
     return pipe_->device;
   }
 
+ protected:
+  explicit DrmAtomicStateManager(DrmDisplayPipeline *pipe) : pipe_(pipe) {
+  }
+
  private:
   void StopThread();
 

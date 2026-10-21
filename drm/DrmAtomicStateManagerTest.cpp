@@ -17,18 +17,27 @@
 #include "drm/DrmAtomicStateManager.h"
 
 #include <gtest/gtest.h>
+
+#include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
+#include <cerrno>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/AtomicCommitSink.h"
 #include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
+#include "drm/DrmAtomicCommitSink.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
@@ -49,6 +58,64 @@ constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
 constexpr uint32_t kTestVRefresh = 60;
 constexpr int kRapidCreateDestroyCount = 16;
+
+class RecordingAtomicStateManager : public DrmAtomicStateManager {
+ public:
+  explicit RecordingAtomicStateManager(DrmDisplayPipeline* pipe)
+      : DrmAtomicStateManager(pipe) {
+  }
+
+  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
+      AtomicCommitArgs& args) override {
+    recorded_args_.push_back(args);
+    return DrmAtomicStateManager::GetAtomicModeReqForArgs(args);
+  }
+
+  const std::vector<AtomicCommitArgs>& GetRecordedArgs() const {
+    return recorded_args_;
+  }
+
+ private:
+  std::vector<AtomicCommitArgs> recorded_args_;
+};
+
+class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
+ public:
+  using CommitHandler = std::function<int(int fd, drmModeAtomicReqPtr req,
+                                          uint32_t flags, void* user_data,
+                                          size_t attempt)>;
+
+  explicit FakeKernelDrmAtomicCommitSink(CommitHandler handler)
+      : handler_(std::move(handler)) {
+  }
+
+  size_t GetTotalCalls() const {
+    return total_calls_;
+  }
+
+  size_t GetNonBlockCalls() const {
+    return nonblock_calls_;
+  }
+
+ protected:
+  int AtomicCommit(int fd, drmModeAtomicReqPtr req, uint32_t flags,
+                   void* user_data) const override {
+    const size_t attempt = total_calls_++;
+    if ((flags & DRM_MODE_ATOMIC_NONBLOCK) != 0U) {
+      ++nonblock_calls_;
+    }
+    const int err = handler_(fd, req, flags, user_data, attempt);
+    if (err == -1 && errno != 0) {
+      return -errno;
+    }
+    return err;
+  }
+
+ private:
+  CommitHandler handler_;
+  mutable size_t total_calls_ = 0;
+  mutable size_t nonblock_calls_ = 0;
+};
 
 }  // namespace
 
@@ -450,6 +517,224 @@ TEST_F(DrmAtomicStateManagerTest,
   orig_args.composition = req_args.composition;
   state_manager->FinishPendingRequest(orig_args, std::move(req));
   state_manager->WaitLastFrame();
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkPreservesNegativeErrnoFromDrmModeAtomicCommit) {
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan(kTestFbId1);
+
+  const CommitStatus test_status = sink.TestAtomicCommit(
+      {{state_manager.get(), modeset_args}});
+  EXPECT_FALSE(test_status.success);
+  EXPECT_LT(test_status.error_code, 0);
+
+  const auto exec_status = sink.ExecuteAtomicCommit(
+      {{state_manager.get(), modeset_args}});
+  EXPECT_FALSE(exec_status.IsSuccess());
+  EXPECT_EQ(exec_status.GetStatus().error_code, test_status.error_code);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkRetriesNonBlockingCommitOnEbusyWhenErrnoClobbered) {
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = state_manager->GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  state_manager->FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Simulate drmModeAtomicCommit returning -EBUSY while thread-local errno is
+  // clobbered to EBADF (e.g. by ~ScopedTrace() or drmFree()) on both the
+  // initial non-blocking commit (attempt 0) and a subsequent retry commit
+  // (attempt 2), before succeeding on attempt 3.
+  FakeKernelDrmAtomicCommitSink sink_impl(
+      [](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+         void* /*user_data*/, size_t attempt) -> int {
+        if (attempt == 0U) {
+          errno = EBADF;
+          return -EBUSY;
+        }
+        if (attempt == 1U) {
+          errno = EBUSY;
+          return -1;
+        }
+        if (attempt == 2U) {
+          errno = EBADF;
+          return -EBUSY;
+        }
+        errno = EBADF;
+        return 0;
+      });
+  AtomicCommitSink& sink = sink_impl;
+
+  AtomicCommitArgs nonblock_args{};
+  nonblock_args.blocking = false;
+  nonblock_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  const auto res = sink.ExecuteAtomicCommit(
+      {{state_manager.get(), nonblock_args}});
+  EXPECT_TRUE(res.IsSuccess());
+  EXPECT_EQ(sink_impl.GetNonBlockCalls(), 4U);
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 4U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkStopsEbusyRetryOnNonEbusyError) {
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = state_manager->GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  state_manager->FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Non-blocking commit returning -EBUSY on attempt 0 and -EINVAL on attempt 1
+  // (even if thread-local errno remains EBUSY) must stop the EBUSY retry loop
+  // immediately after attempt 1 and return -EINVAL.
+  FakeKernelDrmAtomicCommitSink sink_einval(
+      [](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t flags,
+         void* /*user_data*/, size_t attempt) -> int {
+        if ((flags & DRM_MODE_ATOMIC_NONBLOCK) == 0U) {
+          return 0;
+        }
+        if (attempt == 0U) {
+          errno = EBUSY;
+          return -EBUSY;
+        }
+        if (attempt == 1U) {
+          errno = EBUSY;
+          return -EINVAL;
+        }
+        return 0;
+      });
+  AtomicCommitSink& einval_ref = sink_einval;
+
+  AtomicCommitArgs nonblock_args{};
+  nonblock_args.blocking = false;
+  nonblock_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  const auto einval_res = einval_ref.ExecuteAtomicCommit(
+      {{state_manager.get(), nonblock_args}});
+  EXPECT_FALSE(einval_res.IsSuccess());
+  EXPECT_EQ(einval_res.GetStatus().error_code, -EINVAL);
+  EXPECT_EQ(sink_einval.GetNonBlockCalls(), 2U);
+  EXPECT_EQ(sink_einval.GetTotalCalls(), 3U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkDoesNotRetryBlockingCommitOnEbusy) {
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = state_manager->GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  state_manager->FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  FakeKernelDrmAtomicCommitSink sink_blocking(
+      [](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+         void* /*user_data*/, size_t attempt) -> int {
+        if (attempt == 0U) {
+          errno = EBUSY;
+          return -EBUSY;
+        }
+        return 0;
+      });
+  AtomicCommitSink& blocking_ref = sink_blocking;
+
+  AtomicCommitArgs blocking_args{};
+  blocking_args.blocking = true;
+  blocking_args.composition = CreateSinglePlanePlan(kTestFbId3);
+
+  const auto blocking_res = blocking_ref.ExecuteAtomicCommit(
+      {{state_manager.get(), blocking_args}});
+  EXPECT_FALSE(blocking_res.IsSuccess());
+  EXPECT_EQ(blocking_res.GetStatus().error_code, -EBUSY);
+  EXPECT_EQ(sink_blocking.GetNonBlockCalls(), 0U);
+  EXPECT_EQ(sink_blocking.GetTotalCalls(), 2U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkSkipsPlaneCleanupOnFailedModeset) {
+  RecordingAtomicStateManager recording_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = recording_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  recording_manager.FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(recording_manager.IsActive());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 1U);
+
+  // A failed modeset commit on an active display must not trigger a follow-up
+  // plane-disable commit in CleanUpFailedRequest().
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs failed_modeset{};
+  failed_modeset.blocking = true;
+  failed_modeset.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                  kTestVRefresh);
+  failed_modeset.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  const auto modeset_res = sink.ExecuteAtomicCommit(
+      {{&recording_manager, failed_modeset}});
+  EXPECT_FALSE(modeset_res.IsSuccess());
+  EXPECT_EQ(recording_manager.GetRecordedArgs().size(), 2U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkCleansUpPlanesOnFailedPageflip) {
+  RecordingAtomicStateManager recording_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = recording_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  recording_manager.FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(recording_manager.IsActive());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 1U);
+
+  // A failed regular composition commit (no display_mode, power_mode, or
+  // teardown) on an active display must trigger CleanUpFailedRequest() with an
+  // empty composition plan so prior release fences can signal.
+  DrmAtomicCommitSink sink_impl;
+  AtomicCommitSink& sink = sink_impl;
+  AtomicCommitArgs failed_pageflip{};
+  failed_pageflip.blocking = true;
+  failed_pageflip.composition = CreateSinglePlanePlan(kTestFbId3);
+
+  const auto pageflip_res = sink.ExecuteAtomicCommit(
+      {{&recording_manager, failed_pageflip}});
+  EXPECT_FALSE(pageflip_res.IsSuccess());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 3U);
+  ASSERT_NE(recording_manager.GetRecordedArgs().back().composition, nullptr);
+  EXPECT_TRUE(
+      recording_manager.GetRecordedArgs().back().composition->plan.empty());
 }
 
 }  // namespace android::drm_hwcomposer
