@@ -563,8 +563,11 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
     frontend_interface_->FinalizeDisplayBinding();
 
     // Release MainLock during DP link teardown wait to avoid
-    // blocking other display operations.
+    // blocking other display operations, and flush the disconnect event
+    // immediately so SurfaceFlinger does not wait for the 1s link teardown
+    // sleep before retiring the old display configuration.
     lock.unlock();
+    frontend_interface_->FlushHotplugEvents();
 
     // Brief pause for the link to fully go down before reprobing.
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -578,18 +581,27 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
       DetachStalePipelines(stale);
     }
     UpdateFrontendDisplays();
+    lock.unlock();
 
-    edid_recovery_pending_ = false;
+    frontend_interface_->FlushHotplugEvents();
+    {
+      std::scoped_lock recovery_lock(edid_recovery_mutex_);
+      edid_recovery_pending_ = false;
+    }
     ALOGI("Delayed-EDID recovery reprobe complete");
   });
 }
 
 void ResourceManager::CancelDelayedEdidRecovery() {
-  if (edid_recovery_pending_) {
-    {
-      std::lock_guard lock(edid_recovery_mutex_);
+  bool should_notify = false;
+  {
+    std::lock_guard lock(edid_recovery_mutex_);
+    if (edid_recovery_pending_) {
       edid_recovery_pending_ = false;
+      should_notify = true;
     }
+  }
+  if (should_notify) {
     edid_recovery_cv_.notify_all();
   }
   if (edid_recovery_thread_.joinable()) {

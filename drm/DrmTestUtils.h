@@ -305,8 +305,9 @@ class FakeDrmConnector : public DrmConnector {
   FakeDrmConnector(DrmDevice* dev, uint32_t encoder_id,
                    bool is_external = false, uint32_t width = 0,
                    uint32_t height = 0,
-                   uint32_t connector_id = kFakeConnectorBaseId)
-      : DrmConnector(nullptr, dev, 0),
+                   uint32_t connector_id = kFakeConnectorBaseId,
+                   uint32_t index = 0)
+      : DrmConnector(nullptr, dev, index),
         connector_id_(connector_id),
         encoder_id_(encoder_id),
         is_external_(is_external),
@@ -315,6 +316,26 @@ class FakeDrmConnector : public DrmConnector {
     InitFakeDrmProperty(crtc_id_property_, connector_id_,
                         kFakeConnectorCrtcPropId, "CRTC_ID",
                         DRM_MODE_PROP_OBJECT, 0);
+  }
+
+  void SetEdidBlobData(std::vector<uint8_t> edid_bytes) {
+    edid_bytes_ = std::move(edid_bytes);
+  }
+
+  DrmModePropertyBlobUnique GetEdidBlob() override {
+    if (edid_bytes_.empty()) {
+      return DrmConnector::GetEdidBlob();
+    }
+    auto* blob = new drmModePropertyBlobRes{};
+    auto* data = new uint8_t[edid_bytes_.size()];
+    std::memcpy(data, edid_bytes_.data(), edid_bytes_.size());
+    blob->id = 1;
+    blob->length = static_cast<uint32_t>(edid_bytes_.size());
+    blob->data = data;
+    return {blob, [](drmModePropertyBlobRes* it) {
+              delete[] static_cast<uint8_t*>(it->data);
+              delete it;
+            }};
   }
 
   uint32_t GetId() const override {
@@ -415,6 +436,7 @@ class FakeDrmConnector : public DrmConnector {
   int update_modes_result_ = 0;
   std::string name_ = "FakeConnector-1";
   bool content_protection_enabled_simulated_ = false;
+  std::vector<uint8_t> edid_bytes_;
 };
 
 class FakeDrmEncoder : public DrmEncoder {
@@ -642,12 +664,12 @@ class FakeDrmDevice : public DrmDevice {
     planes_.emplace_back(std::move(plane));
   }
 
-  void AddPipelineResources(bool is_external = false) {
-    AddPipelineResourcesWithModes({CreateFakeDrmMode()}, is_external);
+  FakeDrmConnector* AddPipelineResources(bool is_external = false) {
+    return AddPipelineResourcesWithModes({CreateFakeDrmMode()}, is_external);
   }
 
-  void AddPipelineResourcesWithModes(std::vector<DrmMode> modes,
-                                     bool is_external = false) {
+  FakeDrmConnector* AddPipelineResourcesWithModes(std::vector<DrmMode> modes,
+                                                  bool is_external = false) {
     AddEncoder(std::make_unique<FakeDrmEncoder>(/*id=*/next_id_,
                                                 /*crtc_id=*/next_id_));
     AddCrtc(std::make_unique<FakeDrmCrtc>(/*id=*/next_id_ + 1));
@@ -657,8 +679,10 @@ class FakeDrmDevice : public DrmDevice {
                                                         kFakeConnectorMmWidth,
                                                         kFakeConnectorMmHeight,
                                                         kFakeConnectorBaseId +
-                                                            next_id_);
+                                                            next_id_,
+                                                        next_id_);
     connector->SetModes(std::move(modes));
+    auto* connector_ptr = connector.get();
     AddConnector(std::move(connector));
     encoders_.back() = std::make_unique<FakeDrmEncoder>(
         /*id=*/next_id_, /*crtc_id=*/next_id_ + 1);
@@ -666,6 +690,7 @@ class FakeDrmDevice : public DrmDevice {
                                             /*is_valid=*/true,
                                             kFakePlaneBaseId + next_id_));
     ++next_id_;
+    return connector_ptr;
   }
 
  private:

@@ -866,4 +866,67 @@ TEST_F(DrmHwcTest,
   hwc.FinalizeDisplayBinding();
 }
 
+TEST_F(DrmHwcTest, DelayedEdidRecoveryFlushesHotplugEventsToClient) {
+  const ScopedTestProperty recovery_delay("vendor.hwc.delayed_edid_recovery_ms",
+                                          "10");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+
+  // Configure the external connector with a valid 128-byte EDID v1.3 block
+  // whose manufacturer ID is "NVT" (0x3A, 0xD4), which matches
+  // HasDelayedEdidQuirk().
+  constexpr size_t kEdidSize = 128;
+  constexpr size_t kEdidHeaderSize = 8;
+  constexpr size_t kEdidMfgByte0Index = 8;
+  constexpr size_t kEdidMfgByte1Index = 9;
+  constexpr size_t kEdidVersionIndex = 18;
+  constexpr size_t kEdidRevisionIndex = 19;
+  constexpr size_t kEdidChecksumIndex = 127;
+  constexpr uint8_t kNvtMfgByte0 = 0x3A;
+  constexpr uint8_t kNvtMfgByte1 = 0xD4;
+  constexpr uint8_t kEdidVersion1 = 1;
+  constexpr uint8_t kEdidRevision3 = 3;
+  std::vector<uint8_t> nvt_edid(kEdidSize, 0);
+  constexpr uint8_t kEdidHeader[kEdidHeaderSize] = {0x00, 0xFF, 0xFF, 0xFF,
+                                                    0xFF, 0xFF, 0xFF, 0x00};
+  std::memcpy(nvt_edid.data(), kEdidHeader, sizeof(kEdidHeader));
+  nvt_edid[kEdidMfgByte0Index] = kNvtMfgByte0;
+  nvt_edid[kEdidMfgByte1Index] = kNvtMfgByte1;
+  nvt_edid[kEdidVersionIndex] = kEdidVersion1;
+  nvt_edid[kEdidRevisionIndex] = kEdidRevision3;
+  uint8_t sum = 0;
+  for (size_t i = 0; i < kEdidChecksumIndex; ++i) {
+    sum = static_cast<uint8_t>(sum + nvt_edid[i]);
+  }
+  nvt_edid[kEdidChecksumIndex] = static_cast<uint8_t>(0U - sum);
+  ext_conn->SetEdidBlobData(std::move(nvt_edid));
+
+  AddDeviceToResMan(std::move(shared_dev));
+  RunUpdateFrontendDisplays();
+  // Clear FakeAtomicCommitSink history so its stored AtomicCommitArgs copies do
+  // not hold a shared_ptr reference to BindingOwner<DrmPlane> across unbind.
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  hwc.hotplug_events.clear();
+
+  TriggerDelayedEdidRecovery();
+  WaitDelayedEdidRecovery();
+
+  // MaybeScheduleDelayedEdidRecovery() must flush the queued kDisconnected and
+  // kConnected events to the HWC client on its own when the recovery thread
+  // finishes rebinding the display.
+  EXPECT_EQ(hwc.hotplug_events.size(), 2U);
+  if (hwc.hotplug_events.size() >= 2U) {
+    EXPECT_EQ(hwc.hotplug_events[0].second,
+              DrmHwc::DisplayStatus::kDisconnected);
+    EXPECT_EQ(hwc.hotplug_events[1].second, DrmHwc::DisplayStatus::kConnected);
+  }
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
 }  // namespace android::drm_hwcomposer

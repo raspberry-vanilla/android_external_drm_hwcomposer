@@ -52,7 +52,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   virtual ~DrmConnector();
 
   int UpdateEdidProperty();
-  auto GetEdidBlob() -> DrmModePropertyBlobUnique;
+  virtual auto GetEdidBlob() -> DrmModePropertyBlobUnique;
 
   auto GetDev() const -> DrmDevice & {
     return *drm_;
