@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <xf86drmMode.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -128,6 +130,7 @@ class DrmDevice {
   virtual auto GetResources() const -> DrmModeResUnique;
   virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
       -> std::unique_ptr<DrmConnector>;
+  virtual auto CommitAtomicReset(drmModeAtomicReq &pset) -> int;
 
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);

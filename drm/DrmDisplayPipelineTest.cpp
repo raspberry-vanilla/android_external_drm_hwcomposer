@@ -361,4 +361,133 @@ TEST_F(DrmDisplayPipelineTest,
   }
 }
 
+TEST_F(
+    DrmDisplayPipelineTest,
+    ResetConnectorsAndCrtcsDisablesActivePlanesAndSkipsVirtualCwbConnectors) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kCrtcId = 200;
+  constexpr uint32_t kVirtualCrtcId = 201;
+  constexpr uint32_t kPrimaryPlaneId = 300;
+  constexpr uint32_t kOverlayPlaneId = 301;
+  constexpr uint32_t kIdlePlaneId = 302;
+  constexpr uint32_t kVirtualPlaneId = 303;
+  constexpr uint32_t kEdpEncoderId = 10;
+  constexpr uint32_t kVirtualEncoderId = 11;
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kVirtualCwbConnId = 101;
+  constexpr uint64_t kStaleBootFbId = 999;
+  constexpr uint64_t kStaleModeBlobId = 888;
+
+  auto crtc = std::make_unique<FakeDrmCrtc>(kCrtcId, /*index=*/0);
+  crtc->GetActiveProperty().UpdateValue(1);
+  crtc->GetModeProperty().UpdateValue(kStaleModeBlobId);
+  auto* crtc_ptr = crtc.get();
+  dev.AddCrtc(std::move(crtc));
+
+  auto virtual_crtc = std::make_unique<FakeDrmCrtc>(kVirtualCrtcId,
+                                                    /*index=*/1);
+  virtual_crtc->GetActiveProperty().UpdateValue(1);
+  virtual_crtc->GetModeProperty().UpdateValue(kStaleModeBlobId);
+  auto* virtual_crtc_ptr = virtual_crtc.get();
+  dev.AddCrtc(std::move(virtual_crtc));
+
+  auto edp_conn = std::make_unique<FakeDrmConnector>(&dev, kEdpEncoderId,
+                                                     /*is_external=*/false,
+                                                     kFakeConnectorMmWidth,
+                                                     kFakeConnectorMmHeight,
+                                                     kEdpConnId);
+  edp_conn->InitRawConnector(DRM_MODE_CONNECTOR_eDP);
+  edp_conn->SetCrtcIdPropertyValue(kCrtcId);
+  auto* edp_conn_ptr = edp_conn.get();
+  dev.AddConnector(std::move(edp_conn));
+
+  auto virtual_cwb_conn = std::make_unique<
+      FakeDrmConnector>(&dev, kVirtualEncoderId, /*is_external=*/false,
+                        kFakeConnectorMmWidth, kFakeConnectorMmHeight,
+                        kVirtualCwbConnId);
+  virtual_cwb_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+  virtual_cwb_conn->SetName("Virtual-1");
+  virtual_cwb_conn->SetCrtcIdPropertyValue(kVirtualCrtcId);
+  dev.AddConnector(std::move(virtual_cwb_conn));
+
+  auto primary_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_PRIMARY,
+                                                      /*is_valid=*/true,
+                                                      kPrimaryPlaneId);
+  primary_plane->SetCrtcIdPropertyValue(kCrtcId);
+  primary_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* primary_plane_ptr = primary_plane.get();
+  dev.AddPlane(std::move(primary_plane));
+
+  auto overlay_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_OVERLAY,
+                                                      /*is_valid=*/true,
+                                                      kOverlayPlaneId);
+  overlay_plane->SetCrtcIdPropertyValue(kCrtcId);
+  overlay_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* overlay_plane_ptr = overlay_plane.get();
+  dev.AddPlane(std::move(overlay_plane));
+
+  auto idle_plane = std::make_unique<FakeDrmPlane>(dev, DRM_PLANE_TYPE_OVERLAY,
+                                                   /*is_valid=*/true,
+                                                   kIdlePlaneId);
+  idle_plane->SetCrtcIdPropertyValue(0);
+  idle_plane->SetFbIdPropertyValue(0);
+  dev.AddPlane(std::move(idle_plane));
+
+  auto virtual_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_PRIMARY,
+                                                      /*is_valid=*/true,
+                                                      kVirtualPlaneId);
+  virtual_plane->SetCrtcIdPropertyValue(kVirtualCrtcId);
+  virtual_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* virtual_plane_ptr = virtual_plane.get();
+  dev.AddPlane(std::move(virtual_plane));
+
+  dev.ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kPrimaryPlaneId,
+                                             kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kPrimaryPlaneId,
+                                             kFakePlaneFbPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kOverlayPlaneId,
+                                             kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kOverlayPlaneId,
+                                             kFakePlaneFbPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kIdlePlaneId,
+                                             kFakePlaneCrtcPropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() redundantly disabled an already-idle plane";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kIdlePlaneId, kFakePlaneFbPropId),
+            std::nullopt);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualCwbConnId,
+                                             kFakeConnectorCrtcPropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() touched Virtual-1 CWB connector on a "
+         "device with a physical internal eDP connector";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualCrtcId,
+                                             kFakeCrtcActivePropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() disabled the CRTC bound to an active "
+         "non-internal virtual CWB connector";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualPlaneId,
+                                             kFakePlaneCrtcPropId),
+            std::nullopt);
+
+  // Verify cached DrmProperty values are synchronized after reset.
+  EXPECT_EQ(edp_conn_ptr->GetCrtcIdProperty().GetValue(), 0ULL);
+  EXPECT_EQ(crtc_ptr->GetActiveProperty().GetValue(), 0ULL);
+  EXPECT_EQ(crtc_ptr->GetModeProperty().GetValue(), 0ULL);
+  EXPECT_EQ(primary_plane_ptr->GetCrtcProperty().GetValue(), 0ULL);
+  EXPECT_EQ(primary_plane_ptr->GetFbProperty().GetValue(), 0ULL);
+  EXPECT_EQ(overlay_plane_ptr->GetCrtcProperty().GetValue(), 0ULL);
+  EXPECT_EQ(overlay_plane_ptr->GetFbProperty().GetValue(), 0ULL);
+  EXPECT_EQ(virtual_crtc_ptr->GetActiveProperty().GetValue(), 1ULL);
+  EXPECT_EQ(virtual_plane_ptr->GetCrtcProperty().GetValue(), kVirtualCrtcId);
+}
+
 }  // namespace android::drm_hwcomposer

@@ -55,6 +55,9 @@ class DrmProperty {
   }
 
   auto GetValue() const -> std::optional<uint64_t>;
+  void UpdateValue(uint64_t value) {
+    value_ = value;
+  }
 
   auto GetEnumValues() const -> std::vector<uint64_t>;
 

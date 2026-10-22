@@ -106,6 +106,9 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   auto &GetCrtcIdProperty() const {
     return crtc_id_property_;
   }
+  auto &GetCrtcIdProperty() {
+    return crtc_id_property_;
+  }
 
   auto &GetEdidProperty() const {
     return edid_property_;

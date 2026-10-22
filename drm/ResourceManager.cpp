@@ -219,7 +219,9 @@ void ResourceManager::Init() {
   }
 
   for (auto &drm : drms_) {
-    drm->ResetConnectorsAndCrtcs();
+    if (!drm->GetBackend().UseBackendHotplug()) {
+      drm->ResetConnectorsAndCrtcs();
+    }
   }
 
   bool use_backend_hotplug = false;

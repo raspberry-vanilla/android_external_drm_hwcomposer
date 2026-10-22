@@ -105,41 +105,47 @@ inline void InitFakeDrmProperty(DrmProperty& prop, uint32_t obj_id,
   prop.Init(nullptr, obj_id, &raw_prop, value);
 }
 
+struct AtomicReqItemView {
+  uint32_t object_id;
+  uint32_t property_id;
+  uint64_t value;
+  uint32_t cursor;
+};
+
+struct AtomicReqView {
+  uint32_t cursor;
+  uint32_t size_items;
+  AtomicReqItemView* items;
+};
+
+inline std::vector<AtomicReqItemView> GetAtomicReqItems(
+    drmModeAtomicReqPtr req) {
+  if (req == nullptr) {
+    return {};
+  }
+  const int cursor = drmModeAtomicGetCursor(req);
+  if (cursor <= 0) {
+    return {};
+  }
+  AtomicReqView view{};
+  std::memcpy(&view, req, sizeof(view));
+  if (view.items == nullptr) {
+    return {};
+  }
+  std::vector<AtomicReqItemView> items(static_cast<size_t>(cursor));
+  std::memcpy(items.data(), view.items,
+              items.size() * sizeof(AtomicReqItemView));
+  return items;
+}
+
 // Inspects the latest value queued for (obj_id, prop_id) inside an uncommitted
 // drmModeAtomicReq by mirroring libdrm's internal _drmModeAtomicReq layout.
 inline std::optional<uint64_t> GetAtomicReqPropertyValue(
     drmModeAtomicReqPtr req, uint32_t obj_id, uint32_t prop_id) {
-  if (req == nullptr) {
-    return std::nullopt;
-  }
-  const int cursor = drmModeAtomicGetCursor(req);
-  if (cursor <= 0) {
-    return std::nullopt;
-  }
-  struct AtomicReqItemView {
-    uint32_t object_id;
-    uint32_t property_id;
-    uint64_t value;
-    uint32_t cursor;
-  };
-  struct AtomicReqView {
-    uint32_t cursor;
-    uint32_t size_items;
-    AtomicReqItemView* items;
-  };
-  AtomicReqView view{};
-  std::memcpy(&view, req, sizeof(view));
-  if (view.items == nullptr) {
-    return std::nullopt;
-  }
   std::optional<uint64_t> result;
-  for (uint32_t i = 0; i < static_cast<uint32_t>(cursor); ++i) {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    if (view.items[i].object_id == obj_id &&
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        view.items[i].property_id == prop_id) {
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      result = view.items[i].value;
+  for (const auto& item : GetAtomicReqItems(req)) {
+    if (item.object_id == obj_id && item.property_id == prop_id) {
+      result = item.value;
     }
   }
   return result;
@@ -496,11 +502,7 @@ class FakeDrmConnector : public DrmConnector {
     modes_ = std::move(modes);
   }
 
-  void SetCrtcIdPropertyValue(uint64_t value) {
-    InitFakeDrmProperty(crtc_id_property_, connector_id_,
-                        kFakeConnectorCrtcPropId, "CRTC_ID",
-                        DRM_MODE_PROP_OBJECT, value);
-  }
+  void SetCrtcIdPropertyValue(uint64_t value);
 
  private:
   const uint32_t connector_id_;
@@ -764,6 +766,15 @@ class FakeDrmDevice : public DrmDevice {
     resource_connector_ids_ = std::move(connector_ids);
   }
 
+  std::optional<uint64_t> GetLastResetReqPropertyValue(uint32_t obj_id,
+                                                       uint32_t prop_id) const {
+    auto it = last_reset_req_values_.find({obj_id, prop_id});
+    if (it != last_reset_req_values_.end()) {
+      return it->second;
+    }
+    return std::nullopt;
+  }
+
   void AddConnector(std::unique_ptr<DrmConnector> connector) {
     connectors_.emplace_back(std::move(connector));
   }
@@ -847,6 +858,14 @@ class FakeDrmDevice : public DrmDevice {
     return conn;
   }
 
+  int CommitAtomicReset(drmModeAtomicReq& pset) override {
+    last_reset_req_values_.clear();
+    for (const auto& item : GetAtomicReqItems(&pset)) {
+      last_reset_req_values_[{item.object_id, item.property_id}] = item.value;
+    }
+    return 0;
+  }
+
  private:
   uint32_t next_id_ = 0;
   mutable uint32_t next_blob_id_ = kFakeBlobBaseId;
@@ -857,6 +876,7 @@ class FakeDrmDevice : public DrmDevice {
   FakeDrmFbImporter* fake_importer_ = nullptr;
   std::map<std::pair<uint32_t, std::string>, FakePropertyDef> fake_properties_;
   std::vector<uint32_t> resource_connector_ids_;
+  std::map<std::pair<uint32_t, uint32_t>, uint64_t> last_reset_req_values_;
 };
 
 inline void FakeDrmConnector::SetLinkStatusPropertyValue(uint64_t value) {
@@ -866,6 +886,16 @@ inline void FakeDrmConnector::SetLinkStatusPropertyValue(uint64_t value) {
   if (prop_hook_) {
     prop_hook_(connector_id_, "link-status", kFakeLinkStatusPropId,
                DRM_MODE_PROP_ENUM, value);
+  }
+}
+
+inline void FakeDrmConnector::SetCrtcIdPropertyValue(uint64_t value) {
+  InitFakeDrmProperty(crtc_id_property_, connector_id_,
+                      kFakeConnectorCrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT,
+                      value);
+  if (prop_hook_) {
+    prop_hook_(connector_id_, "CRTC_ID", kFakeConnectorCrtcPropId,
+               DRM_MODE_PROP_OBJECT, value);
   }
 }
 

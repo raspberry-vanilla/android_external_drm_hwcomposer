@@ -54,8 +54,14 @@ class DrmCrtc : public PipelineBindable<DrmCrtc> {
   auto &GetActiveProperty() const {
     return active_property_;
   }
+  auto &GetActiveProperty() {
+    return active_property_;
+  }
 
   auto &GetModeProperty() const {
+    return mode_property_;
+  }
+  auto &GetModeProperty() {
     return mode_property_;
   }
 
