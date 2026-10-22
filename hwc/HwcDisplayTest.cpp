@@ -1779,4 +1779,44 @@ TEST_F(HwcDisplayTest,
             HwcDisplay::ConfigError::kNone);
 }
 
+TEST_F(
+    HwcDisplayTest,
+    InternalDisplayInitWithNearOneHzPreferredModeSecondPreservesValidConfig) {
+  constexpr uint32_t kClock5994HzKhz = 119880;
+  constexpr uint32_t kClock6000HzKhz = 120000;
+  drmModeModeInfo raw_5994{};
+  raw_5994.hdisplay = kFhdWidth;
+  raw_5994.vdisplay = kFhdHeight;
+  raw_5994.htotal = kFakeModeHTotal;
+  raw_5994.vtotal = kFakeModeVTotal;
+  raw_5994.vrefresh = kRefresh60Hz;
+  raw_5994.clock = kClock5994HzKhz;  // 119880 * 1000 / (2000 * 1000) = 59.94 Hz
+  raw_5994.type = 0;
+  std::strncpy(raw_5994.name, "1080p59_94", DRM_DISPLAY_MODE_LEN - 1);
+
+  drmModeModeInfo raw_6000{};
+  raw_6000.hdisplay = kFhdWidth;
+  raw_6000.vdisplay = kFhdHeight;
+  raw_6000.htotal = kFakeModeHTotal;
+  raw_6000.vtotal = kFakeModeVTotal;
+  raw_6000.vrefresh = kRefresh60Hz;
+  raw_6000.clock = kClock6000HzKhz;  // 120000 * 1000 / (2000 * 1000) = 60.00 Hz
+  raw_6000.type = DRM_MODE_TYPE_PREFERRED;
+  std::strncpy(raw_6000.name, "1080p60", DRM_DISPLAY_MODE_LEN - 1);
+
+  auto pipeline = CreatePipelineWithModes({DrmMode(&raw_5994),
+                                           DrmMode(&raw_6000)},
+                                          /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  ASSERT_NE(display.GetCurrentConfig(), nullptr)
+      << "HwcDisplay::GetCurrentConfig() returned nullptr after SanitizeGroups "
+         "erased the preferred/active config ID during internal display Init()";
+  EXPECT_STREQ(display.GetCurrentConfig()->mode.GetRawMode().name, "1080p60");
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+}
+
 }  // namespace android::drm_hwcomposer

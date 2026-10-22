@@ -212,6 +212,31 @@ bool HwcDisplayConfigs::SanitizeGroups() {
   constexpr float kMinFpsDelta = 1.0;
   std::unordered_set<ConfigId> configs_to_erase;
 
+  // First pass: protect preferred_config_id by pruning any other config in the
+  // same group and output_type whose refresh rate is within kMinFpsDelta of the
+  // preferred config first, so transitive chains (e.g. 59.40Hz, 59.94Hz,
+  // 60.00Hz preferred) cannot allow an intermediate config to survive and
+  // subsequently erase preferred_config_id.
+  auto pref_it = hwc_configs.find(preferred_config_id);
+  if (pref_it != hwc_configs.end()) {
+    const auto &pref_cfg = pref_it->second;
+    for (const auto &[id, cfg] : hwc_configs) {
+      if (id == preferred_config_id || cfg.group_id != pref_cfg.group_id ||
+          cfg.output_type != pref_cfg.output_type) {
+        continue;
+      }
+      if (fabsf(cfg.mode.GetVRefresh() - pref_cfg.mode.GetVRefresh()) <
+          kMinFpsDelta) {
+        ALOGI(
+            "Group %i: Skipping display mode %s (Refresh rate value is "
+            "too close to preferred mode %s)",
+            cfg.group_id, cfg.mode.GetName().c_str(),
+            pref_cfg.mode.GetName().c_str());
+        configs_to_erase.insert(id);
+      }
+    }
+  }
+
   for (const auto &[id1, config1] : hwc_configs) {
     if (configs_to_erase.count(id1) > 0) {
       continue;
@@ -251,6 +276,14 @@ bool HwcDisplayConfigs::SanitizeGroups() {
 
   for (const auto &id : configs_to_erase) {
     hwc_configs.erase(id);
+  }
+
+  const bool is_preferred_config_missing = !hwc_configs.empty() &&
+                                           hwc_configs.find(
+                                               preferred_config_id) ==
+                                               hwc_configs.end();
+  if (is_preferred_config_missing) {
+    preferred_config_id = hwc_configs.begin()->first;
   }
 
   return true;

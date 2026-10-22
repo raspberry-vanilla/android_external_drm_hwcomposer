@@ -937,6 +937,94 @@ TEST_F(HwcDisplayConfigsGeneratorTest,
   EXPECT_FALSE(configs_opt.has_value());
 }
 
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       SanitizeGroupsPreservesPreferredConfigWhenLowerIdModeIsWithinOneHz) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  // Mode 0 is 59.94Hz (non-preferred), Mode 1 is 60.00Hz (preferred).
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 59.94F, 0, 0, "1080p59_94"),
+      CreateModeFloat(1920, 1080, 60.00F, 0, DRM_MODE_TYPE_PREFERRED,
+                      "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+  };
+
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  if (!configs_opt) {
+    return;
+  }
+  auto configs = *configs_opt;
+  ASSERT_EQ(configs.hwc_configs.size(), 2U);
+
+  // Place both configs into the same seamless config group (group_id = 1),
+  // matching HwcDisplay::SetConfigGroupsForActiveConfig() on an internal panel.
+  for (auto& [id, cfg] : configs.hwc_configs) {
+    cfg.group_id = 1;
+  }
+
+  const ConfigId initial_preferred_id = configs.preferred_config_id;
+  configs.SanitizeGroups();
+
+  EXPECT_EQ(configs.hwc_configs.size(), 1U);
+  EXPECT_EQ(configs.preferred_config_id, initial_preferred_id);
+  const auto it = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(it, configs.hwc_configs.end())
+      << "SanitizeGroups() erased preferred_config_id ("
+      << configs.preferred_config_id
+      << ") without remapping when a lower-ID mode was within 1Hz";
+  EXPECT_STREQ(it->second.mode.GetRawMode().name, "1080p60");
+}
+
+TEST_F(HwcDisplayConfigsGeneratorTest,
+       SanitizeGroupsPreservesPreferredConfigAcrossTransitiveNearOneHzChain) {
+  auto connector = std::make_unique<FakeDrmConnector>(&fake_device, 1,
+                                                      /*is_external=*/false,
+                                                      500, 300);
+  // Mode 0 is 59.40Hz, Mode 1 is 59.94Hz, Mode 2 is 60.00Hz (preferred).
+  // Even though Mode 0 and Mode 1 are within 1Hz of each other and Mode 1 and
+  // Mode 2 are within 1Hz of each other, SanitizeGroups() must eliminate the
+  // non-preferred neighbors of the preferred config first so the 60.00Hz
+  // preferred mode is always preserved.
+  std::vector<DrmMode> modes = {
+      CreateModeFloat(1920, 1080, 59.40F, 0, 0, "1080p59_40"),
+      CreateModeFloat(1920, 1080, 59.94F, 0, 0, "1080p59_94"),
+      CreateModeFloat(1920, 1080, 60.00F, 0, DRM_MODE_TYPE_PREFERRED,
+                      "1080p60"),
+  };
+  connector->SetModes(modes);
+
+  HwcConfigParameters params = {
+      .use_color_pipeline = false,
+      .persistent_hdr_enabled = false,
+  };
+
+  auto configs_opt = generator.GenerateDisplayConfigs(*connector, params);
+  ASSERT_TRUE(configs_opt.has_value());
+  if (!configs_opt) {
+    return;
+  }
+  auto configs = *configs_opt;
+  ASSERT_EQ(configs.hwc_configs.size(), 3U);
+  for (auto& [id, cfg] : configs.hwc_configs) {
+    cfg.group_id = 1;
+  }
+
+  const ConfigId initial_preferred_id = configs.preferred_config_id;
+  configs.SanitizeGroups();
+
+  EXPECT_EQ(configs.preferred_config_id, initial_preferred_id);
+  const auto it = configs.hwc_configs.find(configs.preferred_config_id);
+  ASSERT_NE(it, configs.hwc_configs.end());
+  EXPECT_STREQ(it->second.mode.GetRawMode().name, "1080p60");
+}
+
 }  // namespace android::drm_hwcomposer
 
 // NOLINTEND(readability-magic-numbers)
