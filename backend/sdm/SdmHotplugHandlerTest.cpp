@@ -23,6 +23,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <xf86drmMode.h>
 
 #include <core/buffer_allocator.h>  // IWYU pragma: keep
 #include <core/sdm_types.h>
@@ -32,8 +33,11 @@
 #include <sdm_display_intf_caps.h>
 #include <sdm_display_intf_lifecycle.h>
 
+#include "backend/BackendDisplayCapabilities.h"  // IWYU pragma: keep
 #include "backend/SdmBackend.h"
 #include "backend/sdm/SdmToConnectorMapper.h"
+#include "compositor/CompositionPlanner.h"  // IWYU pragma: keep
+#include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmTestUtils.h"
 
 namespace android::drm_hwcomposer {
@@ -82,6 +86,10 @@ class MockSdmLifeCycleIntf : public sdm::SDMDisplayLifeCycleIntf {
 
 class SdmHotplugHandlerTest : public ::testing::Test {
  protected:
+  static bool BindPrimaryPlane(DrmDisplayPipeline* pipeline) {
+    return SdmBackend::BindPrimaryPlane(pipeline);
+  }
+
   static void SetTestLifeCycleIntf(
       std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf) {
     SdmBackend::SetTestLifeCycleIntf(std::move(intf));
@@ -145,6 +153,74 @@ TEST_F(SdmHotplugHandlerTest,
   EXPECT_EQ(dispatched_events, 2);
   GetHotplugHandlerForTest().SetHotplugHandler(nullptr);
   SetTestLifeCycleIntf(nullptr);
+}
+
+TEST_F(SdmHotplugHandlerTest,
+       BindPrimaryPlanePrefersPlaneAlreadyActiveOnTargetCrtc) {
+  constexpr uint32_t kTargetCrtcId = 10;
+  constexpr uint32_t kIdlePlaneId = 301;
+  constexpr uint32_t kActivePlaneId = 302;
+
+  FakeDrmDevice dev;
+  auto crtc = std::make_unique<FakeDrmCrtc>(kTargetCrtcId);
+  FakeDrmCrtc* crtc_ptr = crtc.get();
+  dev.AddCrtc(std::move(crtc));
+
+  auto idle_plane = std::make_unique<FakeDrmPlane>(dev, DRM_PLANE_TYPE_PRIMARY,
+                                                   /*is_valid=*/true,
+                                                   kIdlePlaneId);
+  idle_plane->SetCrtcIdPropertyValue(0);
+  dev.AddPlane(std::move(idle_plane));
+
+  auto active_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                     DRM_PLANE_TYPE_PRIMARY,
+                                                     /*is_valid=*/true,
+                                                     kActivePlaneId);
+  active_plane->SetCrtcIdPropertyValue(kTargetCrtcId);
+  FakeDrmPlane* active_plane_ptr = active_plane.get();
+  dev.AddPlane(std::move(active_plane));
+
+  DrmDisplayPipeline pipe{};
+  pipe.device = &dev;
+  pipe.crtc = crtc_ptr->BindPipeline(&pipe);
+
+  ASSERT_TRUE(BindPrimaryPlane(&pipe));
+  ASSERT_NE(pipe.primary_plane, nullptr);
+  EXPECT_EQ(pipe.primary_plane->Get(), active_plane_ptr);
+}
+
+TEST_F(SdmHotplugHandlerTest,
+       BindPrimaryPlanePrefersIdlePlaneOverPlaneActiveOnAnotherCrtc) {
+  constexpr uint32_t kTargetCrtcId = 10;
+  constexpr uint32_t kOtherCrtcId = 20;
+  constexpr uint32_t kOtherActivePlaneId = 301;
+  constexpr uint32_t kIdlePlaneId = 302;
+
+  FakeDrmDevice dev;
+  auto crtc = std::make_unique<FakeDrmCrtc>(kTargetCrtcId);
+  FakeDrmCrtc* crtc_ptr = crtc.get();
+  dev.AddCrtc(std::move(crtc));
+
+  auto other_active_plane = std::make_unique<
+      FakeDrmPlane>(dev, DRM_PLANE_TYPE_PRIMARY,
+                    /*is_valid=*/true, kOtherActivePlaneId);
+  other_active_plane->SetCrtcIdPropertyValue(kOtherCrtcId);
+  dev.AddPlane(std::move(other_active_plane));
+
+  auto idle_plane = std::make_unique<FakeDrmPlane>(dev, DRM_PLANE_TYPE_PRIMARY,
+                                                   /*is_valid=*/true,
+                                                   kIdlePlaneId);
+  idle_plane->SetCrtcIdPropertyValue(0);
+  FakeDrmPlane* idle_plane_ptr = idle_plane.get();
+  dev.AddPlane(std::move(idle_plane));
+
+  DrmDisplayPipeline pipe{};
+  pipe.device = &dev;
+  pipe.crtc = crtc_ptr->BindPipeline(&pipe);
+
+  ASSERT_TRUE(BindPrimaryPlane(&pipe));
+  ASSERT_NE(pipe.primary_plane, nullptr);
+  EXPECT_EQ(pipe.primary_plane->Get(), idle_plane_ptr);
 }
 
 }  // namespace android::drm_hwcomposer

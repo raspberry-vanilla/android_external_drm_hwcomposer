@@ -70,6 +70,7 @@ class SdmBackend : public Backend {
   static bool Init();
 
  private:
+  static bool BindPrimaryPlane(DrmDisplayPipeline* pipeline);
   static void SetTestLifeCycleIntf(
       std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf);
   static SdmHotplugHandler& GetHotplugHandlerForTest();
