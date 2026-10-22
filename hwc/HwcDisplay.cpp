@@ -230,6 +230,74 @@ const HwcDisplayConfig *HwcDisplay::GetNextConfig() const {
   return GetCurrentConfig();
 }
 
+bool HwcDisplay::HasPhysicalConnector() const {
+  return !IsInHeadlessMode() && !is_virtual_ && pipeline_ != nullptr &&
+         pipeline_->connector != nullptr &&
+         pipeline_->connector->Get() != nullptr;
+}
+
+bool HwcDisplay::RefreshConfigsFromConnector() {
+  if (!HasPhysicalConnector()) {
+    return false;
+  }
+
+  auto *connector = pipeline_->connector->Get();
+  const HwcConfigParameters params = {
+      .use_color_pipeline = Properties::UseColorPipeline(),
+      .persistent_hdr_enabled = Properties::PersistentHdrEnabled(),
+      .external_hdr_enabled = Properties::ExternalHdrEnabled(),
+      .capabilities = pipeline_->capabilities.get(),
+      .min_refresh_rate = Properties::MinRefreshRate(),
+      .max_refresh_rate = Properties::MaxRefreshRate(),
+      .force_disable_mrr = Properties::ForceDisableMrr(),
+  };
+  auto configs = configs_generator_.GenerateDisplayConfigs(*connector, params);
+  if (!configs) {
+    return false;
+  }
+  configs_ = std::move(*configs);
+  active_config_id_ = 0;
+  staged_mode_config_id_ = configs_.preferred_config_id;
+  staged_mode_change_time_ = 0;
+  link_recovery_modeset_required_ = true;
+  return true;
+}
+
+bool HwcDisplay::OnLinkTrainingFailed() {
+  if (!HasPhysicalConnector()) {
+    return false;
+  }
+  auto *connector = pipeline_->connector->Get();
+  if (link_recovery_modeset_required_ && !connector->GetModes().empty() &&
+      !configs_.hwc_configs.empty()) {
+    const auto &connector_modes = connector->GetModes();
+    const bool all_connector_modes_in_configs = std::
+        all_of(connector_modes.begin(), connector_modes.end(),
+               [this](const auto &drm_mode) {
+                 return std::any_of(configs_.hwc_configs.begin(),
+                                    configs_.hwc_configs.end(),
+                                    [&drm_mode](const auto &pair) {
+                                      return pair.second.mode ==
+                                             drm_mode.GetRawMode();
+                                    });
+               });
+    const bool all_configs_in_connector_modes = std::
+        all_of(configs_.hwc_configs.begin(), configs_.hwc_configs.end(),
+               [&connector_modes](const auto &pair) {
+                 return std::any_of(connector_modes.begin(),
+                                    connector_modes.end(),
+                                    [&pair](const auto &drm_mode) {
+                                      return pair.second.mode ==
+                                             drm_mode.GetRawMode();
+                                    });
+               });
+    if (all_connector_modes_in_configs && all_configs_in_connector_modes) {
+      return true;
+    }
+  }
+  return RefreshConfigsFromConnector();
+}
+
 auto HwcDisplay::GetMaxLuminance() const -> float {
   float hdr_luminance[3]{kDefaultMaxLuminance, kDefaultMaxLuminance, 0.F};
   GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
@@ -334,11 +402,15 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGW_IF(staged_mode_config_id_ && *staged_mode_config_id_ != config,
            "overriding staged_mode_config_id_");
-  staged_mode_config_id_.reset();
+  if (active_config_id_ != 0) {
+    staged_mode_config_id_.reset();
+  }
 
   if (IsInHeadlessMode()) {
     active_config_id_ = config;
+    staged_mode_config_id_.reset();
     staged_power_mode_.reset();
+    link_recovery_modeset_required_ = false;
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -363,7 +435,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
+  staged_mode_config_id_.reset();
   staged_power_mode_.reset();
+  link_recovery_modeset_required_ = false;
   // CreateModesetCommit() may scan out a temporary zero-filled dumb buffer or
   // disable planes when the resolution changes. Invalidate the cached
   // composition and request a client refresh so SurfaceFlinger presents a real
@@ -386,7 +460,8 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
   }
 
   const HwcDisplayConfig *current_config = GetCurrentConfig();
-  if (!current_config || current_config->group_id != new_config->group_id) {
+  if (link_recovery_modeset_required_ || !current_config ||
+      current_config->group_id != new_config->group_id) {
     return ConfigError::kSeamlessNotAllowed;
   }
 
@@ -780,7 +855,8 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     if (vsync_event_en_) {
       SetVsyncCallbacksEnabled(true);
     }
-    if (GetPipe().atomic_state_manager->IsActive()) {
+    if (GetPipe().atomic_state_manager->IsActive() &&
+        GetCurrentConfig() != nullptr) {
       staged_power_mode_.reset();
       return HwcDisplay::Error::kNone;
     }
@@ -904,6 +980,7 @@ void HwcDisplay::Deinit() {
     backlight_controller_.reset();
     last_presented_composition_.Reset();
   }
+  link_recovery_modeset_required_ = false;
 
   if (vsync_worker_) {
     vsync_worker_->StopThread();
@@ -1100,22 +1177,12 @@ bool HwcDisplay::Init() {
       return false;
     }
 
-    const HwcConfigParameters params = {
-        .use_color_pipeline = Properties::UseColorPipeline(),
-        .persistent_hdr_enabled = Properties::PersistentHdrEnabled(),
-        .external_hdr_enabled = Properties::ExternalHdrEnabled(),
-        .capabilities = pipeline_->capabilities.get(),
-        .min_refresh_rate = Properties::MinRefreshRate(),
-        .max_refresh_rate = Properties::MaxRefreshRate(),
-        .force_disable_mrr = Properties::ForceDisableMrr(),
-    };
-    auto configs = configs_generator_.GenerateDisplayConfigs(*connector,
-                                                             params);
-    if (!configs) {
+    if (!RefreshConfigsFromConnector()) {
       return false;
     }
-    configs_ = std::move(*configs);
     active_config_id_ = configs_.preferred_config_id;
+    staged_mode_config_id_.reset();
+    link_recovery_modeset_required_ = false;
   }
 
   InitForcedColorMode();
@@ -1556,7 +1623,8 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   a_args.hdr_headroom = hdr_headroom_;
   a_args.color_mode = color_mode_;
 
-  if (staged_mode_config_id_ &&
+  if (!link_recovery_modeset_required_ && active_config_id_ != 0 &&
+      staged_mode_config_id_ &&
       staged_mode_change_time_ <= ResourceManager::GetTimeMonotonicNs()) {
     const auto *staged_config = GetConfig(staged_mode_config_id_.value());
     if (staged_config == nullptr) {
@@ -1784,6 +1852,9 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
     // VsyncWorker.
     active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
     staged_mode_config_id_.reset();
+    if (!a_args.seamless) {
+      link_recovery_modeset_required_ = false;
+    }
     vsync_worker_->SetVsyncPeriodNs(a_args.display_mode->GetVSyncPeriodNs());
     // When a modeset commit is executed alongside a power transition (such as
     // CreateModesetCommit() rather than a seamless frame-update modeset that
@@ -2008,6 +2079,10 @@ auto HwcDisplay::GetWritebackBufferFormat() const -> BufferFormat {
 
 bool HwcDisplay::CanReuseLayerForModeset(uint32_t width,
                                          uint32_t height) const {
+  if (link_recovery_modeset_required_) {
+    return false;
+  }
+
   const HwcDisplayConfig *active_config = GetCurrentConfig();
   // Reuse an existing layer only when the CRTC is already active at the
   // target resolution. After a teardown (power-off), cached buffers may

@@ -1182,4 +1182,75 @@ TEST_F(DrmHwcTest,
   EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstConnId2);
 }
 
+TEST_F(DrmHwcTest,
+       NotifyDisplayLinkStatusRefreshesPrunedConfigsAndRemapsActiveConfig) {
+  constexpr uint16_t kUhdWidth = 3840;
+  constexpr uint16_t kUhdHeight = 2160;
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kUhdWidth, kUhdHeight, kFakeDefaultModeVRefresh,
+                         DRM_MODE_TYPE_PREFERRED, "2160p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kFakeDefaultModeVRefresh, 0, "1080p60")},
+      /*is_external=*/true);
+  std::shared_ptr<DrmDisplayPipeline> external_pipe = CreatePipeline(*ext_conn);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  HwcDisplay* ext_display = hwc.GetDisplay(1);
+  ASSERT_NE(ext_display, nullptr);
+  const auto initial_configs = ext_display->GetDisplayConfigs();
+  ASSERT_EQ(initial_configs.size(), 2U);
+  ASSERT_NE(ext_display->GetCurrentConfig(), nullptr);
+  ASSERT_NE(ext_display->GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(ext_display->GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+            kUhdWidth);
+
+  // Simulate kernel link-status = BAD pruning the 4K mode so only 1080p60
+  // remains on the connector.
+  ext_conn->SetModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kFakeDefaultModeVRefresh, DRM_MODE_TYPE_PREFERRED,
+                         "1080p60")});
+
+  hwc.hotplug_events.clear();
+  fake_device->GetFakeAtomicCommitSink()->ClearHistory();
+
+  hwc.NotifyDisplayLinkStatus(external_pipe);
+  hwc.FlushHotplugEvents();
+
+  const auto refreshed_configs = ext_display->GetDisplayConfigs();
+  EXPECT_EQ(refreshed_configs.size(), 1U)
+      << "NotifyDisplayLinkStatus() did not refresh HwcDisplay::configs_ from "
+         "the connector's pruned mode list";
+  EXPECT_EQ(ext_display->GetCurrentConfig(), nullptr)
+      << "GetCurrentConfig() must be invalidated until SetConfig() commits the "
+         "pruned mode";
+  ASSERT_NE(ext_display->GetLastRequestedConfig(), nullptr)
+      << "GetLastRequestedConfig() returned nullptr after link-status config "
+         "refresh";
+  if (refreshed_configs.size() == 1U) {
+    EXPECT_EQ(ext_display->GetLastRequestedConfig()->id,
+              refreshed_configs[0].id);
+    EXPECT_EQ(ext_display->GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+              kFakeDefaultModeWidth);
+  }
+  EXPECT_EQ(fake_device->GetFakeAtomicCommitSink()->GetExecuteCommitCount(), 0U)
+      << "NotifyDisplayLinkStatus() must not perform an autonomous KMS modeset";
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
 }  // namespace android::drm_hwcomposer

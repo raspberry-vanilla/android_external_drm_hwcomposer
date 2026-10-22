@@ -46,6 +46,7 @@
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "drm/CommitStatus.h"
+#include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
@@ -1667,6 +1668,115 @@ TEST_F(HwcDisplayTest,
   ASSERT_NE(modeset_args.composition, nullptr);
   ASSERT_EQ(modeset_args.composition->plan.size(), 1U);
   EXPECT_EQ(modeset_args.composition->plan[0].layer.fb, device_fb);
+}
+
+TEST_F(HwcDisplayTest,
+       RefreshConfigsFromConnectorDefersModesetUntilClientRequestsSetConfig) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p120"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz, 0, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_TRUE(pipeline->atomic_state_manager->IsActive());
+  ASSERT_EQ(display.GetDisplayConfigs().size(), 3U);
+
+  // Populate a 1080p client target buffer so we also verify that the
+  // subsequent SetConfig() does not reuse the stale 1080p buffer when
+  // modesetting the pruned 720p preferred config.
+  constexpr uint32_t kStaleClientFbId = 666;
+  const auto client_fb = std::make_shared<FakeFbIdHandle>(kStaleClientFbId);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(client_fb));
+
+  // Step 1: First DP link training failure prunes 1080p120, leaving
+  // {1080p60 (preferred), 720p60}.
+  fake_conn->SetModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")});
+  fake_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+
+  sink->ClearHistory();
+  EXPECT_TRUE(display.OnLinkTrainingFailed());
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetDisplayConfigs().size(), 2U);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  const ConfigId first_fallback_id = display.GetLastRequestedConfig()->id;
+  EXPECT_EQ(display.GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+            kFhdWidth);
+
+  // A duplicate link-status event with identical modes must not churn config
+  // IDs while link_recovery_modeset_required_ is already true.
+  EXPECT_TRUE(display.OnLinkTrainingFailed());
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, first_fallback_id);
+
+  // Step 2: A second link failure steps down the link rate further and prunes
+  // 1080p60 while link_recovery_modeset_required_ is still true, leaving only
+  // {720p60 (preferred)}. OnLinkTrainingFailed() must detect that configs_
+  // contains a mode no longer in connector->GetModes() and refresh configs_.
+  fake_conn->SetModes({CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz,
+                                         DRM_MODE_TYPE_PREFERRED, "720p60")});
+  EXPECT_TRUE(display.OnLinkTrainingFailed());
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetDisplayConfigs().size(), 1U);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  const ConfigId fallback_config_id = display.GetLastRequestedConfig()->id;
+  EXPECT_EQ(display.GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+            kHdWidth);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+
+  // While link_recovery_modeset_required_ is set, QueueConfig() must return
+  // kSeamlessNotAllowed so ComposerClient::setActiveConfigWithConstraints()
+  // falls back to SetConfig() (ALLOW_MODESET) even though getActiveConfig()
+  // already returns fallback_config_id.
+  QueuedConfigTiming timing{};
+  EXPECT_EQ(display.QueueConfig(fallback_config_id, /*desired_time=*/0,
+                                &timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+
+  EXPECT_EQ(display.SetConfig(fallback_config_id),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, fallback_config_id);
+  ASSERT_EQ(sink->GetExecuteCommitCount(), 1U);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().back().empty());
+  const auto& retrain_args = sink->GetCommitHistory().back().front();
+  ASSERT_TRUE(retrain_args.display_mode.has_value());
+  if (retrain_args.display_mode.has_value()) {
+    EXPECT_EQ(retrain_args.display_mode->GetRawMode().hdisplay, kHdWidth);
+    EXPECT_EQ(retrain_args.display_mode->GetRawMode().vdisplay, kHdHeight);
+  }
+  EXPECT_FALSE(retrain_args.seamless);
+  EXPECT_EQ(retrain_args.power_mode, PowerMode::kOn);
+  ASSERT_NE(retrain_args.composition, nullptr);
+  ASSERT_EQ(retrain_args.composition->plan.size(), 1U);
+  EXPECT_NE(retrain_args.composition->plan[0].layer.fb, client_fb);
+
+  // If another link failure sets link_recovery_modeset_required_ = true and the
+  // display is then unbound to headless mode before SetConfig(), Deinit() /
+  // headless SetConfig() must clear link_recovery_modeset_required_.
+  fake_conn->SetModes({CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz,
+                                         DRM_MODE_TYPE_PREFERRED, "720p60")});
+  EXPECT_TRUE(display.OnLinkTrainingFailed());
+  EXPECT_EQ(display.QueueConfig(display.GetLastRequestedConfig()->id,
+                                /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  display.SetPipeline(nullptr);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.QueueConfig(display.GetCurrentConfig()->id,
+                                /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
 }
 
 }  // namespace android::drm_hwcomposer

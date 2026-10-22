@@ -216,8 +216,12 @@ void DrmHwc::NotifyDisplayLinkStatus(
     ALOGE("%s, can't find the display, pipeline: %p", __func__, pipeline.get());
     return;
   }
-  ScheduleHotplugEvent(display_handles_[pipeline],
-                       DisplayStatus::kLinkTrainingFailed);
+  const DisplayHandle handle = display_handles_[pipeline];
+  auto *display = GetDisplay(handle);
+  if (display != nullptr) {
+    display->OnLinkTrainingFailed();
+  }
+  ScheduleHotplugEvent(handle, DisplayStatus::kLinkTrainingFailed);
 }
 
 void DrmHwc::NotifyHdcpTermination(

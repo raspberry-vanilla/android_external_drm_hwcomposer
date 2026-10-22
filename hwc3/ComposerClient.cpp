@@ -518,8 +518,13 @@ ndk::ScopedAStatus ComposerClient::getDisplayVsyncPeriod(
 
   // getDisplayVsyncPeriod should return the vsync period of the config that
   // is currently committed to the kernel. If a config change is pending due to
-  // setActiveConfigWithConstraints, return the pre-change vsync period.
+  // setActiveConfigWithConstraints, return the pre-change vsync period. If the
+  // current config was invalidated during link-status recovery, fall back to
+  // the last requested config.
   const HwcDisplayConfig* config = display->GetCurrentConfig();
+  if (config == nullptr) {
+    config = display->GetLastRequestedConfig();
+  }
   if (config == nullptr) {
     return ToBinderStatus(hwc3::Error::kBadConfig);
   }
