@@ -238,12 +238,28 @@ bool DrmConnector::SupportsEncoder(DrmEncoder &enc) const {
   return false;
 }
 
-bool DrmConnector::IsInternal() const {
-  auto type = connector_->connector_type;
+static bool IsPhysicalInternalConnectorType(uint32_t type) {
   return type == DRM_MODE_CONNECTOR_Unknown ||
          type == DRM_MODE_CONNECTOR_LVDS || type == DRM_MODE_CONNECTOR_eDP ||
-         type == DRM_MODE_CONNECTOR_DSI || type == DRM_MODE_CONNECTOR_VIRTUAL ||
-         type == DRM_MODE_CONNECTOR_DPI || type == DRM_MODE_CONNECTOR_SPI;
+         type == DRM_MODE_CONNECTOR_DSI || type == DRM_MODE_CONNECTOR_DPI ||
+         type == DRM_MODE_CONNECTOR_SPI;
+}
+
+bool DrmConnector::IsInternal() const {
+  auto type = connector_->connector_type;
+  if (type == DRM_MODE_CONNECTOR_VIRTUAL) {
+    if (drm_ != nullptr) {
+      for (const auto &conn : drm_->GetConnectors()) {
+        if (conn.get() != this &&
+            (IsPhysicalInternalConnectorType(conn->GetConnectorType()) ||
+             conn->IsExternal())) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  return IsPhysicalInternalConnectorType(type);
 }
 
 bool DrmConnector::IsExternal() const {

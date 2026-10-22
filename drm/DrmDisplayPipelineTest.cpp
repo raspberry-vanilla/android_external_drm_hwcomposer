@@ -282,4 +282,83 @@ TEST_F(DrmDisplayPipelineTest,
          "drmModeGetConnector failed";
 }
 
+TEST_F(DrmDisplayPipelineTest,
+       VirtualConnectorIsNotClassifiedAsInternalWhenPhysicalPanelExists) {
+  constexpr uint32_t kEdpEncoderId = 10;
+  constexpr uint32_t kVirtualEncoderId = 11;
+  constexpr uint32_t kDpEncoderId = 12;
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kVirtualConnId = 101;
+  constexpr uint32_t kDpConnId = 102;
+
+  // 1. Pure virtual device (e.g. Cuttlefish VKMS with only Virtual-1):
+  // Virtual-1 is classified as internal.
+  {
+    FakeDrmDevice pure_virtual_dev;
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&pure_virtual_dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    pure_virtual_dev.AddConnector(std::move(virtual_conn));
+    EXPECT_TRUE(virtual_ptr->IsInternal());
+  }
+
+  // 2. Physical internal panel (eDP-1) + Virtual-1 (e.g. msm_drm CWB):
+  // Virtual-1 is NOT classified as internal.
+  {
+    FakeDrmDevice dev;
+    auto edp_conn = std::make_unique<FakeDrmConnector>(&dev, kEdpEncoderId,
+                                                       /*is_external=*/false,
+                                                       kFakeConnectorMmWidth,
+                                                       kFakeConnectorMmHeight,
+                                                       kEdpConnId);
+    edp_conn->InitRawConnector(DRM_MODE_CONNECTOR_eDP);
+    auto* edp_ptr = edp_conn.get();
+    dev.AddConnector(std::move(edp_conn));
+
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    dev.AddConnector(std::move(virtual_conn));
+
+    EXPECT_TRUE(edp_ptr->IsInternal());
+    EXPECT_FALSE(virtual_ptr->IsInternal())
+        << "DrmConnector::IsInternal() misclassified "
+           "DRM_MODE_CONNECTOR_VIRTUAL as an internal panel when physical "
+           "eDP-1 exists on DrmDevice";
+  }
+
+  // 3. Headless desktop with physical external connector (DP-1) + Virtual-1:
+  // Virtual-1 is NOT classified as internal.
+  {
+    FakeDrmDevice external_dev;
+    auto dp_conn = std::make_unique<FakeDrmConnector>(&external_dev,
+                                                      kDpEncoderId,
+                                                      /*is_external=*/true,
+                                                      kFakeConnectorMmWidth,
+                                                      kFakeConnectorMmHeight,
+                                                      kDpConnId);
+    dp_conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
+    external_dev.AddConnector(std::move(dp_conn));
+
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&external_dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    external_dev.AddConnector(std::move(virtual_conn));
+
+    EXPECT_FALSE(virtual_ptr->IsInternal());
+  }
+}
+
 }  // namespace android::drm_hwcomposer
