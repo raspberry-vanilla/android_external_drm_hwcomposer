@@ -67,6 +67,8 @@ constexpr uint32_t kTestVsyncPeriodNs = 16666666;
 constexpr uint16_t kTestHBlank = 160;
 constexpr uint16_t kTestVBlank = 45;
 constexpr uint32_t kTestKhzDivisor = 1000;
+constexpr float kTestBrightnessNits = 250.0F;
+constexpr float kTestBrightnessNitsAlt = 600.0F;
 
 class MockSdmLifeCycleIntf : public sdm::SDMDisplayLifeCycleIntf {
  public:
@@ -361,5 +363,74 @@ TEST_F(SdmAtomicStateManagerTest,
 
   EXPECT_FALSE(manager->ExecuteAtomicCommit(frame_args).has_value());
 }
+
+TEST_F(SdmAtomicStateManagerTest,
+       BrightnessFailureDoesNotAbortFrameOrDropPresentFence) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+  frame_args.brightness_nits = kTestBrightnessNits;
+
+  {
+    InSequence seq;
+    EXPECT_CALL(settings_intf, SetDisplayBrightnessNits(kTestSdmDisplayId,
+                                                        kTestBrightnessNits))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNotSupported));
+    EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNone));
+  }
+
+  auto result = manager->ExecuteAtomicCommit(frame_args);
+  EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitCachesAndDeduplicatesBrightnessNits) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+  frame_args.brightness_nits = kTestBrightnessNits;
+
+  EXPECT_CALL(settings_intf,
+              SetDisplayBrightnessNits(kTestSdmDisplayId, kTestBrightnessNits))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .WillRepeatedly(Return(sdm::kErrorNone));
+
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+
+  frame_args.brightness_nits = kTestBrightnessNitsAlt;
+  EXPECT_CALL(settings_intf, SetDisplayBrightnessNits(kTestSdmDisplayId,
+                                                      kTestBrightnessNitsAlt))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
+
 }  // namespace
 }  // namespace android::drm_hwcomposer

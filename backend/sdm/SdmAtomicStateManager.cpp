@@ -236,6 +236,9 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
         }
       }
       active_sdm_config_id_ = sdm_config_idx;
+      last_color_mode_ = std::nullopt;
+      last_color_matrix_ = nullptr;
+      last_brightness_nits_ = std::nullopt;
     } else {
       ALOGE("Failed to find SDM config for DRM mode %s (vsync %d ns)",
             args.display_mode->GetName().c_str(),
@@ -285,6 +288,19 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
     }
     last_color_matrix_ = args.color_matrix;
   }
+  if (args.brightness_nits &&
+      (!last_brightness_nits_ ||
+       *args.brightness_nits != *last_brightness_nits_)) {
+    auto display_error = settings_intf_
+                             ->SetDisplayBrightnessNits(sdm_display_id_,
+                                                        args.brightness_nits
+                                                            .value());
+    if (display_error != sdm::kErrorNone) {
+      ALOGW("SetDisplayBrightnessNits failed (non-fatal): %s",
+            ErrorToString(display_error).c_str());
+    }
+    last_brightness_nits_ = args.brightness_nits;
+  }
   if (args.composition) {
     if (!UpdateClientTarget(*args.composition)) {
       ALOGE("UpdateClientTarget failed");
@@ -301,17 +317,6 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
     if (out_retire_fence) {
       // Dup to take ownership of new fence.
       result.present_fence = MakeSharedFd(sdm::Fence::Dup(out_retire_fence));
-    }
-  }
-  if (args.brightness_nits) {
-    auto display_error = settings_intf_
-                             ->SetDisplayBrightnessNits(sdm_display_id_,
-                                                        args.brightness_nits
-                                                            .value());
-    if (display_error != sdm::kErrorNone) {
-      ALOGE("SetDisplayBrightnessNits failed: %s",
-            ErrorToString(display_error).c_str());
-      return std::nullopt;
     }
   }
   return result;
