@@ -258,9 +258,92 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   auto result = planner.ValidateDisplay(&mock_display);
 
   EXPECT_EQ(result.composition.composition_types,
-            (CompositionPlanner::CompositionTypeMap{
-                {&layer1, CompositionType::kDevice},
-                {&layer2, CompositionType::kDevice}}));
+            (CompositionPlanner::
+                 CompositionTypeMap{{&layer1, CompositionType::kDevice},
+                                    {&layer2, CompositionType::kDevice}}));
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNone);
+}
+
+TEST(GenericLayerMapperCompositionPlannerTest,
+     SameGamutColorspacesDoNotFlattenWithoutColorPipeline) {
+  GenericLayerMapperCompositionPlanner planner;
+  MockCompositorDisplay mock_display;
+
+  HwcLayer
+      underlay_nv12 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                       IRect{.left = 0,
+                                                             .top = 0,
+                                                             .right = 1920,
+                                                             .bottom = 1080},
+                                                       /*z_order=*/0,
+                                                       CompositionType::kDevice,
+                                                       /*alpha=*/kOpaque,
+                                                       DRM_FORMAT_NV12);
+  HwcLayer::LayerProperties props_nv12;
+  props_nv12.colorspace = HwcColorspace::kBt601;
+  underlay_nv12.SetLayerProperties(props_nv12);
+
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 1920,
+                                                           .bottom = 1080},
+                                                     /*z_order=*/1,
+                                                     CompositionType::kDevice,
+                                                     /*alpha=*/kOpaque);
+  HwcLayer::LayerProperties props1;
+  props1.colorspace = HwcColorspace::kDefault;
+  layer1.SetLayerProperties(props1);
+
+  HwcLayer cursor = CompositorTestUtils::CreateLayer(&mock_display,
+                                                     IRect{.left = 0,
+                                                           .top = 0,
+                                                           .right = 32,
+                                                           .bottom = 32},
+                                                     /*z_order=*/2,
+                                                     CompositionType::kCursor);
+  HwcLayer::LayerProperties props_cursor;
+  props_cursor.colorspace = HwcColorspace::kBt709;
+  cursor.SetLayerProperties(props_cursor);
+
+  EXPECT_CALL(mock_display, GetOrderLayersByZPos())
+      .WillOnce(Return(
+          std::vector<const HwcLayer*>{&underlay_nv12, &layer1, &cursor}));
+
+  EXPECT_CALL(mock_display, GetLastPresentedComposition())
+      .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
+
+  EXPECT_CALL(mock_display, CtmByGpu()).WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, GetFlatCon()).WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(mock_display, ForcedScalingWithGpu())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_display, UseColorPipeline()).WillRepeatedly(Return(false));
+
+  FakeDrmDevice device;
+  std::shared_ptr<FakeDrmPlane>
+      cursor_plane = std::make_shared<FakeDrmPlane>(device,
+                                                    DRM_PLANE_TYPE_CURSOR,
+                                                    /*is_valid=*/true);
+
+  EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
+  EXPECT_CALL(mock_display, GetCursorPlane())
+      .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
+  EXPECT_CALL(mock_display, GetColorTransformMatrix())
+      .WillRepeatedly(Return(kIdentityCtm));
+  EXPECT_CALL(mock_display, CursorPlaneNeedsColorPipeline(_))
+      .WillOnce(Return(false));
+  EXPECT_CALL(mock_display, TestComposition(_))
+      .WillRepeatedly(Return(CommitStatus::Success()));
+
+  auto result = planner.ValidateDisplay(&mock_display);
+
+  EXPECT_EQ(result.composition.composition_types,
+            (CompositionPlanner::
+                 CompositionTypeMap{{&underlay_nv12, CompositionType::kDevice},
+                                    {&layer1, CompositionType::kDevice},
+                                    {&cursor, CompositionType::kCursor}}));
+  EXPECT_TRUE(result.composition.cursor_plane_validated);
   EXPECT_EQ(result.composition.flatten_reason,
             CompositionPlanner::FlattenReason::kNone);
 }

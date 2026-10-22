@@ -23,9 +23,12 @@
 #include <type_traits>
 #include <vector>
 
+#include "utils/ColorUtil.h"
+
 namespace android::drm_hwcomposer {
 
 enum class CompositionType;
+enum class HwcColorspace;
 class HwcLayer;
 class ICompositorDisplay;
 struct DstRectInfo;
@@ -102,14 +105,14 @@ class CompositionPlanner {
   static ValidatedComposition GetFlattenedComposition(
       const std::vector<const HwcLayer*>& layers, FlattenReason flatten_reason);
 
-  // Returns whether any two layers in |layers| have different colorspaces.
+  // Returns whether any two layers in |layers| have different color gamuts.
   template <typename Container>
-  static bool LayersUseDifferentColorspaces(const Container& layers) {
+  static bool LayersUseDifferentColorGamuts(const Container& layers) {
     if (layers.empty()) {
       return false;
     }
 
-    auto get_colorspace = [](const auto& item) {
+    auto get_colorspace = [](const auto& item) -> HwcColorspace {
       if constexpr (std::is_pointer_v<std::decay_t<decltype(item)>>) {
         return item->GetLayerData().colorspace;
       } else {
@@ -117,11 +120,10 @@ class CompositionPlanner {
       }
     };
 
-    const auto colorspace = get_colorspace(layers.front());
-    return std::any_of(layers.begin() + 1, layers.end(),
-                       [&](const auto& item) {
-                         return get_colorspace(item) != colorspace;
-                       });
+    const HwcColorspace first_cs = get_colorspace(layers.front());
+    return std::any_of(layers.begin() + 1, layers.end(), [&](const auto& item) {
+      return !ColorUtil::HasSameGamut(get_colorspace(item), first_cs);
+    });
   }
 };
 

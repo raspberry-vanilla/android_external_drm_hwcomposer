@@ -605,12 +605,27 @@ TEST(ColorUtilTest, ToColorGamutMappings) {
             android::ColorSpace::BT709().getName());
   EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt709).getName(),
             android::ColorSpace::BT709().getName());
+  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt601).getName(),
+            android::ColorSpace::BT709().getName());
   EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt2020).getName(),
             android::ColorSpace::BT2020().getName());
   EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kDciP3).getName(),
             android::ColorSpace::DCIP3().getName());
-  EXPECT_EQ(ColorUtil::ToColorGamut(HwcColorspace::kBt601).getName(),
-            android::ColorSpace::sRGB().getName());
+}
+
+TEST(ColorUtilTest, HasSameGamut) {
+  EXPECT_TRUE(
+      ColorUtil::HasSameGamut(HwcColorspace::kDefault, HwcColorspace::kBt709));
+  EXPECT_TRUE(
+      ColorUtil::HasSameGamut(HwcColorspace::kBt601, HwcColorspace::kBt709));
+  EXPECT_TRUE(
+      ColorUtil::HasSameGamut(HwcColorspace::kDefault, HwcColorspace::kBt601));
+  EXPECT_FALSE(
+      ColorUtil::HasSameGamut(HwcColorspace::kBt709, HwcColorspace::kDciP3));
+  EXPECT_FALSE(
+      ColorUtil::HasSameGamut(HwcColorspace::kBt709, HwcColorspace::kBt2020));
+  EXPECT_FALSE(
+      ColorUtil::HasSameGamut(HwcColorspace::kDciP3, HwcColorspace::kBt2020));
 }
 
 TEST(ColorUtilTest, ToHwcColorspaceManyToOneMappings) {

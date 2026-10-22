@@ -209,6 +209,8 @@ class ColorUtil {
 
   static const ColorGamut &ToColorGamut(HwcColorspace colorspace);
 
+  static bool HasSameGamut(HwcColorspace a, HwcColorspace b);
+
   static const ColorGamut::transfer_function &GetEotf(ColorMode mode);
 
   static uint64_t To3132FixPt(double in);
