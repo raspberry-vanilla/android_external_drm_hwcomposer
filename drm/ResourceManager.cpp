@@ -422,8 +422,7 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
       frontend_interface_->UnbindDisplay(it->second);
       attached_pipelines_.erase(it);
     }
-  }
-  if (connected) {
+  } else if (connected) {
     auto attached_it = attached_pipelines_.find(conn);
     if (attached_it != attached_pipelines_.end()) {
       if (!conn->IsLinkStatusGood()) {
@@ -435,6 +434,8 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
         } else {
           frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
         }
+      } else {
+        frontend_interface_->NotifyDisplayConnected(attached_it->second);
       }
 
       // If content protection is not enabled anymore, inform frontend so it

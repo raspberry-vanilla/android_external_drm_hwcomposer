@@ -229,6 +229,19 @@ void DrmHwc::NotifyIncompatibleCable() {
   ScheduleHotplugEvent(kPrimaryDisplay, DisplayStatus::kIncompatibleCable);
 }
 
+void DrmHwc::NotifyDisplayConnected(
+    std::shared_ptr<DrmDisplayPipeline> pipeline) {
+  auto it = display_handles_.find(pipeline);
+  if (it == display_handles_.end()) {
+    return;
+  }
+  auto *display = GetDisplay(it->second);
+  if (display != nullptr && !display->GetDisplayEnabled() &&
+      display->HasStagedPowerModeOn()) {
+    display->SetPowerMode(HwcDisplay::PowerMode::kOn);
+  }
+}
+
 void DrmHwc::NotifyHdcpTermination(
     std::shared_ptr<DrmDisplayPipeline> pipeline) {
   if (display_handles_.count(pipeline) == 0) {

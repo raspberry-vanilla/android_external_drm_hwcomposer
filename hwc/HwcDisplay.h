@@ -151,6 +151,9 @@ class HwcDisplay : public ICompositorDisplay {
   auto GetDisplayConfigs() const -> std::vector<HwcDisplayConfig>;
   bool RefreshConfigsFromConnector();
   bool OnLinkTrainingFailed();
+  bool HasStagedPowerModeOn() const {
+    return staged_power_mode_ == PowerMode::kOn;
+  }
 
   // Get the config representing the mode that has been committed to KMS.
   auto GetCurrentConfig() const -> const HwcDisplayConfig *;

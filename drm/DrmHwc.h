@@ -109,6 +109,8 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   void NotifyIncompatibleCable() override;
+  void NotifyDisplayConnected(
+      std::shared_ptr<DrmDisplayPipeline> pipeline) override;
 
   // Notify HDCP Termination from kernel Uevents
   void NotifyHdcpTermination(

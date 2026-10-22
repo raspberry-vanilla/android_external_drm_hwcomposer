@@ -850,15 +850,33 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
+    if (GetPipe().atomic_state_manager->IsActive() &&
+        GetCurrentConfig() != nullptr) {
+      if (vsync_event_en_) {
+        SetVsyncCallbacksEnabled(true);
+      }
+      staged_power_mode_.reset();
+      return HwcDisplay::Error::kNone;
+    }
+
+    const bool
+        has_external_connector = HasPhysicalConnector() &&
+                                 GetPipe().connector->Get()->IsExternal();
+    if (has_external_connector) {
+      auto *connector = GetPipe().connector->Get();
+      connector->UpdateModesAndProperties();
+      if (!connector->IsConnected()) {
+        ALOGW("Cannot enable external display on disconnected connector %u",
+              connector->GetId());
+        staged_power_mode_ = mode;
+        return HwcDisplay::Error::kBadParameter;
+      }
+    }
+
     // Re-register the VSync timestamp callback if VSync delivery was enabled
     // prior to powering off the display.
     if (vsync_event_en_) {
       SetVsyncCallbacksEnabled(true);
-    }
-    if (GetPipe().atomic_state_manager->IsActive() &&
-        GetCurrentConfig() != nullptr) {
-      staged_power_mode_.reset();
-      return HwcDisplay::Error::kNone;
     }
 
     const HwcDisplayConfig *last_requested_config = GetLastRequestedConfig();

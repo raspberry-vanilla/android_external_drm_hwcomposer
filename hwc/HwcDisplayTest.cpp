@@ -1868,4 +1868,46 @@ TEST_F(HwcDisplayTest,
          "after powering off";
 }
 
+TEST_F(HwcDisplayTest,
+       SetPowerModeOnFailsWhenExternalConnectorDisconnectedDuringSuspend) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.SetVsyncCallbacksEnabled(true);
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+
+  // Simulate the external monitor being unplugged while the system was
+  // suspended (PowerMode::kOff) before any resume uevent has been processed:
+  // the cached connection status is still true until UpdateModesAndProperties()
+  // probes the connector during SetPowerMode(PowerMode::kOn).
+  ASSERT_TRUE(fake_conn->IsConnected());
+  fake_conn->SetPendingConnected(false);
+  const size_t calls_before = fake_conn->GetUpdateModesCallCount();
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  hwc.ResetVsyncCount();
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn),
+            HwcDisplay::Error::kBadParameter)
+      << "HwcDisplay::SetPowerMode(PowerMode::kOn) succeeded on a connector "
+         "that was disconnected during suspend";
+  EXPECT_EQ(fake_conn->GetUpdateModesCallCount(), calls_before + 1U);
+  EXPECT_TRUE(display.HasStagedPowerModeOn());
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kVsyncObservationWindowMs));
+  EXPECT_EQ(hwc.GetVsyncCount(), 0)
+      << "Failed SetPowerMode(PowerMode::kOn) on a disconnected external "
+         "connector must not re-enable VSyncWorker callbacks";
+}
+
 }  // namespace android::drm_hwcomposer
