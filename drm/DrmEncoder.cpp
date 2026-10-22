@@ -41,11 +41,19 @@ auto DrmEncoder::CreateInstance(DrmDevice &dev, uint32_t encoder_id,
 }
 
 bool DrmEncoder::CanClone(DrmEncoder &encoder) {
-  return (enc_->possible_clones & (1 << encoder.GetIndexInResArray())) != 0;
+  constexpr uint32_t kMaxEncoderIndex = 31;
+  if (encoder.GetIndexInResArray() > kMaxEncoderIndex) {
+    return false;
+  }
+  return (enc_->possible_clones & (1U << encoder.GetIndexInResArray())) != 0;
 }
 
 bool DrmEncoder::SupportsCrtc(DrmCrtc &crtc) {
-  return (enc_->possible_crtcs & (1 << crtc.GetIndexInResArray())) != 0;
+  constexpr uint32_t kMaxCrtcIndex = 31;
+  if (crtc.GetIndexInResArray() > kMaxCrtcIndex) {
+    return false;
+  }
+  return (enc_->possible_crtcs & (1U << crtc.GetIndexInResArray())) != 0;
 }
 
 }  // namespace android::drm_hwcomposer

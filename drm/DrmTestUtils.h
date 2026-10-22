@@ -82,6 +82,7 @@ constexpr uint32_t kFakeContentProtectionPropId = 40;
 constexpr uint32_t kFakeHdcpContentTypePropId = 41;
 constexpr uint32_t kFakeLinkStatusPropId = 42;
 inline constexpr uint32_t kFakeDpmsPropId = 43;
+constexpr uint32_t kFakeAllCrtcsMask = 0xFFFFFFFFU;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
 constexpr uint32_t kFakeConnectorMmWidth = 500;
@@ -526,6 +527,29 @@ class FakeDrmEncoder : public DrmEncoder {
       : DrmEncoder(nullptr, 0), id_(id), crtc_id_(crtc_id) {
   }
 
+  FakeDrmEncoder(DrmModeEncoderUnique enc, uint32_t index)
+      : DrmEncoder(std::move(enc), index),
+        id_(enc_ ? enc_->encoder_id : 0),
+        crtc_id_(enc_ ? enc_->crtc_id : 0) {
+  }
+
+  static DrmModeEncoderUnique MakeFakeRawEncoder(
+      uint32_t id, uint32_t crtc_id, uint32_t possible_crtcs_mask,
+      uint32_t possible_clones_mask = kFakeAllCrtcsMask) {
+    auto* raw = new drmModeEncoder{};
+    raw->encoder_id = id;
+    raw->crtc_id = crtc_id;
+    raw->possible_crtcs = possible_crtcs_mask;
+    raw->possible_clones = possible_clones_mask;
+    return {raw, [](drmModeEncoder* it) { delete it; }};
+  }
+
+  void InitRawEncoder(uint32_t possible_crtcs_mask,
+                      uint32_t possible_clones_mask = kFakeAllCrtcsMask) {
+    enc_ = MakeFakeRawEncoder(id_, crtc_id_, possible_crtcs_mask,
+                              possible_clones_mask);
+  }
+
   uint32_t GetId() const override {
     return id_;
   }
@@ -562,8 +586,11 @@ class FakeDrmCrtc : public DrmCrtc {
 class FakeDrmPlane : public DrmPlane {
  public:
   FakeDrmPlane(DrmDevice& dev, uint32_t type, bool is_valid = true,
-               uint32_t plane_id = kFakePlaneBaseId)
-      : DrmPlane(dev, nullptr), is_valid_(is_valid), plane_id_(plane_id) {
+               uint32_t plane_id = kFakePlaneBaseId,
+               uint32_t possible_crtcs_mask = kFakeAllCrtcsMask)
+      : DrmPlane(dev, MakeFakeRawPlane(plane_id, possible_crtcs_mask)),
+        is_valid_(is_valid),
+        plane_id_(plane_id) {
     type_ = type;
     InitFakeDrmProperty(crtc_property_, plane_id_, kFakePlaneCrtcPropId,
                         "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
@@ -587,12 +614,16 @@ class FakeDrmPlane : public DrmPlane {
                         "SRC_H");
   }
 
-  uint32_t GetId() const override {
-    return plane_id_;
+  static DrmModePlaneUnique MakeFakeRawPlane(uint32_t plane_id,
+                                             uint32_t possible_crtcs_mask) {
+    auto* raw = new drmModePlane{};
+    raw->plane_id = plane_id;
+    raw->possible_crtcs = possible_crtcs_mask;
+    return {raw, [](drmModePlane* it) { delete it; }};
   }
 
-  bool IsCrtcSupported(const DrmCrtc& /*crtc*/) const override {
-    return true;
+  uint32_t GetId() const override {
+    return plane_id_;
   }
 
   bool IsValidForLayer(const LayerData* /*layer*/) override {

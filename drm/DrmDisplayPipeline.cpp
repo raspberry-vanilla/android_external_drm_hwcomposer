@@ -18,6 +18,7 @@
 
 #include <xf86drmMode.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -75,11 +76,28 @@ static auto TryCreatePipeline(DrmDevice &dev, DrmConnector &connector,
     return {};
   }
 
-  for (const auto &plane : primary_planes) {
-    pipe->primary_plane = plane->BindPipeline(pipe.get());
-    if (pipe->primary_plane) {
-      break;
+  // Prefer a primary plane already active on this CRTC, then an idle primary
+  // plane (CRTC_ID == 0), before falling back to any compatible unbound
+  // primary plane.
+  auto try_bind_primary = [&](auto predicate) {
+    for (auto *plane : primary_planes) {
+      if (predicate(*plane)) {
+        pipe->primary_plane = plane->BindPipeline(pipe.get());
+        if (pipe->primary_plane) {
+          return true;
+        }
+      }
     }
+    return false;
+  };
+  const uint32_t crtc_id = crtc.GetId();
+  if (!try_bind_primary([crtc_id](const DrmPlane &plane) {
+        return plane.GetCrtcProperty().GetValue().value_or(0) == crtc_id;
+      }) &&
+      !try_bind_primary([](const DrmPlane &plane) {
+        return plane.GetCrtcProperty().GetValue().value_or(0) == 0;
+      })) {
+    try_bind_primary([](const DrmPlane & /*plane*/) { return true; });
   }
 
   if (!pipe->primary_plane) {

@@ -303,21 +303,12 @@ int DrmPlane::Init() {
 }
 
 bool DrmPlane::IsCrtcSupported(const DrmCrtc &crtc) const {
-  auto crtc_prop_optval = crtc_property_.GetValue();
-  auto crtc_prop_val = crtc_prop_optval ? *crtc_prop_optval : 0;
-
-  if (crtc_prop_val != 0 && crtc_prop_val != crtc.GetId() &&
-      GetType() == DRM_PLANE_TYPE_PRIMARY) {
-    // Some DRM driver such as omap_drm allows sharing primary plane between
-    // CRTCs, but the primary plane could not be shared if it has been used by
-    // any CRTC already, which is protected by the plane_switching_crtc function
-    // in the kernel drivers/gpu/drm/drm_atomic.c file.
-    // The current drm_hwc design is not ready to support such scenario yet,
-    // so adding the CRTC status check here to workaround for now.
+  constexpr uint32_t kMaxCrtcIndex = 31;
+  if (crtc.GetIndexInResArray() > kMaxCrtcIndex) {
     return false;
   }
 
-  return ((1 << crtc.GetIndexInResArray()) & plane_->possible_crtcs) != 0;
+  return ((1U << crtc.GetIndexInResArray()) & plane_->possible_crtcs) != 0;
 }
 
 static uint64_t ToDrmRotation(LayerTransform transform) {
