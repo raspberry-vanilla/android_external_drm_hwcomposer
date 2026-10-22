@@ -318,6 +318,23 @@ class FakeDrmConnector : public DrmConnector {
                         DRM_MODE_PROP_OBJECT, 0);
   }
 
+  static DrmModeConnectorUnique MakeFakeRawConnector(uint32_t connector_id,
+                                                     uint32_t encoder_id,
+                                                     uint32_t connector_type) {
+    auto* raw = new drmModeConnector{};
+    raw->connector_id = connector_id;
+    raw->encoder_id = encoder_id;
+    raw->connector_type = connector_type;
+    raw->connector_type_id = 1;
+    raw->connection = DRM_MODE_CONNECTED;
+    return {raw, [](drmModeConnector* it) { delete it; }};
+  }
+
+  void InitRawConnector(uint32_t connector_type) {
+    connector_ = MakeFakeRawConnector(connector_id_, encoder_id_,
+                                      connector_type);
+  }
+
   void SetEdidBlobData(std::vector<uint8_t> edid_bytes) {
     edid_bytes_ = std::move(edid_bytes);
   }
@@ -652,6 +669,10 @@ class FakeDrmDevice : public DrmDevice {
     backend_ = std::move(backend);
   }
 
+  void SetResourceConnectorIds(std::vector<uint32_t> connector_ids) {
+    resource_connector_ids_ = std::move(connector_ids);
+  }
+
   void AddConnector(std::unique_ptr<DrmConnector> connector) {
     connectors_.emplace_back(std::move(connector));
   }
@@ -697,6 +718,35 @@ class FakeDrmDevice : public DrmDevice {
     return connector_ptr;
   }
 
+ protected:
+  DrmModeResUnique GetResources() const override {
+    if (resource_connector_ids_.empty()) {
+      return DrmDevice::GetResources();
+    }
+    auto* res = new drmModeRes{};
+    auto* ids = new uint32_t[resource_connector_ids_.size()];
+    std::memcpy(ids, resource_connector_ids_.data(),
+                resource_connector_ids_.size() * sizeof(uint32_t));
+    res->count_connectors = static_cast<int>(resource_connector_ids_.size());
+    res->connectors = ids;
+    return {res, [](drmModeRes* it) {
+              delete[] it->connectors;
+              delete it;
+            }};
+  }
+
+  std::unique_ptr<DrmConnector> CreateConnectorInstance(
+      uint32_t connector_id, uint32_t index) override {
+    auto conn = std::make_unique<FakeDrmConnector>(this, /*encoder_id=*/0,
+                                                   /*is_external=*/true,
+                                                   kFakeConnectorMmWidth,
+                                                   kFakeConnectorMmHeight,
+                                                   connector_id, index);
+    conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
+    conn->SetModes({CreateFakeDrmMode()});
+    return conn;
+  }
+
  private:
   uint32_t next_id_ = 0;
   mutable uint32_t next_blob_id_ = kFakeBlobBaseId;
@@ -705,6 +755,7 @@ class FakeDrmDevice : public DrmDevice {
   bool allow_dumb_buffer_ = true;
   FakeAtomicCommitSink* fake_sink_ = nullptr;
   FakeDrmFbImporter* fake_importer_ = nullptr;
+  std::vector<uint32_t> resource_connector_ids_;
 };
 
 }  // namespace android::drm_hwcomposer

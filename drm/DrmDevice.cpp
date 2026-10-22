@@ -362,11 +362,20 @@ auto DrmDevice::GetConnectors()
   return connectors_;
 }
 
+auto DrmDevice::GetResources() const -> DrmModeResUnique {
+  return MakeDrmModeResUnique(*GetFd());
+}
+
+auto DrmDevice::CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+    -> std::unique_ptr<DrmConnector> {
+  return DrmConnector::CreateInstance(*this, connector_id, index);
+}
+
 auto DrmDevice::RefreshConnectors()
     -> std::vector<std::unique_ptr<DrmConnector>> {
   std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
 
-  auto res = MakeDrmModeResUnique(*GetFd());
+  auto res = GetResources();
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
     return stale_connectors;
@@ -406,7 +415,7 @@ auto DrmDevice::RefreshConnectors()
       continue;
     }
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    auto conn = DrmConnector::CreateInstance(*this, res->connectors[i], i);
+    auto conn = CreateConnectorInstance(res->connectors[i], i);
     if (!conn) {
       continue;
     }

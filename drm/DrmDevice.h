@@ -124,6 +124,11 @@ class DrmDevice {
   auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
 
+ protected:
+  virtual auto GetResources() const -> DrmModeResUnique;
+  virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+      -> std::unique_ptr<DrmConnector>;
+
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);
   auto Init(const char *path) -> int;

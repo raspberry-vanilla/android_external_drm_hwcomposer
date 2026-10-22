@@ -1150,4 +1150,36 @@ TEST_F(DrmHwcTest,
   EXPECT_EQ(handler_calls.load(), 2);
 }
 
+TEST_F(DrmHwcTest,
+       RefreshConnectorsAddsNewDynamicConnectorsAndReturnsStaleConnectors) {
+  constexpr uint32_t kMstConnId1 = 200;
+  constexpr uint32_t kMstConnId2 = 201;
+  fake_device->AddPipelineResources(/*is_external=*/false);
+  fake_device->AddPipelineResources(/*is_external=*/true);
+  const uint32_t static_id_0 = fake_device->GetConnectors()[0]->GetId();
+  const uint32_t static_id_1 = fake_device->GetConnectors()[1]->GetId();
+
+  // Dynamic MST connectors 200 and 201 appear in DRM resources.
+  fake_device->SetResourceConnectorIds(
+      {static_id_0, static_id_1, kMstConnId1, kMstConnId2});
+  {
+    auto stale = fake_device->RefreshConnectors();
+    EXPECT_TRUE(stale.empty());
+  }
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstConnId1);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetId(), kMstConnId2);
+
+  // Now MST connector 200 is unplugged and removed from DRM resources while 201
+  // remains present.
+  fake_device->SetResourceConnectorIds({static_id_0, static_id_1, kMstConnId2});
+  {
+    auto stale = fake_device->RefreshConnectors();
+    ASSERT_EQ(stale.size(), 1U);
+    EXPECT_EQ(stale[0]->GetId(), kMstConnId1);
+  }
+  ASSERT_EQ(fake_device->GetConnectors().size(), 3U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstConnId2);
+}
+
 }  // namespace android::drm_hwcomposer
