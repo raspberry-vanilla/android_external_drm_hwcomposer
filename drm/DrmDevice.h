@@ -114,8 +114,8 @@ class DrmDevice {
 
   DrmEncoder *FindEncoderById(uint32_t id) const;
 
-  int GetProperty(uint32_t obj_id, uint32_t obj_type, const char *prop_name,
-                  DrmProperty *property) const;
+  virtual int GetProperty(uint32_t obj_id, uint32_t obj_type,
+                          const char *prop_name, DrmProperty *property) const;
 
   const std::optional<std::pair<uint64_t, uint64_t>> &GetCapCursorSize() const {
     return cap_cursor_size_;

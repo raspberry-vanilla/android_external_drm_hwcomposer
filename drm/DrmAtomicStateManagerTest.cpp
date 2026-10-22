@@ -740,6 +740,46 @@ TEST_F(DrmAtomicStateManagerTest,
 }
 
 TEST_F(DrmAtomicStateManagerTest,
+       DrmConnectorInitQueriesLinkStatusPropertyForResetOnModeset) {
+  auto* fake_conn = fake_connector;
+  ASSERT_NE(fake_conn, nullptr);
+  const uint32_t conn_id = fake_conn->GetId();
+
+  // Register mandatory connector properties ("DPMS", "CRTC_ID") and optional
+  // "link-status" property (with value DRM_MODE_LINK_STATUS_BAD) on fake_device
+  // so DrmConnector::Init() can query them via DrmDevice::GetProperty().
+  fake_device->RegisterFakeObjectProperty(conn_id, "DPMS", kFakeDpmsPropId,
+                                          DRM_MODE_PROP_ENUM, DRM_MODE_DPMS_ON);
+  fake_device->RegisterFakeObjectProperty(conn_id, "CRTC_ID",
+                                          kFakeConnectorCrtcPropId,
+                                          DRM_MODE_PROP_OBJECT, 0);
+  fake_device->RegisterFakeObjectProperty(conn_id, "link-status",
+                                          kFakeLinkStatusPropId,
+                                          DRM_MODE_PROP_ENUM,
+                                          DRM_MODE_LINK_STATUS_BAD);
+
+  ASSERT_TRUE(fake_conn->CallBaseInit());
+  EXPECT_EQ(fake_conn->GetLinkStatusProperty().GetId(), kFakeLinkStatusPropId)
+      << "DrmConnector::Init() failed to query optional 'link-status' property";
+
+  // Verify that an initial full modeset resets link-status to
+  // DRM_MODE_LINK_STATUS_GOOD (0) in the atomic request.
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(req, nullptr);
+  auto* drm_req = AsDrmRequest(req);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
+                                      kFakeLinkStatusPropId),
+            static_cast<uint64_t>(DRM_MODE_LINK_STATUS_GOOD));
+}
+
+TEST_F(DrmAtomicStateManagerTest,
        TeardownSkipsConnectorCrtcIdWhenConnectorHasVanished) {
   auto* fake_conn = fake_connector;
   ASSERT_NE(fake_conn, nullptr);

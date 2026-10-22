@@ -204,6 +204,8 @@ auto DrmConnector::Init() -> bool {
 
   GetOptionalConnectorProperty("PATH", &path_property_);
 
+  GetOptionalConnectorProperty("link-status", &link_status_property_);
+
   return true;
 }
 
@@ -333,7 +335,7 @@ int DrmConnector::UpdateModesAndProperties() {
 }
 
 bool DrmConnector::IsLinkStatusGood() {
-  if (GetConnectorProperty("link-status", &link_status_property_, false)) {
+  if (GetOptionalConnectorProperty("link-status", &link_status_property_)) {
     auto link_status_property_value = link_status_property_.GetValue();
     if (link_status_property_value &&
         (link_status_property_value == DRM_MODE_LINK_STATUS_BAD))

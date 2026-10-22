@@ -117,7 +117,7 @@ void DrmHwcThree::SendHotplugEventToClient(
       event = common::DisplayHotplugEvent::CONNECTED;
       break;
     case DrmHwc::kLinkTrainingFailed:
-      event = common::DisplayHotplugEvent::ERROR_INCOMPATIBLE_CABLE;
+      event = common::DisplayHotplugEvent::ERROR_LINK_UNSTABLE;
       break;
   }
   if (event == common::DisplayHotplugEvent::DISCONNECTED) {

@@ -28,6 +28,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -77,8 +78,10 @@ constexpr uint32_t kFakePlaneSrcXPropId = 36;
 constexpr uint32_t kFakePlaneSrcYPropId = 37;
 constexpr uint32_t kFakePlaneSrcWPropId = 38;
 constexpr uint32_t kFakePlaneSrcHPropId = 39;
-constexpr uint32_t kFakeContentProtectionPropId = 40;
-constexpr uint32_t kFakeHdcpContentTypePropId = 41;
+inline constexpr uint32_t kFakeContentProtectionPropId = 40;
+inline constexpr uint32_t kFakeHdcpContentTypePropId = 41;
+inline constexpr uint32_t kFakeLinkStatusPropId = 42;
+inline constexpr uint32_t kFakeDpmsPropId = 43;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
 constexpr uint32_t kFakeConnectorMmWidth = 500;
@@ -96,6 +99,9 @@ inline void InitFakeDrmProperty(DrmProperty& prop, uint32_t obj_id,
   uint64_t values[2] = {0, UINT64_MAX};
   raw_prop.count_values = 2;
   raw_prop.values = values;
+  drm_mode_property_enum enums[2] = {{0, "0"}, {1, "1"}};
+  raw_prop.count_enums = 2;
+  raw_prop.enums = enums;
   prop.Init(nullptr, obj_id, &raw_prop, value);
 }
 
@@ -337,6 +343,14 @@ class FakeDrmConnector : public DrmConnector {
                                         : DRM_MODE_DISCONNECTED;
   }
 
+  bool CallBaseInit() {
+    if (!connector_) {
+      InitRawConnector(is_external_ ? DRM_MODE_CONNECTOR_DisplayPort
+                                    : DRM_MODE_CONNECTOR_eDP);
+    }
+    return DrmConnector::Init();
+  }
+
   int CallBaseUpdateModesAndProperties() {
     if (!connector_) {
       InitRawConnector(is_external_ ? DRM_MODE_CONNECTOR_DisplayPort
@@ -363,6 +377,12 @@ class FakeDrmConnector : public DrmConnector {
               delete[] static_cast<uint8_t*>(it->data);
               delete it;
             }};
+  }
+
+  void SetLinkStatusPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(link_status_property_, connector_id_,
+                        kFakeLinkStatusPropId, "link-status",
+                        DRM_MODE_PROP_ENUM, value);
   }
 
   uint32_t GetId() const override {
@@ -683,6 +703,34 @@ class FakeDrmDevice : public DrmDevice {
     backend_ = std::move(backend);
   }
 
+  struct FakePropertyDef {
+    uint32_t prop_id;
+    uint32_t flags;
+    uint64_t value;
+  };
+
+  void RegisterFakeObjectProperty(uint32_t obj_id, const std::string& prop_name,
+                                  uint32_t prop_id,
+                                  uint32_t flags = DRM_MODE_PROP_RANGE,
+                                  uint64_t value = 0) {
+    fake_properties_[{obj_id, prop_name}] = FakePropertyDef{
+        .prop_id = prop_id,
+        .flags = flags,
+        .value = value,
+    };
+  }
+
+  int GetProperty(uint32_t obj_id, uint32_t obj_type, const char* prop_name,
+                  DrmProperty* property) const override {
+    auto it = fake_properties_.find({obj_id, std::string(prop_name)});
+    if (it != fake_properties_.end()) {
+      InitFakeDrmProperty(*property, obj_id, it->second.prop_id, prop_name,
+                          it->second.flags, it->second.value);
+      return 0;
+    }
+    return DrmDevice::GetProperty(obj_id, obj_type, prop_name, property);
+  }
+
   void SetResourceConnectorIds(std::vector<uint32_t> connector_ids) {
     resource_connector_ids_ = std::move(connector_ids);
   }
@@ -769,6 +817,7 @@ class FakeDrmDevice : public DrmDevice {
   bool allow_dumb_buffer_ = true;
   FakeAtomicCommitSink* fake_sink_ = nullptr;
   FakeDrmFbImporter* fake_importer_ = nullptr;
+  std::map<std::pair<uint32_t, std::string>, FakePropertyDef> fake_properties_;
   std::vector<uint32_t> resource_connector_ids_;
 };
 
