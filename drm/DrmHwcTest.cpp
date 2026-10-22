@@ -1253,4 +1253,64 @@ TEST_F(DrmHwcTest,
   hwc.FinalizeDisplayBinding();
 }
 
+TEST_F(DrmHwcTest,
+       NotifyDisplayLinkStatusEmitsIncompatibleCableWhenAllModesPruned) {
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+
+  AddDeviceToResMan(std::move(shared_dev));
+  RunUpdateFrontendDisplays();
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  ASSERT_NE(hwc.GetDisplay(1), nullptr);
+
+  // Simulate terminal link training failure where the kernel prunes all modes
+  // on the connector and sets link-status = BAD while the cable remains plugged
+  // in.
+  ext_conn->SetModes({});
+  ext_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kIncompatibleCable));
+
+  // A subsequent hotplug sweep while still 0-mode + link-status = BAD must not
+  // emit duplicate kIncompatibleCable events.
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  EXPECT_TRUE(hwc.hotplug_events.empty());
+
+  // Also verify initial plug-in with 0 modes + link-status = BAD emits
+  // kIncompatibleCable once without attaching a pipeline.
+  hwc.hotplug_events.clear();
+  ext_conn->SetConnected(false);
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  ext_conn->SetConnected(true);
+  ext_conn->SetModes({});
+  ext_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0].second,
+            DrmHwc::DisplayStatus::kIncompatibleCable);
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
 }  // namespace android::drm_hwcomposer

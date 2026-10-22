@@ -45,6 +45,7 @@ class PipelineToFrontendBindingInterface {
   virtual void FinalizeDisplayBinding() = 0;
   virtual void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
+  virtual void NotifyIncompatibleCable() = 0;
   virtual void NotifyHdcpTermination(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void FlushHotplugEvents() = 0;

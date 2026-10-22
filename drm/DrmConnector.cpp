@@ -301,6 +301,7 @@ int DrmConnector::UpdateModesAndProperties() {
       connector_->connection = DRM_MODE_DISCONNECTED;
     }
     modes_.clear();
+    reported_incompatible_cable_ = false;
     return -ENODEV;
   }
   deleted_ = false;
@@ -319,6 +320,9 @@ int DrmConnector::UpdateModesAndProperties() {
     if (!exists) {
       modes_.emplace_back(&connector_->modes[i]);
     }
+  }
+  if (!IsConnected() || !modes_.empty()) {
+    reported_incompatible_cable_ = false;
   }
 
   if (IsMst()) {

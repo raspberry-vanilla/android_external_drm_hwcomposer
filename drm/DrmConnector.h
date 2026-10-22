@@ -183,6 +183,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return deleted_;
   }
 
+  bool HasReportedIncompatibleCable() const {
+    return reported_incompatible_cable_;
+  }
+
+  void SetReportedIncompatibleCable(bool reported) {
+    reported_incompatible_cable_ = reported;
+  }
+
   std::optional<uint32_t> GetPhysicalPortBaseId() const;
 
  private:
@@ -203,6 +211,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   const uint32_t index_in_res_array_;
   bool deleted_ = false;
+  bool reported_incompatible_cable_ = false;
 
   std::vector<DrmMode> modes_;
 

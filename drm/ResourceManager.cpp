@@ -390,6 +390,13 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
           conn->GetName().c_str());
 
     if (connected) {
+      if (conn->GetModes().empty() && !conn->IsLinkStatusGood()) {
+        if (!conn->HasReportedIncompatibleCable()) {
+          conn->SetReportedIncompatibleCable(true);
+          frontend_interface_->NotifyIncompatibleCable();
+        }
+        return;
+      }
       std::shared_ptr<DrmDisplayPipeline>
           pipeline = conn->GetDev().GetBackend().CreatePipeline(*conn);
       ALOGE_IF(pipeline == nullptr,
@@ -418,7 +425,14 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
     auto attached_it = attached_pipelines_.find(conn);
     if (attached_it != attached_pipelines_.end()) {
       if (!conn->IsLinkStatusGood()) {
-        frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+        if (conn->GetModes().empty()) {
+          if (!conn->HasReportedIncompatibleCable()) {
+            conn->SetReportedIncompatibleCable(true);
+            frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+          }
+        } else {
+          frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+        }
       }
 
       // If content protection is not enabled anymore, inform frontend so it

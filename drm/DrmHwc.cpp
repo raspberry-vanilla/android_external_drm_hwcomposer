@@ -218,10 +218,15 @@ void DrmHwc::NotifyDisplayLinkStatus(
   }
   const DisplayHandle handle = display_handles_[pipeline];
   auto *display = GetDisplay(handle);
-  if (display != nullptr) {
-    display->OnLinkTrainingFailed();
+  if (display != nullptr && !display->OnLinkTrainingFailed()) {
+    ScheduleHotplugEvent(handle, DisplayStatus::kIncompatibleCable);
+    return;
   }
   ScheduleHotplugEvent(handle, DisplayStatus::kLinkTrainingFailed);
+}
+
+void DrmHwc::NotifyIncompatibleCable() {
+  ScheduleHotplugEvent(kPrimaryDisplay, DisplayStatus::kIncompatibleCable);
 }
 
 void DrmHwc::NotifyHdcpTermination(

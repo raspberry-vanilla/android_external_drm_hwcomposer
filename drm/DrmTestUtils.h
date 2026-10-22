@@ -78,9 +78,9 @@ constexpr uint32_t kFakePlaneSrcXPropId = 36;
 constexpr uint32_t kFakePlaneSrcYPropId = 37;
 constexpr uint32_t kFakePlaneSrcWPropId = 38;
 constexpr uint32_t kFakePlaneSrcHPropId = 39;
-inline constexpr uint32_t kFakeContentProtectionPropId = 40;
-inline constexpr uint32_t kFakeHdcpContentTypePropId = 41;
-inline constexpr uint32_t kFakeLinkStatusPropId = 42;
+constexpr uint32_t kFakeContentProtectionPropId = 40;
+constexpr uint32_t kFakeHdcpContentTypePropId = 41;
+constexpr uint32_t kFakeLinkStatusPropId = 42;
 inline constexpr uint32_t kFakeDpmsPropId = 43;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
@@ -109,17 +109,6 @@ inline void InitFakeDrmProperty(DrmProperty& prop, uint32_t obj_id,
 // drmModeAtomicReq by mirroring libdrm's internal _drmModeAtomicReq layout.
 inline std::optional<uint64_t> GetAtomicReqPropertyValue(
     drmModeAtomicReqPtr req, uint32_t obj_id, uint32_t prop_id) {
-  struct ReqItemView {
-    uint32_t object_id;
-    uint32_t property_id;
-    uint64_t value;
-    uint32_t cursor;
-  };
-  struct ReqView {
-    uint32_t cursor;
-    uint32_t size_items;
-    ReqItemView* items;
-  };
   if (req == nullptr) {
     return std::nullopt;
   }
@@ -127,17 +116,30 @@ inline std::optional<uint64_t> GetAtomicReqPropertyValue(
   if (cursor <= 0) {
     return std::nullopt;
   }
-  ReqView view{};
+  struct AtomicReqItemView {
+    uint32_t object_id;
+    uint32_t property_id;
+    uint64_t value;
+    uint32_t cursor;
+  };
+  struct AtomicReqView {
+    uint32_t cursor;
+    uint32_t size_items;
+    AtomicReqItemView* items;
+  };
+  AtomicReqView view{};
   std::memcpy(&view, req, sizeof(view));
   if (view.items == nullptr) {
     return std::nullopt;
   }
-  std::vector<ReqItemView> items(static_cast<size_t>(cursor));
-  std::memcpy(items.data(), view.items, items.size() * sizeof(ReqItemView));
   std::optional<uint64_t> result;
-  for (const auto& item : items) {
-    if (item.object_id == obj_id && item.property_id == prop_id) {
-      result = item.value;
+  for (uint32_t i = 0; i < static_cast<uint32_t>(cursor); ++i) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (view.items[i].object_id == obj_id &&
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        view.items[i].property_id == prop_id) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      result = view.items[i].value;
     }
   }
   return result;
@@ -308,20 +310,28 @@ class NoOpBindable : public PipelineBindable<NoOpBindable> {};
 
 class FakeDrmConnector : public DrmConnector {
  public:
+  using PropHook = std::function<void(uint32_t, const std::string&, uint32_t,
+                                      uint32_t, uint64_t)>;
+
   FakeDrmConnector(DrmDevice* dev, uint32_t encoder_id,
                    bool is_external = false, uint32_t width = 0,
                    uint32_t height = 0,
                    uint32_t connector_id = kFakeConnectorBaseId,
-                   uint32_t index = 0)
+                   uint32_t index = 0, PropHook prop_hook = nullptr)
       : DrmConnector(nullptr, dev, index),
         connector_id_(connector_id),
         encoder_id_(encoder_id),
         is_external_(is_external),
         width_(width),
-        height_(height) {
+        height_(height),
+        prop_hook_(std::move(prop_hook)) {
     InitFakeDrmProperty(crtc_id_property_, connector_id_,
                         kFakeConnectorCrtcPropId, "CRTC_ID",
                         DRM_MODE_PROP_OBJECT, 0);
+  }
+
+  void SetPropHook(PropHook hook) {
+    prop_hook_ = std::move(hook);
   }
 
   static DrmModeConnectorUnique MakeFakeRawConnector(uint32_t connector_id,
@@ -379,11 +389,7 @@ class FakeDrmConnector : public DrmConnector {
             }};
   }
 
-  void SetLinkStatusPropertyValue(uint64_t value) {
-    InitFakeDrmProperty(link_status_property_, connector_id_,
-                        kFakeLinkStatusPropId, "link-status",
-                        DRM_MODE_PROP_ENUM, value);
-  }
+  void SetLinkStatusPropertyValue(uint64_t value);
 
   uint32_t GetId() const override {
     return connector_id_;
@@ -394,11 +400,11 @@ class FakeDrmConnector : public DrmConnector {
   }
 
   bool IsExternal() const override {
-    return is_external_;
+    return connector_ ? DrmConnector::IsExternal() : is_external_;
   }
 
   bool IsInternal() const override {
-    return !is_external_;
+    return connector_ ? DrmConnector::IsInternal() : !is_external_;
   }
 
   bool IsConnected() const override {
@@ -413,6 +419,14 @@ class FakeDrmConnector : public DrmConnector {
     }
   }
 
+  void SetPendingConnected(bool connected) {
+    pending_connected_ = connected;
+  }
+
+  size_t GetUpdateModesCallCount() const {
+    return update_modes_call_count_;
+  }
+
   std::string GetName() const override {
     return name_;
   }
@@ -422,6 +436,14 @@ class FakeDrmConnector : public DrmConnector {
   }
 
   int UpdateModesAndProperties() override {
+    ++update_modes_call_count_;
+    if (pending_connected_.has_value()) {
+      SetConnected(*pending_connected_);
+      pending_connected_.reset();
+    }
+    if (!IsConnected() || !modes_.empty()) {
+      SetReportedIncompatibleCable(false);
+    }
     return update_modes_result_;
   }
 
@@ -430,6 +452,9 @@ class FakeDrmConnector : public DrmConnector {
   }
 
   uint32_t GetConnectorType() const override {
+    if (connector_) {
+      return connector_->connector_type;
+    }
     return is_external_ ? DRM_MODE_CONNECTOR_DisplayPort
                         : DRM_MODE_CONNECTOR_eDP;
   }
@@ -483,7 +508,10 @@ class FakeDrmConnector : public DrmConnector {
   const bool is_external_;
   const uint32_t width_;
   const uint32_t height_;
+  PropHook prop_hook_;
   bool connected_ = true;
+  std::optional<bool> pending_connected_;
+  size_t update_modes_call_count_ = 0;
   int update_modes_result_ = 0;
   std::string name_ = "FakeConnector-1";
   bool content_protection_enabled_simulated_ = false;
@@ -511,7 +539,8 @@ class FakeDrmEncoder : public DrmEncoder {
 
 class FakeDrmCrtc : public DrmCrtc {
  public:
-  explicit FakeDrmCrtc(uint32_t id) : DrmCrtc(nullptr, 0), id_(id) {
+  explicit FakeDrmCrtc(uint32_t id, uint32_t index = 0)
+      : DrmCrtc(nullptr, index), id_(id) {
     InitFakeDrmProperty(active_property_, id_, kFakeCrtcActivePropId, "ACTIVE",
                         DRM_MODE_PROP_RANGE, 0);
     InitFakeDrmProperty(mode_property_, id_, kFakeCrtcModePropId, "MODE_ID",
@@ -760,14 +789,17 @@ class FakeDrmDevice : public DrmDevice {
     AddEncoder(std::make_unique<FakeDrmEncoder>(/*id=*/next_id_,
                                                 /*crtc_id=*/next_id_));
     AddCrtc(std::make_unique<FakeDrmCrtc>(/*id=*/next_id_ + 1));
-    auto connector = std::make_unique<FakeDrmConnector>(this,
-                                                        /*encoder_id=*/next_id_,
-                                                        is_external,
-                                                        kFakeConnectorMmWidth,
-                                                        kFakeConnectorMmHeight,
-                                                        kFakeConnectorBaseId +
-                                                            next_id_,
-                                                        next_id_);
+    auto connector = std::make_unique<
+        FakeDrmConnector>(this,
+                          /*encoder_id=*/next_id_, is_external,
+                          kFakeConnectorMmWidth, kFakeConnectorMmHeight,
+                          kFakeConnectorBaseId + next_id_, next_id_,
+                          [this](uint32_t obj_id, const std::string& prop_name,
+                                 uint32_t prop_id, uint32_t flags,
+                                 uint64_t val) {
+                            RegisterFakeObjectProperty(obj_id, prop_name,
+                                                       prop_id, flags, val);
+                          });
     connector->SetModes(std::move(modes));
     auto* connector_ptr = connector.get();
     AddConnector(std::move(connector));
@@ -799,11 +831,17 @@ class FakeDrmDevice : public DrmDevice {
 
   std::unique_ptr<DrmConnector> CreateConnectorInstance(
       uint32_t connector_id, uint32_t index) override {
-    auto conn = std::make_unique<FakeDrmConnector>(this, /*encoder_id=*/0,
-                                                   /*is_external=*/true,
-                                                   kFakeConnectorMmWidth,
-                                                   kFakeConnectorMmHeight,
-                                                   connector_id, index);
+    auto conn = std::make_unique<
+        FakeDrmConnector>(this,
+                          /*encoder_id=*/connector_id,
+                          /*is_external=*/true, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, connector_id, index,
+                          [this](uint32_t obj_id, const std::string& prop_name,
+                                 uint32_t prop_id, uint32_t flags,
+                                 uint64_t val) {
+                            RegisterFakeObjectProperty(obj_id, prop_name,
+                                                       prop_id, flags, val);
+                          });
     conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
     conn->SetModes({CreateFakeDrmMode()});
     return conn;
@@ -820,5 +858,15 @@ class FakeDrmDevice : public DrmDevice {
   std::map<std::pair<uint32_t, std::string>, FakePropertyDef> fake_properties_;
   std::vector<uint32_t> resource_connector_ids_;
 };
+
+inline void FakeDrmConnector::SetLinkStatusPropertyValue(uint64_t value) {
+  InitFakeDrmProperty(link_status_property_, connector_id_,
+                      kFakeLinkStatusPropId, "link-status", DRM_MODE_PROP_ENUM,
+                      value);
+  if (prop_hook_) {
+    prop_hook_(connector_id_, "link-status", kFakeLinkStatusPropId,
+               DRM_MODE_PROP_ENUM, value);
+  }
+}
 
 }  // namespace android::drm_hwcomposer

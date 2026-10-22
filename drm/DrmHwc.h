@@ -41,11 +41,13 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   DrmHwc();
   ~DrmHwc() override;
 
-  // Enum for Display status: Connected, Disconnected, Link Training Failed
+  // Enum for Display status: Connected, Disconnected, Link Training Failed,
+  // Incompatible Cable
   enum DisplayStatus {
     kDisconnected,
     kConnected,
     kLinkTrainingFailed,
+    kIncompatibleCable,
   };
 
   // Client Callback functions.:
@@ -106,6 +108,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // Notify Display Link Status
   void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) override;
+  void NotifyIncompatibleCable() override;
 
   // Notify HDCP Termination from kernel Uevents
   void NotifyHdcpTermination(
