@@ -900,11 +900,14 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     return HwcDisplay::Error::kNone;
   }
   staged_power_mode_.reset();
-  // Clear the VSyncWorker callback directly so VSync events stop firing while
-  // the display is powered off, while preserving vsync_event_en_ to restore
-  // callbacks when the display is powered back on.
-  if (!enabled && vsync_worker_) {
-    vsync_worker_->SetTimestampCallback(std::nullopt);
+  if (!enabled) {
+    last_presented_composition_.Reset();
+    // Clear the VSyncWorker callback directly so VSync events stop firing while
+    // the display is powered off, while preserving vsync_event_en_ to restore
+    // callbacks when the display is powered back on.
+    if (vsync_worker_) {
+      vsync_worker_->SetTimestampCallback(std::nullopt);
+    }
   }
   return HwcDisplay::Error::kNone;
 }

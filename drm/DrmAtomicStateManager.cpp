@@ -581,7 +581,7 @@ bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
 
 bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
                                                    DrmAtomicRequest &request) {
-  if (!args.composition) {
+  if (!args.composition && !args.teardown) {
     return true;
   }
 
@@ -591,7 +591,8 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
   // Clear the list of planes for the next frame. It will be repopulated below.
   request.new_frame_state.used_planes.clear();
 
-  for (auto &joining : args.composition->plan) {
+  if (args.composition) {
+    for (auto &joining : args.composition->plan) {
       DrmPlane *plane = joining.plane->Get();
       LayerData &layer = joining.layer;
 
@@ -672,6 +673,7 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
         }
       }
     }
+  }
 
   // Disable all planes that were used in the previous commit which are no
   // longer being used.

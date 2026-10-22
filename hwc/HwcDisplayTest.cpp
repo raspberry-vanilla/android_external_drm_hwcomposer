@@ -1819,4 +1819,53 @@ TEST_F(
   ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
 }
 
+TEST_F(HwcDisplayTest,
+       SetPowerModeOffPassesEmptyCompositionPlanToDisableActivePlanes) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  ASSERT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  // Verify that DrmAtomicStateManager disables active planes on teardown even
+  // when args.composition is null, so HwcDisplay::SetPowerMode(PowerMode::kOff)
+  // does not need to pass a dummy LayerToPlaneJoiningPlan (which would trigger
+  // PresentDisplay() after power-off on SdmAtomicStateManager).
+  const uint32_t primary_plane_id = pipeline->primary_plane->Get()->GetId();
+  AtomicCommitArgs req_args{};
+  req_args.blocking = true;
+  req_args.power_mode = PowerMode::kOff;
+  req_args.teardown = true;
+  auto req = pipeline->atomic_state_manager->GetAtomicModeReqForArgs(req_args);
+  ASSERT_NE(req, nullptr);
+  void* raw_req = req.get();
+  auto* drm_req = static_cast<DrmAtomicStateManager::DrmAtomicRequest*>(
+      raw_req);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      primary_plane_id, kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(),
+                                      primary_plane_id, kFakePlaneFbPropId),
+            0ULL);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_EQ(sink->GetCommitHistory()[0].size(), 1U);
+  const auto& off_args = sink->GetCommitHistory()[0][0];
+  EXPECT_EQ(off_args.power_mode, PowerMode::kOff);
+  EXPECT_TRUE(off_args.teardown);
+  EXPECT_EQ(off_args.composition, nullptr)
+      << "HwcDisplay::SetPowerMode(PowerMode::kOff) must leave composition "
+         "null and rely on teardown=true so SDM does not call PresentDisplay() "
+         "after powering off";
+}
+
 }  // namespace android::drm_hwcomposer
