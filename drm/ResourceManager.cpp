@@ -296,6 +296,10 @@ void ResourceManager::Init() {
         return any_connector_unsettled;
       });
 
+      for (auto &drm : drms_) {
+        auto stale_connectors = drm->RefreshConnectors();
+        DetachStalePipelines(stale_connectors);
+      }
       UpdateFrontendDisplays();
       MaybeScheduleDelayedEdidRecovery();
     }

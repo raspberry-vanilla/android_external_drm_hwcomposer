@@ -93,11 +93,16 @@ void UEventListener::ThreadFn() {
       return false;
     }
     const bool is_drm_minor = has_field(*event, "DEVTYPE=drm_minor");
+    const bool is_drm_connector = has_field(*event, "DEVTYPE=drm_connector");
     const bool is_hotplug = has_field(*event, "HOTPLUG=1");
     if (is_drm_minor && is_hotplug) {
       return true;
     }
-    // DEVTYPE=drm_connector handling is added in commit 16
+    if (is_drm_connector) {
+      const bool is_add = has_field(*event, "ACTION=add");
+      const bool is_remove = has_field(*event, "ACTION=remove");
+      return is_hotplug || is_add || is_remove;
+    }
     return false;
   };
 

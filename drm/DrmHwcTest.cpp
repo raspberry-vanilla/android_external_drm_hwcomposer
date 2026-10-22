@@ -1313,4 +1313,99 @@ TEST_F(DrmHwcTest,
   ResetResManDevices();
 }
 
+TEST_F(DrmHwcTest,
+       ResourceManagerInitRefreshesDynamicMstConnectorsBeforeBindingDisplays) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  constexpr uint32_t kDynamicMstConnId = 250;
+  constexpr uint32_t kDynamicMstCrtcId = 251;
+  constexpr uint32_t kDynamicMstPlaneId = 252;
+
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+
+  // Initial DrmDevice::Init() only captured the internal panel and the 1st MST
+  // connector before the kernel's asynchronous MST LINK_ADDRESS worker finished
+  // registering the 2nd MST connector (kDynamicMstConnId).
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  shared_dev->AddPipelineResources(/*is_external=*/true);
+  const uint32_t primary_id = shared_dev->GetConnectors()[0]->GetId();
+  const uint32_t first_mst_id = shared_dev->GetConnectors()[1]->GetId();
+
+  // Provide an available encoder/CRTC/plane for the 2nd MST connector and
+  // expose kDynamicMstConnId in drmModeGetResources() before
+  // ResourceManager::Init() runs UpdateFrontendDisplays().
+  shared_dev->AddEncoder(
+      std::make_unique<FakeDrmEncoder>(kDynamicMstConnId, kDynamicMstCrtcId));
+  shared_dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kDynamicMstCrtcId));
+  shared_dev->AddPlane(
+      std::make_unique<FakeDrmPlane>(*shared_dev, DRM_PLANE_TYPE_PRIMARY,
+                                     /*is_valid=*/true, kDynamicMstPlaneId));
+  shared_dev->SetResourceConnectorIds(
+      {primary_id, first_mst_id, kDynamicMstConnId});
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+
+  InitResManForTest();
+
+  EXPECT_EQ(shared_dev_ptr->GetConnectors().size(), 3U)
+      << "ResourceManager::Init() failed to call RefreshConnectors() before "
+         "UpdateFrontendDisplays(), dropping the boot-connected MST connector";
+  EXPECT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+  EXPECT_NE(hwc.GetDisplay(2), nullptr)
+      << "2nd external MST display (kDynamicMstConnId) was not bound during "
+         "ResourceManager::Init()";
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerTriggersHotplugOnDrmConnectorAddAndRemoveUevents) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<int> hotplug_callbacks{0};
+  auto listener = UEventListener::CreateInstance([&]() { ++hotplug_callbacks; },
+                                                 std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kDeliveryWaitMs = 50;
+  const std::string connector_add_uevent = MakeUEventPacket({
+      "add@/devices/pci0000:00/drm/card0/card0-DP-5",
+      "ACTION=add",
+      "DEVTYPE=drm_connector",
+      "SUBSYSTEM=drm",
+  });
+
+  ASSERT_EQ(write(*write_fd, connector_add_uevent.data(),
+                  connector_add_uevent.size()),
+            static_cast<ssize_t>(connector_add_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+  EXPECT_GE(hotplug_callbacks.load(), 1)
+      << "UEventListener ignored DEVTYPE=drm_connector ACTION=add uevent";
+
+  const int after_add = hotplug_callbacks.load();
+  const std::string connector_remove_uevent = MakeUEventPacket({
+      "remove@/devices/pci0000:00/drm/card0/card0-DP-5",
+      "ACTION=remove",
+      "DEVTYPE=drm_connector",
+      "SUBSYSTEM=drm",
+  });
+
+  ASSERT_EQ(write(*write_fd, connector_remove_uevent.data(),
+                  connector_remove_uevent.size()),
+            static_cast<ssize_t>(connector_remove_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+  listener.reset();
+
+  EXPECT_GT(hotplug_callbacks.load(), after_add)
+      << "UEventListener ignored DEVTYPE=drm_connector ACTION=remove uevent";
+}
+
 }  // namespace android::drm_hwcomposer
