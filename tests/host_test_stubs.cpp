@@ -17,6 +17,7 @@
 #include <cutils/native_handle.h>
 #include <sync/sync.h>
 
+#include <cstdarg>
 #include <cstdint>
 #if defined(ANDROID) && !defined(__BIONIC__)
 #include <cstdio>
@@ -24,8 +25,14 @@
 #include <cstring>
 #endif
 #include <memory>
+#include <optional>
 
+#include <core/sdm_types.h>
+#include <debug_callback_intf.h>
+
+#include "backend/sdm/SdmDebugCallback.h"
 #include "backend/sdm/SnapAllocHandle.h"
+#include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "bufferinfo/GrallocBufferHandle.h"
@@ -79,6 +86,11 @@ int __system_property_get(const char* key, char* value) {
 
 namespace android::drm_hwcomposer {
 
+std::optional<BufferInfo> BufferInfoMapperMetadata::GetBoInfo(
+    buffer_handle_t /*handle*/) {
+  return std::nullopt;
+}
+
 std::unique_ptr<BufferInfoGetter> BufferInfoMapperMetadata::CreateInstance() {
   return nullptr;
 }
@@ -116,5 +128,30 @@ SnapAllocHandle::GetSnapHandle() const {
 }
 
 SnapAllocHandle::~SnapAllocHandle() = default;
+
+void SdmDebugCallback::Log(sdm::DebugLogType /*type*/, const char* /*log_tag*/,
+                           const char* /*fmt*/, std::va_list& /*args*/) {
+}
+
+int SdmDebugCallback::GetProperty(const char* /*property_name*/,
+                                  int* /*value*/) {
+  return sdm::kErrorNotSupported;
+}
+
+int SdmDebugCallback::GetProperty(const char* /*property_name*/,
+                                  char* /*value*/) {
+  return sdm::kErrorNotSupported;
+}
+
+void SdmDebugCallback::BeginTrace(const char* /*class_name*/,
+                                  const char* /*function_name*/,
+                                  const char* /*custom_string*/) {
+}
+
+void SdmDebugCallback::EndTrace() {
+}
+
+void SdmDebugCallback::ATrace(const char* /*custom_string*/, int /*bit*/) {
+}
 
 }  // namespace android::drm_hwcomposer
