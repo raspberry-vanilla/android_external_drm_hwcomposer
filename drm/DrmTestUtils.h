@@ -648,6 +648,10 @@ class FakeDrmDevice : public DrmDevice {
     drm_fb_importer_ = std::move(importer);
   }
 
+  void SetBackend(std::unique_ptr<Backend> backend) {
+    backend_ = std::move(backend);
+  }
+
   void AddConnector(std::unique_ptr<DrmConnector> connector) {
     connectors_.emplace_back(std::move(connector));
   }

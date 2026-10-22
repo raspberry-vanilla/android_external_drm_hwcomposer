@@ -252,12 +252,23 @@ void ResourceManager::Init() {
                    "ResourceManager: connector %u not found on device %s",
                    connector_id, drm_ptr->GetName().c_str());
           if (conn != nullptr) {
-            ProcessHotplugForConnector(conn);
-            if (conn->IsConnected() != connected) {
-              ALOGE(
-                  "ResourceManager: connector %u connected state mismatch "
-                  "(DRM=%d, backend=%d)",
-                  connector_id, conn->IsConnected(), connected);
+            if (!connected) {
+              conn->UpdateModesAndProperties();
+              ALOGW_IF(conn->IsConnected(),
+                       "ResourceManager: connector %u connected state mismatch "
+                       "(DRM=%d, backend=%d)",
+                       connector_id, conn->IsConnected(), connected);
+              auto it = attached_pipelines_.find(conn);
+              if (it != attached_pipelines_.end()) {
+                frontend_interface_->UnbindDisplay(it->second);
+                attached_pipelines_.erase(it);
+              }
+            } else {
+              ProcessHotplugForConnector(conn);
+              ALOGW_IF(!conn->IsConnected(),
+                       "ResourceManager: connector %u connected state mismatch "
+                       "(DRM=%d, backend=%d)",
+                       connector_id, conn->IsConnected(), connected);
             }
           }
           frontend_interface_->FinalizeDisplayBinding();

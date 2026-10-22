@@ -929,4 +929,70 @@ TEST_F(DrmHwcTest, DelayedEdidRecoveryFlushesHotplugEventsToClient) {
   ResetResManDevices();
 }
 
+namespace {
+
+class BackendHotplugTestBackend : public GenericBackend {
+ public:
+  explicit BackendHotplugTestBackend(DrmDevice& drm) : GenericBackend(drm) {
+  }
+
+  bool UseBackendHotplug() const override {
+    return true;
+  }
+
+  void SetHotplugHandler(HotplugHandler handler) override {
+    hotplug_handler_ = std::move(handler);
+  }
+
+  void TriggerHotplug(uint32_t connector_id, bool connected) {
+    if (hotplug_handler_) {
+      hotplug_handler_(connector_id, connected);
+    }
+  }
+
+ private:
+  HotplugHandler hotplug_handler_;
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest,
+       BackendHotplugDisconnectDetachesDisplayEvenBeforeKernelStatusUpdates) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto backend = std::make_unique<BackendHotplugTestBackend>(*shared_dev);
+  auto* backend_ptr = backend.get();
+  shared_dev->SetBackend(std::move(backend));
+
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  shared_dev->AddPipelineResources(/*is_external=*/true);
+  DrmConnector* primary_conn = shared_dev->GetConnectors()[0].get();
+  DrmConnector* ext_conn = shared_dev->GetConnectors()[1].get();
+  const uint32_t primary_id = primary_conn->GetId();
+  const uint32_t ext_id = ext_conn->GetId();
+
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  backend_ptr->TriggerHotplug(primary_id, /*connected=*/true);
+  backend_ptr->TriggerHotplug(ext_id, /*connected=*/true);
+  ASSERT_EQ(GetAttachedPipelineCount(primary_conn), 1U);
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  hwc.hotplug_events.clear();
+
+  // Backend reports connected = false for ext_id while ext_conn->IsConnected()
+  // in DRM has not yet flipped to false. ResourceManager's backend hotplug
+  // handler must honor connected == false and detach ext_conn.
+  backend_ptr->TriggerHotplug(ext_id, /*connected=*/false);
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kDisconnected));
+
+  DeInitResManForTest();
+}
 }  // namespace android::drm_hwcomposer
