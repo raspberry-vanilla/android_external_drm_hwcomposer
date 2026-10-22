@@ -7,6 +7,7 @@ HOST_AOSPLESS_DIR ?= $(firstword $(wildcard /aospless_x86_64 ../aospless))
 
 HOST_INCLUDES := \
 	-I. \
+	-I./backend/sdm/stubs/include \
 	-I./tests/test_include \
 	-isystem /usr/include/libdrm \
 	-isystem /usr/include/gtest \
@@ -36,6 +37,10 @@ UNITTEST_SRCS := \
 	backend/Backend.cpp \
 	backend/ClientBackend.cpp \
 	backend/GenericBackend.cpp \
+	backend/sdm/SdmAtomicStateManager.cpp \
+	backend/sdm/SdmAtomicStateManagerTest.cpp \
+	backend/sdm/sdm_error.cpp \
+	backend/sdm/stubs/sdm_stubs.cpp \
 	bufferinfo/BufferInfoGetter.cpp \
 	bufferinfo/BufferInfoGetterTest.cpp \
 	bufferinfo/GrallocBufferCache.cpp \

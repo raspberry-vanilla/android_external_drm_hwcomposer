@@ -299,6 +299,10 @@ cc_test_host {
         "backend/Backend.cpp",
         "backend/ClientBackend.cpp",
         "backend/GenericBackend.cpp",
+        "backend/sdm/SdmAtomicStateManager.cpp",
+        "backend/sdm/SdmAtomicStateManagerTest.cpp",
+        "backend/sdm/sdm_error.cpp",
+        "backend/sdm/stubs/sdm_stubs.cpp",
         "bufferinfo/BufferInfoGetter.cpp",
         "bufferinfo/BufferInfoGetterTest.cpp",
         "bufferinfo/GrallocBufferCache.cpp",
@@ -408,6 +412,7 @@ cc_test_host {
             include_dirs: [
                 "bionic/libc/kernel/uapi",
                 "bionic/libc/kernel/uapi/drm",
+                "external/drm_hwcomposer/backend/sdm/stubs/include",
                 "system/core/libsync/include",
             ],
         },
