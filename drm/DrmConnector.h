@@ -175,6 +175,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsMst() const;
 
+  void MarkDeleted() {
+    deleted_ = true;
+  }
+
+  bool IsDeleted() const {
+    return deleted_;
+  }
+
   std::optional<uint32_t> GetPhysicalPortBaseId() const;
 
  private:
@@ -194,6 +202,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   const uint32_t index_in_res_array_;
+  bool deleted_ = false;
 
   std::vector<DrmMode> modes_;
 

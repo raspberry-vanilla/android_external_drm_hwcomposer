@@ -390,13 +390,18 @@ auto DrmDevice::RefreshConnectors()
         stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
           auto *first = res->connectors;
           auto *last = std::next(res->connectors, res->count_connectors);
-          if (std::find(first, last, conn->GetId()) != last) {
+          const bool in_resources = std::find(first, last, conn->GetId()) !=
+                                    last;
+          const bool keep_alive = in_resources && !conn->IsDeleted();
+          if (keep_alive) {
             conn_ids_present.insert(conn->GetId());
-            return true;
           }
-          return false;
+          return keep_alive;
         });
 
+    for (auto it = stale_it; it != conns.end(); ++it) {
+      (*it)->MarkDeleted();
+    }
     if (!is_ignored) {
       std::move(stale_it, conns.end(), std::back_inserter(stale_connectors));
     }

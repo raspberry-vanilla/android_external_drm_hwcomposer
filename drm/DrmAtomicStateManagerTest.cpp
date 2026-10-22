@@ -122,7 +122,7 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
 struct DrmAtomicStateManagerTest : public ::testing::Test {
   void SetUp() override {
     fake_device = std::make_unique<FakeDrmDevice>();
-    fake_device->AddPipelineResources();
+    fake_connector = fake_device->AddPipelineResources();
     auto overlay = std::make_unique<FakeDrmPlane>(*fake_device,
                                                   DRM_PLANE_TYPE_OVERLAY,
                                                   /*is_valid=*/true,
@@ -137,6 +137,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    fake_connector = nullptr;
     overlay_plane = nullptr;
     state_manager.reset();
     pipeline.reset();
@@ -173,6 +174,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
   }
 
   std::unique_ptr<FakeDrmDevice> fake_device;
+  FakeDrmConnector* fake_connector = nullptr;
   FakeDrmPlane* overlay_plane = nullptr;
   std::shared_ptr<DrmDisplayPipeline> pipeline;
   std::unique_ptr<DrmAtomicStateManager> state_manager;
@@ -735,6 +737,50 @@ TEST_F(DrmAtomicStateManagerTest,
   ASSERT_NE(recording_manager.GetRecordedArgs().back().composition, nullptr);
   EXPECT_TRUE(
       recording_manager.GetRecordedArgs().back().composition->plan.empty());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       TeardownSkipsConnectorCrtcIdWhenConnectorHasVanished) {
+  auto* fake_conn = fake_connector;
+  ASSERT_NE(fake_conn, nullptr);
+  const uint32_t conn_id = fake_conn->GetId();
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto modeset_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(modeset_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(modeset_req));
+  ASSERT_TRUE(state_manager->IsActive());
+
+  // Simulate the dynamic MST connector being unregistered from the kernel
+  // before HwcDisplay::Deinit() runs its teardown commit.
+  fake_conn->MarkDeleted();
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.teardown = true;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto teardown_req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(teardown_req, nullptr);
+  auto* drm_req = AsDrmRequest(teardown_req);
+  EXPECT_FALSE(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
+                                         kFakeConnectorCrtcPropId)
+                   .has_value())
+      << "Teardown commit included CRTC_ID for a kernel-unregistered MST "
+         "connector, which causes drmModeAtomicCommit to fail with -ENOENT";
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcActivePropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
+                                      kFakeCrtcModePropId),
+            0U);
 }
 
 }  // namespace android::drm_hwcomposer

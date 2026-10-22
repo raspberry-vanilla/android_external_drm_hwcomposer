@@ -294,8 +294,14 @@ int DrmConnector::UpdateModesAndProperties() {
   auto conn = MakeDrmModeConnectorUnique(*drm_->GetFd(), GetId());
   if (!conn) {
     ALOGE("Failed to get connector %d", GetId());
+    MarkDeleted();
+    if (connector_) {
+      connector_->connection = DRM_MODE_DISCONNECTED;
+    }
+    modes_.clear();
     return -ENODEV;
   }
+  deleted_ = false;
   connector_ = std::move(conn);
 
   modes_.clear();

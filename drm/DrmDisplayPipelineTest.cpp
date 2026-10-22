@@ -16,9 +16,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
+
+#include <drm/drm_mode.h>
 
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
@@ -247,6 +251,35 @@ TEST_F(DrmDisplayPipelineTest, GetUsablePlanesSharedPlaneBindingsReleased) {
     EXPECT_EQ(usable_planes.size(), 2);
     EXPECT_NE(cursor_plane, nullptr);
   }
+}
+
+TEST_F(DrmDisplayPipelineTest,
+       UpdateModesAndPropertiesClearsConnectionAndModesWhenConnectorVanishes) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kEncoderId = 10;
+  constexpr uint32_t kMstConnId = 150;
+  auto conn = std::make_unique<FakeDrmConnector>(&dev, kEncoderId,
+                                                 /*is_external=*/true,
+                                                 kFakeConnectorMmWidth,
+                                                 kFakeConnectorMmHeight,
+                                                 kMstConnId);
+  conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
+  conn->SetConnected(true);
+  conn->SetModes({CreateFakeDrmMode()});
+  ASSERT_TRUE(conn->IsConnected());
+  ASSERT_EQ(conn->GetModes().size(), 1U);
+
+  // When a dynamic MST connector is destroyed in the kernel,
+  // drmModeGetConnector returns nullptr (-ENODEV). UpdateModesAndProperties()
+  // must mark the connector disconnected and clear stale modes.
+  EXPECT_NE(conn->CallBaseUpdateModesAndProperties(), 0);
+  EXPECT_TRUE(conn->IsDeleted());
+  EXPECT_FALSE(conn->IsConnected())
+      << "DrmConnector::UpdateModesAndProperties() left connection == "
+         "DRM_MODE_CONNECTED after drmModeGetConnector failed";
+  EXPECT_TRUE(conn->GetModes().empty())
+      << "DrmConnector::UpdateModesAndProperties() retained stale modes after "
+         "drmModeGetConnector failed";
 }
 
 }  // namespace android::drm_hwcomposer

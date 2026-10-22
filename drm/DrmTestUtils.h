@@ -333,6 +333,16 @@ class FakeDrmConnector : public DrmConnector {
   void InitRawConnector(uint32_t connector_type) {
     connector_ = MakeFakeRawConnector(connector_id_, encoder_id_,
                                       connector_type);
+    connector_->connection = connected_ ? DRM_MODE_CONNECTED
+                                        : DRM_MODE_DISCONNECTED;
+  }
+
+  int CallBaseUpdateModesAndProperties() {
+    if (!connector_) {
+      InitRawConnector(is_external_ ? DRM_MODE_CONNECTOR_DisplayPort
+                                    : DRM_MODE_CONNECTOR_eDP);
+    }
+    return DrmConnector::UpdateModesAndProperties();
   }
 
   void SetEdidBlobData(std::vector<uint8_t> edid_bytes) {
@@ -372,11 +382,15 @@ class FakeDrmConnector : public DrmConnector {
   }
 
   bool IsConnected() const override {
-    return connected_;
+    return connector_ ? DrmConnector::IsConnected() : connected_;
   }
 
   void SetConnected(bool connected) {
     connected_ = connected;
+    if (connector_) {
+      connector_->connection = connected ? DRM_MODE_CONNECTED
+                                         : DRM_MODE_DISCONNECTED;
+    }
   }
 
   std::string GetName() const override {

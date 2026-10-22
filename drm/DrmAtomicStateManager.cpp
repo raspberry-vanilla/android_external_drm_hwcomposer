@@ -234,7 +234,8 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   }
   auto *crtc = pipe_->crtc->Get();
   auto *connector = pipe_->connector->Get();
-  bool active = *args.power_mode != PowerMode::kOff;
+  const bool active = *args.power_mode != PowerMode::kOff;
+  const bool is_connector_present = !connector->IsDeleted();
   request.new_frame_state.crtc_active_state = active;
   if (!crtc->GetActiveProperty().AtomicSet(*request.property_set,
                                            active ? 1 : 0)) {
@@ -242,11 +243,17 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   }
   if (!active && args.teardown) {
     // Full teardown unbinds the connector from the CRTC and clears its mode.
-    if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0) ||
-        !crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
+    // Skip setting CRTC_ID on a dynamic MST connector that has already been
+    // unregistered from the kernel so the atomic commit does not fail with
+    // -ENOENT and abort CRTC/plane teardown.
+    if (is_connector_present &&
+        !connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
       return false;
     }
-  } else {
+    if (!crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
+      return false;
+    }
+  } else if (is_connector_present) {
     // Keep the connector bound to the CRTC across active and non-teardown DPMS
     // transitions.
     if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
@@ -260,10 +267,13 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   // with -EINVAL due to conflicting encoders.
   if (active && pipe_->device != nullptr) {
     for (const auto &conn : pipe_->device->GetConnectors()) {
-      if (conn.get() == connector) {
-        continue;
-      }
-      if (conn->GetCrtcIdProperty().GetValue().value_or(0) == crtc->GetId()) {
+      const bool is_other_unbound_connector = conn.get() != connector &&
+                                              !conn->IsDeleted() &&
+                                              conn->GetPipeline() == nullptr;
+      const bool is_bound_to_this_crtc = conn->GetCrtcIdProperty()
+                                             .GetValue()
+                                             .value_or(0) == crtc->GetId();
+      if (is_other_unbound_connector && is_bound_to_this_crtc) {
         if (!conn->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
           return false;
         }
@@ -276,6 +286,9 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
 
 bool DrmAtomicStateManager::ResetLinkStatus(DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
+  if (connector == nullptr || connector->IsDeleted()) {
+    return true;
+  }
 
   // Optional property: non-DP connectors (e.g., HDMI, DSI, Writeback) do not
   // have link-status.
@@ -465,7 +478,8 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
                                                   DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (!args.colorspace || !connector->GetColorspaceProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || !args.colorspace ||
+      !connector->GetColorspaceProperty()) {
     return true;
   }
 
@@ -478,7 +492,8 @@ bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
                                                    DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (!args.content_type || !connector->GetContentTypeProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || !args.content_type ||
+      !connector->GetContentTypeProperty()) {
     return true;
   }
   return connector->GetContentTypeProperty().AtomicSet(*request.property_set,
@@ -489,7 +504,8 @@ bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
     const AtomicCommitArgs &args, DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (!args.content_protection.has_value() ||
+  if (connector == nullptr || connector->IsDeleted() ||
+      !args.content_protection.has_value() ||
       !args.hdcp_content_type.has_value() ||
       !connector->GetContentProtectionProperty() ||
       !connector->GetHdcpContentTypeProperty()) {
@@ -508,7 +524,8 @@ bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
 bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
                                                    DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (!args.hdr_metadata || !connector->GetHdrOutputMetadataProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || !args.hdr_metadata ||
+      !connector->GetHdrOutputMetadataProperty()) {
     return true;
   }
 
@@ -536,7 +553,8 @@ bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
                                               DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (!args.min_bpc || !connector->GetMinBpcProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || !args.min_bpc ||
+      !connector->GetMinBpcProperty()) {
     return true;
   }
 
@@ -574,86 +592,86 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
   request.new_frame_state.used_planes.clear();
 
   for (auto &joining : args.composition->plan) {
-    DrmPlane *plane = joining.plane->Get();
-    LayerData &layer = joining.layer;
+      DrmPlane *plane = joining.plane->Get();
+      LayerData &layer = joining.layer;
 
-    request.used_kms_objects.framebuffers.emplace_back(layer.fb);
-    request.new_frame_state.used_planes.emplace_back(joining.plane);
+      request.used_kms_objects.framebuffers.emplace_back(layer.fb);
+      request.new_frame_state.used_planes.emplace_back(joining.plane);
 
-    /* Remove from 'unused' list, since plane is re-used */
-    auto &v = unused_planes;
-    v.erase(std::remove(v.begin(), v.end(), joining.plane), v.end());
+      /* Remove from 'unused' list, since plane is re-used */
+      auto &v = unused_planes;
+      v.erase(std::remove(v.begin(), v.end(), joining.plane), v.end());
 
-    DrmModeUserPropertyBlobUnique damage_blob;
-    auto *crtc = pipe_->crtc->Get();
+      DrmModeUserPropertyBlobUnique damage_blob;
+      auto *crtc = pipe_->crtc->Get();
 
-    DstRectInfo display_rect_info = whole_display_rect_;
-    if (args.display_mode) {
-      auto raw_mode = args.display_mode.value().GetRawMode();
-      display_rect_info.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
-    }
-
-    if (plane->AtomicSetState(*request.property_set, layer, joining.z_pos,
-                              crtc->GetId(), display_rect_info,
-                              damage_blob) != 0) {
-      return false;
-    }
-    request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
-
-    if (use_color_pipeline_ && plane->HasColorPipeline()) {
-      uint32_t ctm_3x4_blob_id = 0;
-      HwcColorspace dest_colorspace = args.colorspace.value_or(
-          HwcColorspace::kDefault);
-      if (args.color_matrix || layer.colorspace != dest_colorspace) {
-        HalColorTransformMatrix ctm_matrix = args.color_matrix
-                                                 ? *args.color_matrix
-                                                 : kIdentityMatrix;
-        CtmBlobKey ctm_3x4_key{CtmBlobKey::Kind::kCtm3x4, layer.colorspace,
-                               dest_colorspace, ctm_matrix};
-        auto ctm_blob = GetOrCreateBlob(ctm_3x4_key, [&] {
-          return ColorUtil::GamutAdjustIfNeeded<
-              drm_color_ctm_3x4>(layer.colorspace, dest_colorspace,
-                                 args.color_matrix);
-        });
-
-        if (ctm_blob) {
-          ctm_3x4_blob_id = GetBlobId(ctm_blob);
-          request.used_kms_objects.cached_blobs.emplace_back(ctm_blob);
-        }
+      DstRectInfo display_rect_info = whole_display_rect_;
+      if (args.display_mode) {
+        auto raw_mode = args.display_mode.value().GetRawMode();
+        display_rect_info.i_rect = {0, 0, raw_mode.hdisplay, raw_mode.vdisplay};
       }
 
-      // CTMs with offsets (such as Color Inversion: Y = 1.0 - X) are designed
-      // to operate on gamma encoded values. Inverting linear signals
-      // (1.0 - X^gamma) severely distorts the contrast curve, blowing
-      // midtones and darks into near-white. Bypass Plane Degamma so the
-      // 3x4 matrix inverts gamma values directly.
-      uint32_t degamma_lut_blob_id = 0;
-      const bool has_translation_offset = args.color_matrix &&
-                                          ColorUtil::HasOffset(
-                                              *args.color_matrix);
-      if (!has_translation_offset) {
-        float lut_scale = ColorUtil::CalculateDegammaScale(layer.brightness);
-        DegammaBlobKey degamma_key{layer.transfer_func,
-                                   plane->GetDegamma1DLutSize(), lut_scale};
-        auto degamma_blob = GetOrCreateBlob(degamma_key, [&] {
-          return ColorUtil::CreateDegammaLut(layer.transfer_func,
-                                             plane->GetDegamma1DLutSize(),
-                                             layer.brightness);
-        });
-
-        if (degamma_blob) {
-          degamma_lut_blob_id = GetBlobId(degamma_blob);
-          request.used_kms_objects.cached_blobs.emplace_back(degamma_blob);
-        }
-      }
-
-      if (plane->AtomicSetColorPipeline(*request.property_set, ctm_3x4_blob_id,
-                                        degamma_lut_blob_id,
-                                        /*gamma_lut_blob_id=*/0) != 0) {
+      if (plane->AtomicSetState(*request.property_set, layer, joining.z_pos,
+                                crtc->GetId(), display_rect_info,
+                                damage_blob) != 0) {
         return false;
       }
+      request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
+
+      if (use_color_pipeline_ && plane->HasColorPipeline()) {
+        uint32_t ctm_3x4_blob_id = 0;
+        HwcColorspace dest_colorspace = args.colorspace.value_or(
+            HwcColorspace::kDefault);
+        if (args.color_matrix || layer.colorspace != dest_colorspace) {
+          HalColorTransformMatrix ctm_matrix = args.color_matrix
+                                                   ? *args.color_matrix
+                                                   : kIdentityMatrix;
+          CtmBlobKey ctm_3x4_key{CtmBlobKey::Kind::kCtm3x4, layer.colorspace,
+                                 dest_colorspace, ctm_matrix};
+          auto ctm_blob = GetOrCreateBlob(ctm_3x4_key, [&] {
+            return ColorUtil::GamutAdjustIfNeeded<
+                drm_color_ctm_3x4>(layer.colorspace, dest_colorspace,
+                                   args.color_matrix);
+          });
+
+          if (ctm_blob) {
+            ctm_3x4_blob_id = GetBlobId(ctm_blob);
+            request.used_kms_objects.cached_blobs.emplace_back(ctm_blob);
+          }
+        }
+
+        // CTMs with offsets (such as Color Inversion: Y = 1.0 - X) are designed
+        // to operate on gamma encoded values. Inverting linear signals
+        // (1.0 - X^gamma) severely distorts the contrast curve, blowing
+        // midtones and darks into near-white. Bypass Plane Degamma so the
+        // 3x4 matrix inverts gamma values directly.
+        uint32_t degamma_lut_blob_id = 0;
+        const bool has_translation_offset = args.color_matrix &&
+                                            ColorUtil::HasOffset(
+                                                *args.color_matrix);
+        if (!has_translation_offset) {
+          float lut_scale = ColorUtil::CalculateDegammaScale(layer.brightness);
+          DegammaBlobKey degamma_key{layer.transfer_func,
+                                     plane->GetDegamma1DLutSize(), lut_scale};
+          auto degamma_blob = GetOrCreateBlob(degamma_key, [&] {
+            return ColorUtil::CreateDegammaLut(layer.transfer_func,
+                                               plane->GetDegamma1DLutSize(),
+                                               layer.brightness);
+          });
+
+          if (degamma_blob) {
+            degamma_lut_blob_id = GetBlobId(degamma_blob);
+            request.used_kms_objects.cached_blobs.emplace_back(degamma_blob);
+          }
+        }
+
+        if (plane->AtomicSetColorPipeline(*request.property_set,
+                                          ctm_3x4_blob_id, degamma_lut_blob_id,
+                                          /*gamma_lut_blob_id=*/0) != 0) {
+          return false;
+        }
+      }
     }
-  }
 
   // Disable all planes that were used in the previous commit which are no
   // longer being used.
@@ -671,7 +689,8 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
   if (args.display_mode && !args.seamless && pipe_->device != nullptr) {
     const uint32_t crtc_id = pipe_->crtc->Get()->GetId();
     for (const auto &plane : pipe_->device->GetPlanes()) {
-      if (plane->GetCrtcProperty().GetValue().value_or(0) != crtc_id ||
+      if (plane->GetPipeline() != nullptr ||
+          plane->GetCrtcProperty().GetValue().value_or(0) != crtc_id ||
           plane->GetFbProperty().GetValue().value_or(0) == 0) {
         continue;
       }
