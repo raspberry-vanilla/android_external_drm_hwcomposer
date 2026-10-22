@@ -27,7 +27,6 @@
 #include <vector>
 
 #include <cutils/native_handle.h>
-#include <ui/GraphicTypes.h>
 #include <xf86drmMode.h>
 
 #include <core/sdm_types.h>
@@ -105,11 +104,23 @@ void SdmBackend::SetRefreshCallbackForConnector(uint32_t connector_id,
 
 void SdmBackend::SetHotplugHandler(HotplugHandler handler) {
   bool enable = (handler != nullptr);
-  hotplug_handler.SetHotplugHandler(std::move(handler));
-  if (life_cycle_intf) {
+  if (!enable && life_cycle_intf) {
     life_cycle_intf->RegisterCompositorCallback(callback_interface.get(),
-                                                enable);
+                                                false);
   }
+  hotplug_handler.SetHotplugHandler(std::move(handler));
+  if (enable && life_cycle_intf) {
+    life_cycle_intf->RegisterCompositorCallback(callback_interface.get(), true);
+  }
+}
+
+void SdmBackend::SetTestLifeCycleIntf(
+    std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf) {
+  life_cycle_intf = std::move(intf);
+}
+
+SdmHotplugHandler& SdmBackend::GetHotplugHandlerForTest() {
+  return hotplug_handler;
 }
 
 namespace {

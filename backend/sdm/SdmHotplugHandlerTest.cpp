@@ -14,25 +14,35 @@
  * limitations under the License.
  */
 
-#include "backend/sdm/SdmHotplugHandler.h"  // IWYU pragma: keep
+#include "backend/sdm/SdmHotplugHandler.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <core/buffer_allocator.h>  // IWYU pragma: keep
 #include <core/sdm_types.h>
+#include <core/socket_handler.h>              // IWYU pragma: keep
+#include <sdm_compositor_cb_intf.h>           // IWYU pragma: keep
+#include <sdm_compositor_sideband_cb_intf.h>  // IWYU pragma: keep
 #include <sdm_display_intf_caps.h>
+#include <sdm_display_intf_lifecycle.h>
 
+#include "backend/SdmBackend.h"
 #include "backend/sdm/SdmToConnectorMapper.h"
+#include "drm/DrmTestUtils.h"
 
 namespace android::drm_hwcomposer {
 namespace {
 
 using ::testing::_;
 using ::testing::DoAll;
+using ::testing::InSequence;
+using ::testing::Invoke;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::SetArgPointee;
@@ -54,7 +64,35 @@ class MockSdmCapsIntf : public sdm::SDMDisplayCapsIntf {
               (uint64_t disp_id, int32_t* disp_hw_id), (override));
 };
 
-TEST(SdmHotplugHandlerTest, RegisterAndUnregisterMapsSdmDisplayToConnector) {
+class MockSdmLifeCycleIntf : public sdm::SDMDisplayLifeCycleIntf {
+ public:
+  MOCK_METHOD(sdm::DisplayError, Init,
+              (sdm::BufferAllocator*, sdm::SocketHandler*,
+               sdm::DebugCallbackIntf*),
+              (override));
+  MOCK_METHOD(void, RegisterCompositorCallback,
+              (sdm::SDMCompositorCbIntf*, bool), (override));
+  MOCK_METHOD(void, RegisterSideBandCallback,
+              (sdm::SDMSideBandCompositorCbIntf*, bool), (override));
+  MOCK_METHOD(sdm::DisplayError, SetPowerMode,
+              (uint64_t disp_id, int32_t power_mode), (override));
+};
+
+}  // namespace
+
+class SdmHotplugHandlerTest : public ::testing::Test {
+ protected:
+  static void SetTestLifeCycleIntf(
+      std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf) {
+    SdmBackend::SetTestLifeCycleIntf(std::move(intf));
+  }
+
+  static SdmHotplugHandler& GetHotplugHandlerForTest() {
+    return SdmBackend::GetHotplugHandlerForTest();
+  }
+};
+
+TEST_F(SdmHotplugHandlerTest, RegisterAndUnregisterMapsSdmDisplayToConnector) {
   NiceMock<MockSdmCapsIntf> caps_intf;
   ON_CALL(caps_intf, GetDisplayHwId(kTestSdmDisplayId, _))
       .WillByDefault(
@@ -73,5 +111,40 @@ TEST(SdmHotplugHandlerTest, RegisterAndUnregisterMapsSdmDisplayToConnector) {
   EXPECT_EQ(mapper.GetSdmIdForConnector(kTestConnectorId), std::nullopt);
 }
 
-}  // namespace
+TEST_F(SdmHotplugHandlerTest,
+       SetHotplugHandlerOrdersCallbackRegistrationAndTeardown) {
+  auto life_cycle_intf = std::make_shared<NiceMock<MockSdmLifeCycleIntf>>();
+  SetTestLifeCycleIntf(life_cycle_intf);
+
+  FakeDrmDevice dev;
+  SdmBackend backend(dev);
+  int dispatched_events = 0;
+
+  {
+    InSequence seq;
+    EXPECT_CALL(*life_cycle_intf, RegisterCompositorCallback(_, true))
+        .WillOnce(Invoke([&](sdm::SDMCompositorCbIntf*, bool) {
+          GetHotplugHandlerForTest().HandleHotplugEvent(kTestConnectorId, true);
+          EXPECT_EQ(dispatched_events, 1);
+        }));
+    EXPECT_CALL(*life_cycle_intf, RegisterCompositorCallback(_, false))
+        .WillOnce(Invoke([&](sdm::SDMCompositorCbIntf*, bool) {
+          GetHotplugHandlerForTest().HandleHotplugEvent(kTestConnectorId,
+                                                        false);
+          EXPECT_EQ(dispatched_events, 2);
+        }));
+  }
+
+  backend.SetHotplugHandler([&](uint32_t, bool) { ++dispatched_events; });
+  EXPECT_EQ(dispatched_events, 1);
+
+  backend.SetHotplugHandler(nullptr);
+  EXPECT_EQ(dispatched_events, 2);
+
+  GetHotplugHandlerForTest().HandleHotplugEvent(kTestConnectorId, true);
+  EXPECT_EQ(dispatched_events, 2);
+  GetHotplugHandlerForTest().SetHotplugHandler(nullptr);
+  SetTestLifeCycleIntf(nullptr);
+}
+
 }  // namespace android::drm_hwcomposer
