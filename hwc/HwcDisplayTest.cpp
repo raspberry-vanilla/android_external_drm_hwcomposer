@@ -2854,4 +2854,41 @@ TEST_F(HwcDisplayTest,
   }
 }
 
+TEST_F(HwcDisplayTest,
+       InitSelectsSupportedDefaultColorModeWhenSrgbUnsupported) {
+  class NativeOnlyCapabilities : public BackendDisplayCapabilities {
+   public:
+    std::optional<std::vector<ColorMode>> GetColorModeOverrides()
+        const override {
+      return std::vector<ColorMode>{ColorMode::kNative};
+    }
+  };
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")});
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->capabilities = std::make_unique<NativeOnlyCapabilities>();
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto fb = std::make_shared<FakeFbIdHandle>(kTestFbId);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(fb));
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().back().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().color_mode,
+            std::optional<ColorMode>(ColorMode::kNative));
+}
+
 }  // namespace android::drm_hwcomposer

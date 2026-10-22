@@ -1267,8 +1267,21 @@ bool HwcDisplay::Init() {
   }
   SetBootAnimationState(boot_state);
 
-  static constexpr ColorMode kDefaultColorMode = ColorMode::kSrgb;
-  SetColorMode(kDefaultColorMode, ui::RenderIntent::COLORIMETRIC);
+  // Some backend displays (such as SDR external monitors on Qualcomm SDM) only
+  // advertise ColorMode::kNative in GetColorModeOverrides() and reject kSrgb.
+  ColorMode default_color_mode = ColorMode::kSrgb;
+  if (!IsInHeadlessMode() && GetPipe().capabilities != nullptr) {
+    if (auto overrides = GetPipe().capabilities->GetColorModeOverrides();
+        overrides && !overrides->empty() &&
+        std::find(overrides->begin(), overrides->end(), ColorMode::kSrgb) ==
+            overrides->end()) {
+      default_color_mode = std::find(overrides->begin(), overrides->end(),
+                                     ColorMode::kNative) != overrides->end()
+                               ? ColorMode::kNative
+                               : overrides->front();
+    }
+  }
+  SetColorMode(default_color_mode, ui::RenderIntent::COLORIMETRIC);
 
   if (GetDisplayType() == DisplayType::kExternal) {
     // Defer the initial blocking KMS modeset on external displays until the
