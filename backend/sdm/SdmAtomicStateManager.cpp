@@ -349,6 +349,10 @@ bool SdmAtomicStateManager::UpdateClientTarget(
   std::shared_ptr<SnapAllocHandle>
       snap_handle = std::static_pointer_cast<SnapAllocHandle>(
           layer_data->bi->fds_shared);
+  if (!snap_handle) {
+    ALOGE("Client target layer has null SnapAllocHandle");
+    return false;
+  }
   std::shared_ptr<sdm::Fence> acquire_fence;
   if (layer_data->acquire_fence != nullptr) {
     acquire_fence = sdm::Fence::Create(DupFd(layer_data->acquire_fence),

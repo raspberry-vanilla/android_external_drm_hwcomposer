@@ -336,5 +336,30 @@ TEST_F(SdmAtomicStateManagerTest,
   EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
 }
 
+TEST_F(SdmAtomicStateManagerTest,
+       ClientTargetWithNullSnapAllocHandleFailsWithoutPresentDisplay) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData client_layer{};
+  client_layer.bi = BufferInfo{};
+  client_layer.bi->fds_shared = nullptr;
+  plan->plan.emplace_back(std::move(client_layer), nullptr, 0);
+  plan->client_z_order = 0;
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+
+  EXPECT_CALL(draw_cycle_intf, SetClientTarget(_, _, _, _, _, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(_, _)).Times(0);
+
+  EXPECT_FALSE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
 }  // namespace
 }  // namespace android::drm_hwcomposer
