@@ -39,6 +39,7 @@ UNITTEST_SRCS := \
 	backend/sdm/SdmAtomicStateManager.cpp \
 	backend/sdm/SdmAtomicStateManagerTest.cpp \
 	backend/sdm/SdmCompositionPlanner.cpp \
+	backend/sdm/SdmCompositionPlannerTest.cpp \
 	backend/sdm/SdmHotplugHandler.cpp \
 	backend/sdm/SdmHotplugHandlerTest.cpp \
 	backend/sdm/SdmToConnectorMapper.cpp \
