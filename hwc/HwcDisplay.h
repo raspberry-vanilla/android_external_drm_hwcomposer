@@ -149,6 +149,11 @@ class HwcDisplay : public ICompositorDisplay {
   auto GetDisplayName() const -> std::string;
 
   auto GetDisplayConfigs() const -> std::vector<HwcDisplayConfig>;
+  bool RefreshConfigsFromConnector();
+  bool OnLinkTrainingFailed();
+  bool HasStagedPowerModeOn() const {
+    return staged_power_mode_ == PowerMode::kOn;
+  }
 
   // Get the config representing the mode that has been committed to KMS.
   auto GetCurrentConfig() const -> const HwcDisplayConfig *;
@@ -375,6 +380,8 @@ class HwcDisplay : public ICompositorDisplay {
   }
 
  private:
+  bool HasPhysicalConnector() const;
+
   bool IsDozeSupported() const;
   bool IsDozeSuspendSupported() const;
   bool IsSuspendSupported() const;
@@ -455,6 +462,7 @@ class HwcDisplay : public ICompositorDisplay {
   int64_t staged_mode_change_time_{};
   std::optional<ConfigId> staged_mode_config_id_{};
   std::optional<PowerMode> staged_power_mode_{};
+  bool link_recovery_modeset_required_ = false;
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 

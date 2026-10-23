@@ -204,7 +204,8 @@ GenericLayerMapperCompositionPlanner::ValidateDisplay(
             .short_circuited = false};
   }
 
-  if (CompositionPlanner::LayersUseDifferentColorspaces(layers) && !display->UseColorPipeline()) {
+  if (CompositionPlanner::LayersUseDifferentColorGamuts(layers) &&
+      !display->UseColorPipeline()) {
     return {.composition = CreateFlattenedComposition(
                 layers, FlattenReason::kNoPerPlaneColorspaceSupport),
             .short_circuited = false};

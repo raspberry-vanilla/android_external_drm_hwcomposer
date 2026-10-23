@@ -205,6 +205,8 @@ auto DrmConnector::Init() -> bool {
 
   GetOptionalConnectorProperty("PATH", &path_property_);
 
+  GetOptionalConnectorProperty("link-status", &link_status_property_);
+
   return true;
 }
 
@@ -237,12 +239,28 @@ bool DrmConnector::SupportsEncoder(DrmEncoder &enc) const {
   return false;
 }
 
-bool DrmConnector::IsInternal() const {
-  auto type = connector_->connector_type;
+static bool IsPhysicalInternalConnectorType(uint32_t type) {
   return type == DRM_MODE_CONNECTOR_Unknown ||
          type == DRM_MODE_CONNECTOR_LVDS || type == DRM_MODE_CONNECTOR_eDP ||
-         type == DRM_MODE_CONNECTOR_DSI || type == DRM_MODE_CONNECTOR_VIRTUAL ||
-         type == DRM_MODE_CONNECTOR_DPI || type == DRM_MODE_CONNECTOR_SPI;
+         type == DRM_MODE_CONNECTOR_DSI || type == DRM_MODE_CONNECTOR_DPI ||
+         type == DRM_MODE_CONNECTOR_SPI;
+}
+
+bool DrmConnector::IsInternal() const {
+  auto type = connector_->connector_type;
+  if (type == DRM_MODE_CONNECTOR_VIRTUAL) {
+    if (drm_ != nullptr) {
+      for (const auto &conn : drm_->GetConnectors()) {
+        if (conn.get() != this &&
+            (IsPhysicalInternalConnectorType(conn->GetConnectorType()) ||
+             conn->IsExternal())) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  return IsPhysicalInternalConnectorType(type);
 }
 
 bool DrmConnector::IsExternal() const {
@@ -307,8 +325,15 @@ int DrmConnector::UpdateModesAndProperties() {
   auto conn = MakeDrmModeConnectorUnique(*drm_->GetFd(), GetId());
   if (!conn) {
     ALOGE("Failed to get connector %d", GetId());
+    MarkDeleted();
+    if (connector_) {
+      connector_->connection = DRM_MODE_DISCONNECTED;
+    }
+    modes_.clear();
+    reported_incompatible_cable_ = false;
     return -ENODEV;
   }
+  deleted_ = false;
   connector_ = std::move(conn);
 
   modes_.clear();
@@ -343,6 +368,9 @@ int DrmConnector::UpdateModesAndProperties() {
       modes_.emplace_back(m);
     }
   }
+  if (!IsConnected() || !modes_.empty()) {
+    reported_incompatible_cable_ = false;
+  }
 
   if (IsMst()) {
     /* MST virtual connectors aggressively destroy and recreate these DRM
@@ -358,7 +386,7 @@ int DrmConnector::UpdateModesAndProperties() {
 }
 
 bool DrmConnector::IsLinkStatusGood() {
-  if (GetConnectorProperty("link-status", &link_status_property_, false)) {
+  if (GetOptionalConnectorProperty("link-status", &link_status_property_)) {
     auto link_status_property_value = link_status_property_.GetValue();
     if (link_status_property_value &&
         (link_status_property_value == DRM_MODE_LINK_STATUS_BAD))

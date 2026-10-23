@@ -216,8 +216,30 @@ void DrmHwc::NotifyDisplayLinkStatus(
     ALOGE("%s, can't find the display, pipeline: %p", __func__, pipeline.get());
     return;
   }
-  ScheduleHotplugEvent(display_handles_[pipeline],
-                       DisplayStatus::kLinkTrainingFailed);
+  const DisplayHandle handle = display_handles_[pipeline];
+  auto *display = GetDisplay(handle);
+  if (display != nullptr && !display->OnLinkTrainingFailed()) {
+    ScheduleHotplugEvent(handle, DisplayStatus::kIncompatibleCable);
+    return;
+  }
+  ScheduleHotplugEvent(handle, DisplayStatus::kLinkTrainingFailed);
+}
+
+void DrmHwc::NotifyIncompatibleCable() {
+  ScheduleHotplugEvent(kPrimaryDisplay, DisplayStatus::kIncompatibleCable);
+}
+
+void DrmHwc::NotifyDisplayConnected(
+    std::shared_ptr<DrmDisplayPipeline> pipeline) {
+  auto it = display_handles_.find(pipeline);
+  if (it == display_handles_.end()) {
+    return;
+  }
+  auto *display = GetDisplay(it->second);
+  if (display != nullptr && !display->GetDisplayEnabled() &&
+      display->HasStagedPowerModeOn()) {
+    display->SetPowerMode(HwcDisplay::PowerMode::kOn);
+  }
 }
 
 void DrmHwc::NotifyHdcpTermination(
@@ -411,7 +433,33 @@ void DrmHwc::LogRefreshRateChanges() {
 void DrmHwc::HotplugEventQueue::Add(DisplayHandle display_handle,
                                     DisplayStatus display_status) {
   std::scoped_lock lock(mutex_);
-  events_[display_handle] = display_status;
+  if (display_status == DisplayStatus::kDisconnected) {
+    // Erase any prior queued kConnected or kLinkTrainingFailed events for this
+    // handle so FlushHotplugEvents()'s two-pass (disconnects-first) dispatch
+    // cannot invert a (kConnected, kDisconnected) sequence into
+    // (kDisconnected, kConnected) and leave a disconnected display active in
+    // SurfaceFlinger. Preserve kIncompatibleCable so cable error notifications
+    // are still delivered alongside the disconnect.
+    events_
+        .erase(std::remove_if(events_.begin(), events_.end(),
+                              [display_handle](const auto &event) {
+                                return event.first == display_handle &&
+                                       (event.second ==
+                                            DisplayStatus::kConnected ||
+                                        event.second ==
+                                            DisplayStatus::kLinkTrainingFailed);
+                              }),
+               events_.end());
+  }
+  for (auto it = events_.rbegin(); it != events_.rend(); ++it) {
+    if (it->first == display_handle) {
+      if (it->second == display_status) {
+        return;
+      }
+      break;
+    }
+  }
+  events_.emplace_back(display_handle, display_status);
 }
 
 DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() {

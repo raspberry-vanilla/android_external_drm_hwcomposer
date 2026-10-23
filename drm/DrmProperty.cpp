@@ -49,6 +49,9 @@ void DrmProperty::Init(const SharedFd &fd, uint32_t obj_id,
   flags_ = p->flags;
   name_ = p->name;
   value_ = value;
+  values_.clear();
+  enums_.clear();
+  blob_ids_.clear();
 
   for (int i = 0; i < p->count_values; ++i)
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic):

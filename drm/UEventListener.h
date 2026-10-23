@@ -20,20 +20,40 @@
 #include <functional>
 #include <memory>
 #include <thread>
+#include <type_traits>
+#include <utility>
+
+#include "utils/UEvent.h"
 
 namespace android::drm_hwcomposer {
 
-class UEvent;
-
 class UEventListener {
  public:
+  using HotplugHandler = std::function<bool()>;
+
   ~UEventListener();
 
-  static auto CreateInstance(std::function<void()> hotplug_handler)
+  static auto CreateInstance(HotplugHandler hotplug_handler)
+      -> std::shared_ptr<UEventListener>;
+  static auto CreateInstance(HotplugHandler hotplug_handler,
+                             std::unique_ptr<UEvent> uevent)
       -> std::shared_ptr<UEventListener>;
 
+  template <typename F, typename = std::enable_if_t<
+                            std::is_void_v<std::invoke_result_t<F>>>>
+  static auto CreateInstance(F &&hotplug_handler,
+                             std::unique_ptr<UEvent> uevent = nullptr)
+      -> std::shared_ptr<UEventListener> {
+    return CreateInstance(HotplugHandler(
+                              [handler = std::forward<F>(hotplug_handler)]() {
+                                handler();
+                                return false;
+                              }),
+                          std::move(uevent));
+  }
+
  private:
-  explicit UEventListener(std::function<void()> hotplug_handler);
+  explicit UEventListener(HotplugHandler hotplug_handler);
 
   void ThreadFn();
 
@@ -41,7 +61,7 @@ class UEventListener {
   std::atomic<bool> exit_ = false;
   std::unique_ptr<UEvent> uevent_;
 
-  std::function<void()> hotplug_handler_;
+  HotplugHandler hotplug_handler_;
 };
 
 }  // namespace android::drm_hwcomposer

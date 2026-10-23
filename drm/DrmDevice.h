@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <xf86drmMode.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -114,8 +116,8 @@ class DrmDevice {
 
   DrmEncoder *FindEncoderById(uint32_t id) const;
 
-  int GetProperty(uint32_t obj_id, uint32_t obj_type, const char *prop_name,
-                  DrmProperty *property) const;
+  virtual int GetProperty(uint32_t obj_id, uint32_t obj_type,
+                          const char *prop_name, DrmProperty *property) const;
 
   const std::optional<std::pair<uint64_t, uint64_t>> &GetCapCursorSize() const {
     return cap_cursor_size_;
@@ -123,6 +125,12 @@ class DrmDevice {
 
   auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
+
+ protected:
+  virtual auto GetResources() const -> DrmModeResUnique;
+  virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+      -> std::unique_ptr<DrmConnector>;
+  virtual auto CommitAtomicReset(drmModeAtomicReq &pset) -> int;
 
  private:
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);

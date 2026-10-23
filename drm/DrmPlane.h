@@ -89,7 +89,13 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   auto &GetCrtcProperty() const {
     return crtc_property_;
   }
+  auto &GetCrtcProperty() {
+    return crtc_property_;
+  }
   auto &GetFbProperty() const {
+    return fb_property_;
+  }
+  auto &GetFbProperty() {
     return fb_property_;
   }
   auto &GetZPosProperty() const {

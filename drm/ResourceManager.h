@@ -45,6 +45,9 @@ class PipelineToFrontendBindingInterface {
   virtual void FinalizeDisplayBinding() = 0;
   virtual void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
+  virtual void NotifyIncompatibleCable() = 0;
+  virtual void NotifyDisplayConnected(
+      std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void NotifyHdcpTermination(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void FlushHotplugEvents() = 0;
@@ -111,7 +114,7 @@ class ResourceManager {
   friend struct DrmHwcTest;
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
-  void UpdateFrontendDisplays();
+  bool UpdateFrontendDisplays();
   void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);

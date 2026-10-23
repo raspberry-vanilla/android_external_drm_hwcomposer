@@ -16,9 +16,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
+
+#include <drm/drm_mode.h>
 
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
@@ -247,6 +251,303 @@ TEST_F(DrmDisplayPipelineTest, GetUsablePlanesSharedPlaneBindingsReleased) {
     EXPECT_EQ(usable_planes.size(), 2);
     EXPECT_NE(cursor_plane, nullptr);
   }
+}
+
+TEST_F(DrmDisplayPipelineTest,
+       PrimaryPlaneWithStaleBootCrtcPropertyStillSupportsOtherCompatibleCrtc) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kCrtc0Id = 20;
+  constexpr uint32_t kCrtc1Id = 21;
+  constexpr uint32_t kPrimaryPlaneId = 300;
+  constexpr uint32_t kBothCrtcsMask = 0x3U;
+  FakeDrmCrtc crtc0(kCrtc0Id, /*index=*/0);
+  FakeDrmCrtc crtc1(kCrtc1Id, /*index=*/1);
+
+  // Primary plane supports both CRTC 0 and CRTC 1 (possible_crtcs = 0b11),
+  // and its CRTC_ID property was cached as crtc0.GetId() (20) at boot while the
+  // bootloader splash screen was active on crtc0.
+  FakeDrmPlane primary_plane(dev, DRM_PLANE_TYPE_PRIMARY,
+                             /*is_valid=*/true, kPrimaryPlaneId,
+                             kBothCrtcsMask);
+  primary_plane.SetCrtcIdPropertyValue(crtc0.GetId());
+
+  EXPECT_TRUE(primary_plane.IsCrtcSupported(crtc0));
+  EXPECT_TRUE(primary_plane.IsCrtcSupported(crtc1))
+      << "DrmPlane::IsCrtcSupported rejected compatible CRTC 1 due to stale "
+         "boot-time crtc_property_ value";
+}
+
+TEST_F(DrmDisplayPipelineTest,
+       IsCrtcSupportedAndEncoderSupportsCrtcRejectIndexAtOrAbove32Safely) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kMaxValidCrtcId = 51;
+  constexpr uint32_t kMaxValidCrtcIndex = 31;
+  constexpr uint32_t kHighCrtcId = 52;
+  constexpr uint32_t kOutOfBoundsCrtcIndex = 32;
+  constexpr uint32_t kPrimaryPlaneId = 300;
+  constexpr uint32_t kEncoderId = 10;
+  constexpr uint32_t kCloneEncoderId = 11;
+  FakeDrmCrtc crtc31(kMaxValidCrtcId, kMaxValidCrtcIndex);
+  FakeDrmCrtc crtc32(kHighCrtcId, kOutOfBoundsCrtcIndex);
+  FakeDrmPlane primary_plane(dev, DRM_PLANE_TYPE_PRIMARY,
+                             /*is_valid=*/true, kPrimaryPlaneId,
+                             kFakeAllCrtcsMask);
+  FakeDrmEncoder encoder(kEncoderId, /*crtc_id=*/0);
+  encoder.InitRawEncoder(kFakeAllCrtcsMask);
+  FakeDrmEncoder
+      enc_index31(FakeDrmEncoder::MakeFakeRawEncoder(kCloneEncoderId,
+                                                     /*crtc_id=*/0,
+                                                     kFakeAllCrtcsMask),
+                  kMaxValidCrtcIndex);
+  FakeDrmEncoder
+      enc_index32(FakeDrmEncoder::MakeFakeRawEncoder(kCloneEncoderId + 1,
+                                                     /*crtc_id=*/0,
+                                                     kFakeAllCrtcsMask),
+                  kOutOfBoundsCrtcIndex);
+
+  EXPECT_TRUE(primary_plane.IsCrtcSupported(crtc31));
+  EXPECT_TRUE(encoder.SupportsCrtc(crtc31));
+  EXPECT_TRUE(encoder.CanClone(enc_index31));
+  EXPECT_FALSE(primary_plane.IsCrtcSupported(crtc32));
+  EXPECT_FALSE(encoder.SupportsCrtc(crtc32));
+  EXPECT_FALSE(encoder.CanClone(enc_index32));
+}
+
+TEST_F(
+    DrmDisplayPipelineTest,
+    ResetConnectorsAndCrtcsDisablesActivePlanesAndSkipsVirtualCwbConnectors) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kCrtcId = 200;
+  constexpr uint32_t kVirtualCrtcId = 201;
+  constexpr uint32_t kPrimaryPlaneId = 300;
+  constexpr uint32_t kOverlayPlaneId = 301;
+  constexpr uint32_t kIdlePlaneId = 302;
+  constexpr uint32_t kVirtualPlaneId = 303;
+  constexpr uint32_t kEdpEncoderId = 10;
+  constexpr uint32_t kVirtualEncoderId = 11;
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kVirtualCwbConnId = 101;
+  constexpr uint64_t kStaleBootFbId = 999;
+  constexpr uint64_t kStaleModeBlobId = 888;
+
+  auto crtc = std::make_unique<FakeDrmCrtc>(kCrtcId, /*index=*/0);
+  crtc->GetActiveProperty().UpdateValue(1);
+  crtc->GetModeProperty().UpdateValue(kStaleModeBlobId);
+  auto* crtc_ptr = crtc.get();
+  dev.AddCrtc(std::move(crtc));
+
+  auto virtual_crtc = std::make_unique<FakeDrmCrtc>(kVirtualCrtcId,
+                                                    /*index=*/1);
+  virtual_crtc->GetActiveProperty().UpdateValue(1);
+  virtual_crtc->GetModeProperty().UpdateValue(kStaleModeBlobId);
+  auto* virtual_crtc_ptr = virtual_crtc.get();
+  dev.AddCrtc(std::move(virtual_crtc));
+
+  auto edp_conn = std::make_unique<FakeDrmConnector>(&dev, kEdpEncoderId,
+                                                     /*is_external=*/false,
+                                                     kFakeConnectorMmWidth,
+                                                     kFakeConnectorMmHeight,
+                                                     kEdpConnId);
+  edp_conn->InitRawConnector(DRM_MODE_CONNECTOR_eDP);
+  edp_conn->SetCrtcIdPropertyValue(kCrtcId);
+  auto* edp_conn_ptr = edp_conn.get();
+  dev.AddConnector(std::move(edp_conn));
+
+  auto virtual_cwb_conn = std::make_unique<
+      FakeDrmConnector>(&dev, kVirtualEncoderId, /*is_external=*/false,
+                        kFakeConnectorMmWidth, kFakeConnectorMmHeight,
+                        kVirtualCwbConnId);
+  virtual_cwb_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+  virtual_cwb_conn->SetName("Virtual-1");
+  virtual_cwb_conn->SetCrtcIdPropertyValue(kVirtualCrtcId);
+  dev.AddConnector(std::move(virtual_cwb_conn));
+
+  auto primary_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_PRIMARY,
+                                                      /*is_valid=*/true,
+                                                      kPrimaryPlaneId);
+  primary_plane->SetCrtcIdPropertyValue(kCrtcId);
+  primary_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* primary_plane_ptr = primary_plane.get();
+  dev.AddPlane(std::move(primary_plane));
+
+  auto overlay_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_OVERLAY,
+                                                      /*is_valid=*/true,
+                                                      kOverlayPlaneId);
+  overlay_plane->SetCrtcIdPropertyValue(kCrtcId);
+  overlay_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* overlay_plane_ptr = overlay_plane.get();
+  dev.AddPlane(std::move(overlay_plane));
+
+  auto idle_plane = std::make_unique<FakeDrmPlane>(dev, DRM_PLANE_TYPE_OVERLAY,
+                                                   /*is_valid=*/true,
+                                                   kIdlePlaneId);
+  idle_plane->SetCrtcIdPropertyValue(0);
+  idle_plane->SetFbIdPropertyValue(0);
+  dev.AddPlane(std::move(idle_plane));
+
+  auto virtual_plane = std::make_unique<FakeDrmPlane>(dev,
+                                                      DRM_PLANE_TYPE_PRIMARY,
+                                                      /*is_valid=*/true,
+                                                      kVirtualPlaneId);
+  virtual_plane->SetCrtcIdPropertyValue(kVirtualCrtcId);
+  virtual_plane->SetFbIdPropertyValue(kStaleBootFbId);
+  auto* virtual_plane_ptr = virtual_plane.get();
+  dev.AddPlane(std::move(virtual_plane));
+
+  dev.ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kPrimaryPlaneId,
+                                             kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kPrimaryPlaneId,
+                                             kFakePlaneFbPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kOverlayPlaneId,
+                                             kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kOverlayPlaneId,
+                                             kFakePlaneFbPropId),
+            0ULL);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kIdlePlaneId,
+                                             kFakePlaneCrtcPropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() redundantly disabled an already-idle plane";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kIdlePlaneId, kFakePlaneFbPropId),
+            std::nullopt);
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualCwbConnId,
+                                             kFakeConnectorCrtcPropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() touched Virtual-1 CWB connector on a "
+         "device with a physical internal eDP connector";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualCrtcId,
+                                             kFakeCrtcActivePropId),
+            std::nullopt)
+      << "ResetConnectorsAndCrtcs() disabled the CRTC bound to an active "
+         "non-internal virtual CWB connector";
+  EXPECT_EQ(dev.GetLastResetReqPropertyValue(kVirtualPlaneId,
+                                             kFakePlaneCrtcPropId),
+            std::nullopt);
+
+  // Verify cached DrmProperty values are synchronized after reset.
+  EXPECT_EQ(edp_conn_ptr->GetCrtcIdProperty().GetValue(), 0ULL);
+  EXPECT_EQ(crtc_ptr->GetActiveProperty().GetValue(), 0ULL);
+  EXPECT_EQ(crtc_ptr->GetModeProperty().GetValue(), 0ULL);
+  EXPECT_EQ(primary_plane_ptr->GetCrtcProperty().GetValue(), 0ULL);
+  EXPECT_EQ(primary_plane_ptr->GetFbProperty().GetValue(), 0ULL);
+  EXPECT_EQ(overlay_plane_ptr->GetCrtcProperty().GetValue(), 0ULL);
+  EXPECT_EQ(overlay_plane_ptr->GetFbProperty().GetValue(), 0ULL);
+  EXPECT_EQ(virtual_crtc_ptr->GetActiveProperty().GetValue(), 1ULL);
+  EXPECT_EQ(virtual_plane_ptr->GetCrtcProperty().GetValue(), kVirtualCrtcId);
+}
+
+TEST_F(DrmDisplayPipelineTest,
+       VirtualConnectorIsNotClassifiedAsInternalWhenPhysicalPanelExists) {
+  constexpr uint32_t kEdpEncoderId = 10;
+  constexpr uint32_t kVirtualEncoderId = 11;
+  constexpr uint32_t kDpEncoderId = 12;
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kVirtualConnId = 101;
+  constexpr uint32_t kDpConnId = 102;
+
+  // 1. Pure virtual device (e.g. Cuttlefish VKMS with only Virtual-1):
+  // Virtual-1 is classified as internal.
+  {
+    FakeDrmDevice pure_virtual_dev;
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&pure_virtual_dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    pure_virtual_dev.AddConnector(std::move(virtual_conn));
+    EXPECT_TRUE(virtual_ptr->IsInternal());
+  }
+
+  // 2. Physical internal panel (eDP-1) + Virtual-1 (e.g. msm_drm CWB):
+  // Virtual-1 is NOT classified as internal.
+  {
+    FakeDrmDevice dev;
+    auto edp_conn = std::make_unique<FakeDrmConnector>(&dev, kEdpEncoderId,
+                                                       /*is_external=*/false,
+                                                       kFakeConnectorMmWidth,
+                                                       kFakeConnectorMmHeight,
+                                                       kEdpConnId);
+    edp_conn->InitRawConnector(DRM_MODE_CONNECTOR_eDP);
+    auto* edp_ptr = edp_conn.get();
+    dev.AddConnector(std::move(edp_conn));
+
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    dev.AddConnector(std::move(virtual_conn));
+
+    EXPECT_TRUE(edp_ptr->IsInternal());
+    EXPECT_FALSE(virtual_ptr->IsInternal())
+        << "DrmConnector::IsInternal() misclassified "
+           "DRM_MODE_CONNECTOR_VIRTUAL as an internal panel when physical "
+           "eDP-1 exists on DrmDevice";
+  }
+
+  // 3. Headless desktop with physical external connector (DP-1) + Virtual-1:
+  // Virtual-1 is NOT classified as internal.
+  {
+    FakeDrmDevice external_dev;
+    auto dp_conn = std::make_unique<FakeDrmConnector>(&external_dev,
+                                                      kDpEncoderId,
+                                                      /*is_external=*/true,
+                                                      kFakeConnectorMmWidth,
+                                                      kFakeConnectorMmHeight,
+                                                      kDpConnId);
+    dp_conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
+    external_dev.AddConnector(std::move(dp_conn));
+
+    auto virtual_conn = std::make_unique<
+        FakeDrmConnector>(&external_dev, kVirtualEncoderId,
+                          /*is_external=*/false, kFakeConnectorMmWidth,
+                          kFakeConnectorMmHeight, kVirtualConnId);
+    virtual_conn->InitRawConnector(DRM_MODE_CONNECTOR_VIRTUAL);
+    virtual_conn->SetName("Virtual-1");
+    auto* virtual_ptr = virtual_conn.get();
+    external_dev.AddConnector(std::move(virtual_conn));
+
+    EXPECT_FALSE(virtual_ptr->IsInternal());
+  }
+}
+
+TEST_F(DrmDisplayPipelineTest,
+       UpdateModesAndPropertiesClearsConnectionAndModesWhenConnectorVanishes) {
+  FakeDrmDevice dev;
+  constexpr uint32_t kEncoderId = 10;
+  constexpr uint32_t kMstConnId = 150;
+  auto conn = std::make_unique<FakeDrmConnector>(&dev, kEncoderId,
+                                                 /*is_external=*/true,
+                                                 kFakeConnectorMmWidth,
+                                                 kFakeConnectorMmHeight,
+                                                 kMstConnId);
+  conn->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort);
+  conn->SetConnected(true);
+  conn->SetModes({CreateFakeDrmMode()});
+  ASSERT_TRUE(conn->IsConnected());
+  ASSERT_EQ(conn->GetModes().size(), 1U);
+
+  // When a dynamic MST connector is destroyed in the kernel,
+  // drmModeGetConnector returns nullptr (-ENODEV). UpdateModesAndProperties()
+  // must mark the connector disconnected and clear stale modes.
+  EXPECT_NE(conn->CallBaseUpdateModesAndProperties(), 0);
+  EXPECT_TRUE(conn->IsDeleted());
+  EXPECT_FALSE(conn->IsConnected())
+      << "DrmConnector::UpdateModesAndProperties() left connection == "
+         "DRM_MODE_CONNECTED after drmModeGetConnector failed";
+  EXPECT_TRUE(conn->GetModes().empty())
+      << "DrmConnector::UpdateModesAndProperties() retained stale modes after "
+         "drmModeGetConnector failed";
 }
 
 }  // namespace android::drm_hwcomposer

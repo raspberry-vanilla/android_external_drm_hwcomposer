@@ -362,11 +362,25 @@ auto DrmDevice::GetConnectors()
   return connectors_;
 }
 
+auto DrmDevice::GetResources() const -> DrmModeResUnique {
+  return MakeDrmModeResUnique(*GetFd());
+}
+
+auto DrmDevice::CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+    -> std::unique_ptr<DrmConnector> {
+  return DrmConnector::CreateInstance(*this, connector_id, index);
+}
+
+auto DrmDevice::CommitAtomicReset(drmModeAtomicReq &pset) -> int {
+  return drmModeAtomicCommit(*GetFd(), &pset, DRM_MODE_ATOMIC_ALLOW_MODESET,
+                             this);
+}
+
 auto DrmDevice::RefreshConnectors()
     -> std::vector<std::unique_ptr<DrmConnector>> {
   std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
 
-  auto res = MakeDrmModeResUnique(*GetFd());
+  auto res = GetResources();
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
     return stale_connectors;
@@ -381,13 +395,18 @@ auto DrmDevice::RefreshConnectors()
         stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
           auto *first = res->connectors;
           auto *last = std::next(res->connectors, res->count_connectors);
-          if (std::find(first, last, conn->GetId()) != last) {
+          const bool in_resources = std::find(first, last, conn->GetId()) !=
+                                    last;
+          const bool keep_alive = in_resources && !conn->IsDeleted();
+          if (keep_alive) {
             conn_ids_present.insert(conn->GetId());
-            return true;
           }
-          return false;
+          return keep_alive;
         });
 
+    for (auto it = stale_it; it != conns.end(); ++it) {
+      (*it)->MarkDeleted();
+    }
     if (!is_ignored) {
       std::move(stale_it, conns.end(), std::back_inserter(stale_connectors));
     }
@@ -406,7 +425,7 @@ auto DrmDevice::RefreshConnectors()
       continue;
     }
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    auto conn = DrmConnector::CreateInstance(*this, res->connectors[i], i);
+    auto conn = CreateConnectorInstance(res->connectors[i], i);
     if (!conn) {
       continue;
     }
@@ -433,8 +452,23 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
 
   std::set<uint32_t> crtcs_to_skip;
   static const bool kSkipInternalReset = Properties::SkipInternalDisplayReset();
+  auto is_non_internal_virtual_connector = [](const DrmConnector &conn) {
+    return conn.GetConnectorType() == DRM_MODE_CONNECTOR_VIRTUAL &&
+           !conn.DrmConnector::IsInternal();
+  };
+
+  std::vector<DrmConnector *> reset_connectors;
+  std::vector<DrmCrtc *> reset_crtcs;
+  std::vector<DrmPlane *> reset_planes;
 
   for (const auto &conn : connectors_) {
+    if (is_non_internal_virtual_connector(*conn)) {
+      auto crtc_id = conn->GetCrtcIdProperty().GetValue();
+      if (crtc_id && *crtc_id != 0) {
+        crtcs_to_skip.insert(*crtc_id);
+      }
+      continue;
+    }
     if (kSkipInternalReset && conn->IsInternal()) {
       auto crtc_id = conn->GetCrtcIdProperty().GetValue();
       if (crtc_id && *crtc_id != 0) {
@@ -446,13 +480,22 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
       ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
       return;
     }
+    reset_connectors.push_back(conn.get());
   }
   for (const auto &conn : ignored_connectors_) {
+    if (is_non_internal_virtual_connector(*conn)) {
+      auto crtc_id = conn->GetCrtcIdProperty().GetValue();
+      if (crtc_id && *crtc_id != 0) {
+        crtcs_to_skip.insert(*crtc_id);
+      }
+      continue;
+    }
     if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
       ALOGE("Failed to Set Crtc Id Prop to Null for Ignored Conn = %d",
             conn->GetId());
       return;
     }
+    reset_connectors.push_back(conn.get());
   }
   for (const auto &crtc : crtcs_) {
     if (crtcs_to_skip.find(crtc->GetId()) != crtcs_to_skip.end()) {
@@ -466,11 +509,41 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
           crtc->GetId());
       return;
     }
+    reset_crtcs.push_back(crtc.get());
   }
-  auto err = drmModeAtomicCommit(*GetFd(), pset.get(),
-                                 DRM_MODE_ATOMIC_ALLOW_MODESET, this);
+  for (const auto &plane : planes_) {
+    const auto plane_crtc_id = plane->GetCrtcProperty().GetValue();
+    const auto plane_fb_id = plane->GetFbProperty().GetValue();
+    if (plane_crtc_id.value_or(0) == 0 && plane_fb_id.value_or(0) == 0) {
+      continue;
+    }
+    const bool is_on_skipped_crtc = plane_crtc_id.has_value() &&
+                                    crtcs_to_skip.find(*plane_crtc_id) !=
+                                        crtcs_to_skip.end();
+    if (is_on_skipped_crtc) {
+      continue;
+    }
+    if (plane->AtomicDisablePlane(*pset.get()) != 0) {
+      ALOGE("Failed to disable Plane = %d", plane->GetId());
+      return;
+    }
+    reset_planes.push_back(plane.get());
+  }
+  auto err = CommitAtomicReset(*pset.get());
   if (err != 0) {
     ALOGE("Failed to commit pset ret=%d", err);
+    return;
+  }
+  for (auto *conn : reset_connectors) {
+    conn->GetCrtcIdProperty().UpdateValue(0);
+  }
+  for (auto *crtc : reset_crtcs) {
+    crtc->GetModeProperty().UpdateValue(0);
+    crtc->GetActiveProperty().UpdateValue(0);
+  }
+  for (auto *plane : reset_planes) {
+    plane->GetCrtcProperty().UpdateValue(0);
+    plane->GetFbProperty().UpdateValue(0);
   }
 }
 

@@ -351,8 +351,7 @@ std::shared_ptr<std::array<uint64_t, 3>> ColorUtil::ToColorOffset(
   if (!color_transform_matrix)
     return nullptr;
 
-  if (src_colorspace == dest_colorspace ||
-      &ToColorGamut(src_colorspace) == &ToColorGamut(dest_colorspace)) {
+  if (HasSameGamut(src_colorspace, dest_colorspace)) {
     return ToColorOffset(color_transform_matrix);
   }
 
@@ -393,6 +392,7 @@ std::shared_ptr<const HalColorTransformMatrix> ColorUtil::Multiply(
 
 const ColorGamut &ColorUtil::ToColorGamut(HwcColorspace colorspace) {
   switch (colorspace) {
+    case HwcColorspace::kBt601:
     case HwcColorspace::kBt709:
     case HwcColorspace::kDefault:
       return kBt709Gamut;
@@ -400,12 +400,14 @@ const ColorGamut &ColorUtil::ToColorGamut(HwcColorspace colorspace) {
       return kBt2020Gamut;
     case HwcColorspace::kDciP3:
       return kDciP3Gamut;
-    case HwcColorspace::kBt601:
-      return kSrgbGamut;
     default:
-      ALOGW("Unknown colorspace %d, falling back to sRGB", colorspace);
-      return kSrgbGamut;
+      ALOGW("Unknown colorspace %d, falling back to BT.709", colorspace);
+      return kBt709Gamut;
   }
+}
+
+bool ColorUtil::HasSameGamut(HwcColorspace a, HwcColorspace b) {
+  return a == b || &ToColorGamut(a) == &ToColorGamut(b);
 }
 
 // Maps framework ColorMode to its corresponding EOTF transfer function curve.
@@ -467,8 +469,7 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
     HwcColorspace src_colorspace, HwcColorspace dest_colorspace,
     const std::shared_ptr<const HalColorTransformMatrix>
         &color_transform_matrix) {
-  if (src_colorspace == dest_colorspace ||
-      &ToColorGamut(src_colorspace) == &ToColorGamut(dest_colorspace)) {
+  if (HasSameGamut(src_colorspace, dest_colorspace)) {
     if constexpr (std::is_same_v<T, drm_color_ctm>) {
       return ColorUtil::ToColorTransform3x3(color_transform_matrix);
     } else if constexpr (std::is_same_v<T, drm_color_ctm_3x4>) {

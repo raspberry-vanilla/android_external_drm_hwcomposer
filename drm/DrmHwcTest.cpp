@@ -17,24 +17,34 @@
 #include "drm/DrmHwc.h"
 
 #include <gtest/gtest.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <xf86drmMode.h>
 
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include <android-base/file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
-#include <sys/types.h>
-#include <unistd.h>
 
+#include "backend/GenericBackend.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/HdcpController.h"
 #include "drm/AtomicStateManager.h"
@@ -43,9 +53,12 @@
 #include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
 #include "drm/ResourceManager.h"
+#include "drm/UEventListener.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "utils/TestUtils.h"
+#include "utils/UEvent.h"
+#include "utils/fd.h"
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
@@ -138,8 +151,11 @@ struct DrmHwcTest : public ::testing::Test {
   std::shared_ptr<DrmDisplayPipeline> CreatePipeline(
       bool is_external = false) const {
     fake_device->AddPipelineResources(is_external);
-    return fake_device->GetBackend().CreatePipeline(
-        *fake_device->GetConnectors().back());
+    return CreatePipeline(*fake_device->GetConnectors().back());
+  }
+
+  std::shared_ptr<DrmDisplayPipeline> CreatePipeline(DrmConnector& conn) const {
+    return fake_device->GetBackend().CreatePipeline(conn);
   }
 
   void AddDeviceToResMan(std::unique_ptr<DrmDevice> dev) {
@@ -155,6 +171,7 @@ struct DrmHwcTest : public ::testing::Test {
   }
 
   void ResetResManDevices() {
+    hwc.GetResMan().CancelDelayedEdidRecovery();
     hwc.GetResMan().DetachAllFrontendDisplays();
     hwc.GetResMan().drms_.clear();
   }
@@ -168,6 +185,32 @@ struct DrmHwcTest : public ::testing::Test {
 
   ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
                                               ""};
+  void TriggerDelayedEdidRecovery() {
+    hwc.GetResMan().MaybeScheduleDelayedEdidRecovery();
+  }
+
+  void WaitDelayedEdidRecovery() {
+    constexpr int kPollSleepMs = 10;
+    while (true) {
+      {
+        std::scoped_lock lock(hwc.GetResMan().edid_recovery_mutex_);
+        if (!hwc.GetResMan().edid_recovery_pending_) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
+    }
+    hwc.GetResMan().CancelDelayedEdidRecovery();
+  }
+
+  void InitResManForTest() {
+    hwc.GetResMan().Init();
+  }
+
+  void DeInitResManForTest() {
+    hwc.GetResMan().DeInit();
+  }
+
   std::unique_ptr<FakeDrmDevice> fake_device;
   RecordingDrmHwc hwc;
 };
@@ -736,6 +779,633 @@ TEST_F(DrmHwcTest, ExternalConnectorBindsOnRetryAfterZeroModeHotplug) {
 
   dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
   ResetResManDevices();
+}
+
+TEST_F(DrmHwcTest, HotplugEventQueuePreservesConnectBeforeLinkTrainingFailed) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+
+  // Simulate ResourceManager::ProcessHotplugForConnector attaching an external
+  // display whose link-status is immediately BAD in the same hotplug pass:
+  // BindDisplay() queues (1, kConnected) and NotifyDisplayLinkStatus() queues
+  // (1, kLinkTrainingFailed) before FlushHotplugEvents() runs.
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.NotifyDisplayLinkStatus(external_pipe);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 3U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[2],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugEventQueuePreservesDisconnectBeforeReconnectOnSameHandle) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  // Queue kDisconnected followed by kConnected for the same handle before
+  // FlushHotplugEvents() runs. Both transitions must be delivered in order.
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kDisconnected);
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay, DrmHwc::DisplayStatus::kConnected);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kDisconnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugEventQueueDoesNotInvertConnectBeforeDisconnectOnSameHandle) {
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(external_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  // Queue kConnected followed by kDisconnected for the same handle before
+  // FlushHotplugEvents() runs. The stale kConnected entry must be dropped so
+  // FlushHotplugEvents() does not sort kDisconnected ahead of kConnected and
+  // report a phantom reconnect for a disconnected display.
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay, DrmHwc::DisplayStatus::kConnected);
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kDisconnected);
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kDisconnected));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest, DelayedEdidRecoveryFlushesHotplugEventsToClient) {
+  const ScopedTestProperty recovery_delay("vendor.hwc.delayed_edid_recovery_ms",
+                                          "10");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+
+  // Configure the external connector with a valid 128-byte EDID v1.3 block
+  // whose manufacturer ID is "NVT" (0x3A, 0xD4), which matches
+  // HasDelayedEdidQuirk().
+  constexpr size_t kEdidSize = 128;
+  constexpr size_t kEdidHeaderSize = 8;
+  constexpr size_t kEdidMfgByte0Index = 8;
+  constexpr size_t kEdidMfgByte1Index = 9;
+  constexpr size_t kEdidVersionIndex = 18;
+  constexpr size_t kEdidRevisionIndex = 19;
+  constexpr size_t kEdidChecksumIndex = 127;
+  constexpr uint8_t kNvtMfgByte0 = 0x3A;
+  constexpr uint8_t kNvtMfgByte1 = 0xD4;
+  constexpr uint8_t kEdidVersion1 = 1;
+  constexpr uint8_t kEdidRevision3 = 3;
+  std::vector<uint8_t> nvt_edid(kEdidSize, 0);
+  constexpr uint8_t kEdidHeader[kEdidHeaderSize] = {0x00, 0xFF, 0xFF, 0xFF,
+                                                    0xFF, 0xFF, 0xFF, 0x00};
+  std::memcpy(nvt_edid.data(), kEdidHeader, sizeof(kEdidHeader));
+  nvt_edid[kEdidMfgByte0Index] = kNvtMfgByte0;
+  nvt_edid[kEdidMfgByte1Index] = kNvtMfgByte1;
+  nvt_edid[kEdidVersionIndex] = kEdidVersion1;
+  nvt_edid[kEdidRevisionIndex] = kEdidRevision3;
+  uint8_t sum = 0;
+  for (size_t i = 0; i < kEdidChecksumIndex; ++i) {
+    sum = static_cast<uint8_t>(sum + nvt_edid[i]);
+  }
+  nvt_edid[kEdidChecksumIndex] = static_cast<uint8_t>(0U - sum);
+  ext_conn->SetEdidBlobData(std::move(nvt_edid));
+
+  AddDeviceToResMan(std::move(shared_dev));
+  RunUpdateFrontendDisplays();
+  // Clear FakeAtomicCommitSink history so its stored AtomicCommitArgs copies do
+  // not hold a shared_ptr reference to BindingOwner<DrmPlane> across unbind.
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  hwc.hotplug_events.clear();
+
+  TriggerDelayedEdidRecovery();
+  WaitDelayedEdidRecovery();
+
+  // MaybeScheduleDelayedEdidRecovery() must flush the queued kDisconnected and
+  // kConnected events to the HWC client on its own when the recovery thread
+  // finishes rebinding the display.
+  EXPECT_EQ(hwc.hotplug_events.size(), 2U);
+  if (hwc.hotplug_events.size() >= 2U) {
+    EXPECT_EQ(hwc.hotplug_events[0].second,
+              DrmHwc::DisplayStatus::kDisconnected);
+    EXPECT_EQ(hwc.hotplug_events[1].second, DrmHwc::DisplayStatus::kConnected);
+  }
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
+namespace {
+
+std::string MakeUEventPacket(std::initializer_list<std::string_view> fields) {
+  std::string packet;
+  for (const auto field : fields) {
+    packet.append(field.data(), field.size());
+    packet.push_back('\0');
+  }
+  return packet;
+}
+
+class BackendHotplugTestBackend : public GenericBackend {
+ public:
+  explicit BackendHotplugTestBackend(DrmDevice& drm) : GenericBackend(drm) {
+  }
+
+  bool UseBackendHotplug() const override {
+    return true;
+  }
+
+  void SetHotplugHandler(HotplugHandler handler) override {
+    hotplug_handler_ = std::move(handler);
+  }
+
+  void TriggerHotplug(uint32_t connector_id, bool connected) {
+    if (hotplug_handler_) {
+      hotplug_handler_(connector_id, connected);
+    }
+  }
+
+ private:
+  HotplugHandler hotplug_handler_;
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest,
+       BackendHotplugDisconnectDetachesDisplayEvenBeforeKernelStatusUpdates) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto backend = std::make_unique<BackendHotplugTestBackend>(*shared_dev);
+  auto* backend_ptr = backend.get();
+  shared_dev->SetBackend(std::move(backend));
+
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  shared_dev->AddPipelineResources(/*is_external=*/true);
+  DrmConnector* primary_conn = shared_dev->GetConnectors()[0].get();
+  DrmConnector* ext_conn = shared_dev->GetConnectors()[1].get();
+  const uint32_t primary_id = primary_conn->GetId();
+  const uint32_t ext_id = ext_conn->GetId();
+
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  backend_ptr->TriggerHotplug(primary_id, /*connected=*/true);
+  backend_ptr->TriggerHotplug(ext_id, /*connected=*/true);
+  ASSERT_EQ(GetAttachedPipelineCount(primary_conn), 1U);
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  hwc.hotplug_events.clear();
+
+  // Backend reports connected = false for ext_id while ext_conn->IsConnected()
+  // in DRM has not yet flipped to false. ResourceManager's backend hotplug
+  // handler must honor connected == false and detach ext_conn.
+  backend_ptr->TriggerHotplug(ext_id, /*connected=*/false);
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kDisconnected));
+
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       UEventReadNextConvertsTrailingNullByteAndSupportsLargePackets) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  // 1. Standard kernel uevent packet ends with a trailing '\0' byte.
+  const std::string short_packet = MakeUEventPacket({
+      "change@/devices/pci0000:00/drm/card0",
+      "ACTION=change",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+      "CONNECTOR=120",
+  });
+  ASSERT_EQ(write(*write_fd, short_packet.data(), short_packet.size()),
+            static_cast<ssize_t>(short_packet.size()));
+
+  auto parsed_short = uevent->ReadNext();
+  ASSERT_TRUE(parsed_short.has_value());
+  if (!parsed_short) {
+    return;
+  }
+  EXPECT_EQ(parsed_short->find('\0'), std::string::npos)
+      << "UEvent::ReadNext() left an un-converted trailing NUL byte in string";
+
+  // 2. Large kernel uevent packet (> 1024 bytes, e.g. long PCIe/USB4 DEVPATH)
+  // with HOTPLUG=1 near the end of the packet.
+  constexpr size_t kLongDevpathPaddingLen = 1100;
+  constexpr size_t kLegacyBufferLimit = 1024U;
+  const std::string large_header = "change@" +
+                                   std::string(kLongDevpathPaddingLen, 'a');
+  const std::string large_packet = MakeUEventPacket({
+      large_header,
+      "ACTION=change",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+  ASSERT_GT(large_packet.size(), kLegacyBufferLimit);
+  ASSERT_EQ(write(*write_fd, large_packet.data(), large_packet.size()),
+            static_cast<ssize_t>(large_packet.size()));
+
+  auto parsed_large = uevent->ReadNext();
+  ASSERT_TRUE(parsed_large.has_value());
+  if (!parsed_large) {
+    return;
+  }
+  EXPECT_NE(parsed_large->find("HOTPLUG=1"), std::string::npos)
+      << "UEvent::ReadNext() truncated a >1024-byte netlink uevent packet";
+}
+
+TEST_F(DrmHwcTest, UEventListenerDoesNotSwallowRapidUnplugReplugWithin200ms) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<bool> connector_connected{true};
+  std::atomic<int> observed_disconnects{0};
+  std::atomic<int> observed_connects{0};
+
+  auto listener = UEventListener::CreateInstance(
+      [&]() {
+        if (connector_connected.load()) {
+          ++observed_connects;
+        } else {
+          ++observed_disconnects;
+        }
+      },
+      std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kRapidHotplugGapMs = 50;
+  const std::string hotplug_uevent = MakeUEventPacket({
+      "change@/devices/drm/card0",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+
+  // Unplug at t = 0ms, then replug 50ms later (< 200ms).
+  connector_connected.store(false);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRapidHotplugGapMs));
+
+  connector_connected.store(true);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRapidHotplugGapMs));
+  listener.reset();
+
+  EXPECT_GE(observed_disconnects.load(), 1)
+      << "UEventListener 200ms sleep swallowed the sub-200ms unplug state";
+  EXPECT_GE(observed_connects.load(), 1);
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerRunsSettleRetryOnlyWhenHandlerReportsUnsettledConnector) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<bool> report_unsettled{false};
+  std::atomic<int> handler_calls{0};
+  auto listener = UEventListener::CreateInstance(
+      [&]() -> bool {
+        ++handler_calls;
+        return report_unsettled.exchange(false);
+      },
+      std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kPostSettleWaitMs = 250;
+  const std::string hotplug_uevent = MakeUEventPacket({
+      "change@/devices/drm/card0",
+      "DEVTYPE=drm_minor",
+      "HOTPLUG=1",
+  });
+
+  // 1. When all connectors are settled (handler returns false), no 200ms
+  // settle retry should run.
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  EXPECT_EQ(handler_calls.load(), 1);
+
+  // 2. When a connector is still unsettled (handler returns true on first
+  // pass), UEventListener must run the post-200ms settle retry.
+  handler_calls.store(0);
+  report_unsettled.store(true);
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  listener.reset();
+  EXPECT_EQ(handler_calls.load(), 2);
+}
+
+TEST_F(DrmHwcTest,
+       RefreshConnectorsAddsNewDynamicConnectorsAndReturnsStaleConnectors) {
+  constexpr uint32_t kMstConnId1 = 200;
+  constexpr uint32_t kMstConnId2 = 201;
+  fake_device->AddPipelineResources(/*is_external=*/false);
+  fake_device->AddPipelineResources(/*is_external=*/true);
+  const uint32_t static_id_0 = fake_device->GetConnectors()[0]->GetId();
+  const uint32_t static_id_1 = fake_device->GetConnectors()[1]->GetId();
+
+  // Dynamic MST connectors 200 and 201 appear in DRM resources.
+  fake_device->SetResourceConnectorIds(
+      {static_id_0, static_id_1, kMstConnId1, kMstConnId2});
+  {
+    auto stale = fake_device->RefreshConnectors();
+    EXPECT_TRUE(stale.empty());
+  }
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstConnId1);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetId(), kMstConnId2);
+
+  // Now MST connector 200 is unplugged and removed from DRM resources while 201
+  // remains present.
+  fake_device->SetResourceConnectorIds({static_id_0, static_id_1, kMstConnId2});
+  {
+    auto stale = fake_device->RefreshConnectors();
+    ASSERT_EQ(stale.size(), 1U);
+    EXPECT_EQ(stale[0]->GetId(), kMstConnId1);
+  }
+  ASSERT_EQ(fake_device->GetConnectors().size(), 3U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstConnId2);
+}
+
+TEST_F(DrmHwcTest,
+       NotifyDisplayLinkStatusRefreshesPrunedConfigsAndRemapsActiveConfig) {
+  constexpr uint16_t kUhdWidth = 3840;
+  constexpr uint16_t kUhdHeight = 2160;
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kUhdWidth, kUhdHeight, kFakeDefaultModeVRefresh,
+                         DRM_MODE_TYPE_PREFERRED, "2160p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kFakeDefaultModeVRefresh, 0, "1080p60")},
+      /*is_external=*/true);
+  std::shared_ptr<DrmDisplayPipeline> external_pipe = CreatePipeline(*ext_conn);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  HwcDisplay* ext_display = hwc.GetDisplay(1);
+  ASSERT_NE(ext_display, nullptr);
+  const auto initial_configs = ext_display->GetDisplayConfigs();
+  ASSERT_EQ(initial_configs.size(), 2U);
+  ASSERT_NE(ext_display->GetCurrentConfig(), nullptr);
+  ASSERT_NE(ext_display->GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(ext_display->GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+            kUhdWidth);
+
+  // Simulate kernel link-status = BAD pruning the 4K mode so only 1080p60
+  // remains on the connector.
+  ext_conn->SetModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kFakeDefaultModeVRefresh, DRM_MODE_TYPE_PREFERRED,
+                         "1080p60")});
+
+  hwc.hotplug_events.clear();
+  fake_device->GetFakeAtomicCommitSink()->ClearHistory();
+
+  hwc.NotifyDisplayLinkStatus(external_pipe);
+  hwc.FlushHotplugEvents();
+
+  const auto refreshed_configs = ext_display->GetDisplayConfigs();
+  EXPECT_EQ(refreshed_configs.size(), 1U)
+      << "NotifyDisplayLinkStatus() did not refresh HwcDisplay::configs_ from "
+         "the connector's pruned mode list";
+  EXPECT_EQ(ext_display->GetCurrentConfig(), nullptr)
+      << "GetCurrentConfig() must be invalidated until SetConfig() commits the "
+         "pruned mode";
+  ASSERT_NE(ext_display->GetLastRequestedConfig(), nullptr)
+      << "GetLastRequestedConfig() returned nullptr after link-status config "
+         "refresh";
+  if (refreshed_configs.size() == 1U) {
+    EXPECT_EQ(ext_display->GetLastRequestedConfig()->id,
+              refreshed_configs[0].id);
+    EXPECT_EQ(ext_display->GetLastRequestedConfig()->mode.GetRawMode().hdisplay,
+              kFakeDefaultModeWidth);
+  }
+  EXPECT_EQ(fake_device->GetFakeAtomicCommitSink()->GetExecuteCommitCount(), 0U)
+      << "NotifyDisplayLinkStatus() must not perform an autonomous KMS modeset";
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
+TEST_F(DrmHwcTest,
+       NotifyDisplayLinkStatusEmitsIncompatibleCableWhenAllModesPruned) {
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+
+  AddDeviceToResMan(std::move(shared_dev));
+  RunUpdateFrontendDisplays();
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  ASSERT_NE(hwc.GetDisplay(1), nullptr);
+
+  // Simulate terminal link training failure where the kernel prunes all modes
+  // on the connector and sets link-status = BAD while the cable remains plugged
+  // in.
+  ext_conn->SetModes({});
+  ext_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kIncompatibleCable));
+
+  // A subsequent hotplug sweep while still 0-mode + link-status = BAD must not
+  // emit duplicate kIncompatibleCable events.
+  hwc.hotplug_events.clear();
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  EXPECT_TRUE(hwc.hotplug_events.empty());
+
+  // Also verify initial plug-in with 0 modes + link-status = BAD emits
+  // kIncompatibleCable once without attaching a pipeline.
+  hwc.hotplug_events.clear();
+  ext_conn->SetConnected(false);
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  ext_conn->SetConnected(true);
+  ext_conn->SetModes({});
+  ext_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+  RunUpdateFrontendDisplays();
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0].second,
+            DrmHwc::DisplayStatus::kIncompatibleCable);
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  ResetResManDevices();
+}
+
+TEST_F(DrmHwcTest,
+       ResourceManagerInitRefreshesDynamicMstConnectorsBeforeBindingDisplays) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  constexpr uint32_t kDynamicMstConnId = 250;
+  constexpr uint32_t kDynamicMstCrtcId = 251;
+  constexpr uint32_t kDynamicMstPlaneId = 252;
+
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+
+  // Initial DrmDevice::Init() only captured the internal panel and the 1st MST
+  // connector before the kernel's asynchronous MST LINK_ADDRESS worker finished
+  // registering the 2nd MST connector (kDynamicMstConnId).
+  shared_dev->AddPipelineResources(/*is_external=*/false);
+  shared_dev->AddPipelineResources(/*is_external=*/true);
+  const uint32_t primary_id = shared_dev->GetConnectors()[0]->GetId();
+  const uint32_t first_mst_id = shared_dev->GetConnectors()[1]->GetId();
+
+  // Provide an available encoder/CRTC/plane for the 2nd MST connector and
+  // expose kDynamicMstConnId in drmModeGetResources() before
+  // ResourceManager::Init() runs UpdateFrontendDisplays().
+  shared_dev->AddEncoder(
+      std::make_unique<FakeDrmEncoder>(kDynamicMstConnId, kDynamicMstCrtcId));
+  shared_dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kDynamicMstCrtcId));
+  shared_dev->AddPlane(
+      std::make_unique<FakeDrmPlane>(*shared_dev, DRM_PLANE_TYPE_PRIMARY,
+                                     /*is_valid=*/true, kDynamicMstPlaneId));
+  shared_dev->SetResourceConnectorIds(
+      {primary_id, first_mst_id, kDynamicMstConnId});
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+
+  InitResManForTest();
+
+  EXPECT_EQ(shared_dev_ptr->GetConnectors().size(), 3U)
+      << "ResourceManager::Init() failed to call RefreshConnectors() before "
+         "UpdateFrontendDisplays(), dropping the boot-connected MST connector";
+  EXPECT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+  EXPECT_NE(hwc.GetDisplay(2), nullptr)
+      << "2nd external MST display (kDynamicMstConnId) was not bound during "
+         "ResourceManager::Init()";
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerTriggersHotplugOnDrmConnectorAddAndRemoveUevents) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+
+  std::atomic<int> hotplug_callbacks{0};
+  auto listener = UEventListener::CreateInstance([&]() { ++hotplug_callbacks; },
+                                                 std::move(uevent));
+  ASSERT_NE(listener, nullptr);
+
+  constexpr int kDeliveryWaitMs = 50;
+  const std::string connector_add_uevent = MakeUEventPacket({
+      "add@/devices/pci0000:00/drm/card0/card0-DP-5",
+      "ACTION=add",
+      "DEVTYPE=drm_connector",
+      "SUBSYSTEM=drm",
+  });
+
+  ASSERT_EQ(write(*write_fd, connector_add_uevent.data(),
+                  connector_add_uevent.size()),
+            static_cast<ssize_t>(connector_add_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+  EXPECT_GE(hotplug_callbacks.load(), 1)
+      << "UEventListener ignored DEVTYPE=drm_connector ACTION=add uevent";
+
+  const int after_add = hotplug_callbacks.load();
+  const std::string connector_remove_uevent = MakeUEventPacket({
+      "remove@/devices/pci0000:00/drm/card0/card0-DP-5",
+      "ACTION=remove",
+      "DEVTYPE=drm_connector",
+      "SUBSYSTEM=drm",
+  });
+
+  ASSERT_EQ(write(*write_fd, connector_remove_uevent.data(),
+                  connector_remove_uevent.size()),
+            static_cast<ssize_t>(connector_remove_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+  listener.reset();
+
+  EXPECT_GT(hotplug_callbacks.load(), after_add)
+      << "UEventListener ignored DEVTYPE=drm_connector ACTION=remove uevent";
 }
 
 }  // namespace android::drm_hwcomposer

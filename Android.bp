@@ -349,6 +349,7 @@ cc_test_host {
         "drm/DrmPlane.cpp",
         "drm/DrmProperty.cpp",
         "drm/ResourceManager.cpp",
+        "drm/UEventListener.cpp",
         "drm/VSyncWorker.cpp",
         "early_animation/EarlyBootAnimation.cpp",
         "early_animation/EarlyBootAnimationTest.cpp",

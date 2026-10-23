@@ -219,7 +219,9 @@ void ResourceManager::Init() {
   }
 
   for (auto &drm : drms_) {
-    drm->ResetConnectorsAndCrtcs();
+    if (!drm->GetBackend().UseBackendHotplug()) {
+      drm->ResetConnectorsAndCrtcs();
+    }
   }
 
   bool use_backend_hotplug = false;
@@ -252,12 +254,23 @@ void ResourceManager::Init() {
                    "ResourceManager: connector %u not found on device %s",
                    connector_id, drm_ptr->GetName().c_str());
           if (conn != nullptr) {
-            ProcessHotplugForConnector(conn);
-            if (conn->IsConnected() != connected) {
-              ALOGE(
-                  "ResourceManager: connector %u connected state mismatch "
-                  "(DRM=%d, backend=%d)",
-                  connector_id, conn->IsConnected(), connected);
+            if (!connected) {
+              conn->UpdateModesAndProperties();
+              ALOGW_IF(conn->IsConnected(),
+                       "ResourceManager: connector %u connected state mismatch "
+                       "(DRM=%d, backend=%d)",
+                       connector_id, conn->IsConnected(), connected);
+              auto it = attached_pipelines_.find(conn);
+              if (it != attached_pipelines_.end()) {
+                frontend_interface_->UnbindDisplay(it->second);
+                attached_pipelines_.erase(it);
+              }
+            } else {
+              ProcessHotplugForConnector(conn);
+              ALOGW_IF(!conn->IsConnected(),
+                       "ResourceManager: connector %u connected state mismatch "
+                       "(DRM=%d, backend=%d)",
+                       connector_id, conn->IsConnected(), connected);
             }
           }
           frontend_interface_->FinalizeDisplayBinding();
@@ -267,20 +280,29 @@ void ResourceManager::Init() {
       drm->GetBackend().SetHotplugHandler(std::move(hotplug_handler));
     }
   } else {
-    uevent_listener_ = UEventListener::CreateInstance([this] {
-      {
-        std::scoped_lock lock(GetMainLock());
-        for (auto &drm : drms_) {
-          auto stale_connectors = drm->RefreshConnectors();
-          DetachStalePipelines(stale_connectors);
+    {
+      std::scoped_lock lock(GetMainLock());
+      uevent_listener_ = UEventListener::CreateInstance([this]() -> bool {
+        bool any_connector_unsettled = false;
+        {
+          std::scoped_lock lock(GetMainLock());
+          for (auto &drm : drms_) {
+            auto stale_connectors = drm->RefreshConnectors();
+            DetachStalePipelines(stale_connectors);
+          }
+          any_connector_unsettled = UpdateFrontendDisplays();
         }
-        UpdateFrontendDisplays();
-      }
-      frontend_interface_->FlushHotplugEvents();
-    });
+        frontend_interface_->FlushHotplugEvents();
+        return any_connector_unsettled;
+      });
 
-    UpdateFrontendDisplays();
-    MaybeScheduleDelayedEdidRecovery();
+      for (auto &drm : drms_) {
+        auto stale_connectors = drm->RefreshConnectors();
+        DetachStalePipelines(stale_connectors);
+      }
+      UpdateFrontendDisplays();
+      MaybeScheduleDelayedEdidRecovery();
+    }
     frontend_interface_->FlushHotplugEvents();
   }
 
@@ -319,8 +341,9 @@ auto ResourceManager::GetTimeMonotonicNs() -> int64_t {
   return (int64_t(ts.tv_sec) * kNsInSec) + int64_t(ts.tv_nsec);
 }
 
-void ResourceManager::UpdateFrontendDisplays() {
+bool ResourceManager::UpdateFrontendDisplays() {
   auto ordered_connectors = GetOrderedConnectors();
+  bool any_connector_unsettled = false;
 
   // Pass 1: Update modes and properties on all connectors and detach any
   // disconnected connectors first so their shared CRTCs, encoders, and planes
@@ -329,7 +352,9 @@ void ResourceManager::UpdateFrontendDisplays() {
     if (conn == nullptr) {
       continue;
     }
-    conn->UpdateModesAndProperties();
+    if (conn->UpdateModesAndProperties() != 0 || conn->IsUnknownConnection()) {
+      any_connector_unsettled = true;
+    }
     if (!conn->IsConnected()) {
       auto it = attached_pipelines_.find(conn);
       if (it != attached_pipelines_.end()) {
@@ -344,8 +369,13 @@ void ResourceManager::UpdateFrontendDisplays() {
   // connector state already probed in Pass 1.
   for (auto *conn : ordered_connectors) {
     ProcessHotplugForConnector(conn, /*update_modes=*/false);
+    if (conn != nullptr && conn->IsConnected() &&
+        attached_pipelines_.count(conn) == 0) {
+      any_connector_unsettled = true;
+    }
   }
   frontend_interface_->FinalizeDisplayBinding();
+  return any_connector_unsettled;
 }
 
 void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
@@ -366,6 +396,13 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
           conn->GetName().c_str());
 
     if (connected) {
+      if (conn->GetModes().empty() && !conn->IsLinkStatusGood()) {
+        if (!conn->HasReportedIncompatibleCable()) {
+          conn->SetReportedIncompatibleCable(true);
+          frontend_interface_->NotifyIncompatibleCable();
+        }
+        return;
+      }
       std::shared_ptr<DrmDisplayPipeline>
           pipeline = conn->GetDev().GetBackend().CreatePipeline(*conn);
       ALOGE_IF(pipeline == nullptr,
@@ -389,12 +426,20 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
       frontend_interface_->UnbindDisplay(it->second);
       attached_pipelines_.erase(it);
     }
-  }
-  if (connected) {
+  } else if (connected) {
     auto attached_it = attached_pipelines_.find(conn);
     if (attached_it != attached_pipelines_.end()) {
       if (!conn->IsLinkStatusGood()) {
-        frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+        if (conn->GetModes().empty()) {
+          if (!conn->HasReportedIncompatibleCable()) {
+            conn->SetReportedIncompatibleCable(true);
+            frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+          }
+        } else {
+          frontend_interface_->NotifyDisplayLinkStatus(attached_it->second);
+        }
+      } else {
+        frontend_interface_->NotifyDisplayConnected(attached_it->second);
       }
 
       // If content protection is not enabled anymore, inform frontend so it
@@ -560,8 +605,11 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
     frontend_interface_->FinalizeDisplayBinding();
 
     // Release MainLock during DP link teardown wait to avoid
-    // blocking other display operations.
+    // blocking other display operations, and flush the disconnect event
+    // immediately so SurfaceFlinger does not wait for the 1s link teardown
+    // sleep before retiring the old display configuration.
     lock.unlock();
+    frontend_interface_->FlushHotplugEvents();
 
     // Brief pause for the link to fully go down before reprobing.
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -575,18 +623,27 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
       DetachStalePipelines(stale);
     }
     UpdateFrontendDisplays();
+    lock.unlock();
 
-    edid_recovery_pending_ = false;
+    frontend_interface_->FlushHotplugEvents();
+    {
+      std::scoped_lock recovery_lock(edid_recovery_mutex_);
+      edid_recovery_pending_ = false;
+    }
     ALOGI("Delayed-EDID recovery reprobe complete");
   });
 }
 
 void ResourceManager::CancelDelayedEdidRecovery() {
-  if (edid_recovery_pending_) {
-    {
-      std::lock_guard lock(edid_recovery_mutex_);
+  bool should_notify = false;
+  {
+    std::lock_guard lock(edid_recovery_mutex_);
+    if (edid_recovery_pending_) {
       edid_recovery_pending_ = false;
+      should_notify = true;
     }
+  }
+  if (should_notify) {
     edid_recovery_cv_.notify_all();
   }
   if (edid_recovery_thread_.joinable()) {

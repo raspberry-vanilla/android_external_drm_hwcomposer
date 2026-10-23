@@ -67,7 +67,7 @@ auto GenericCompositionPlanner::ValidateDisplay(
             .short_circuited = false};
   }
 
-  if (CompositionPlanner::LayersUseDifferentColorspaces(layers) &&
+  if (CompositionPlanner::LayersUseDifferentColorGamuts(layers) &&
       !display->UseColorPipeline()) {
     return {.composition = GetFlattenedComposition(
                 layers, FlattenReason::kNoPerPlaneColorspaceSupport),

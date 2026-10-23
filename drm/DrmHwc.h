@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
@@ -40,11 +41,13 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   DrmHwc();
   ~DrmHwc() override;
 
-  // Enum for Display status: Connected, Disconnected, Link Training Failed
+  // Enum for Display status: Connected, Disconnected, Link Training Failed,
+  // Incompatible Cable
   enum DisplayStatus {
     kDisconnected,
     kConnected,
     kLinkTrainingFailed,
+    kIncompatibleCable,
   };
 
   // Client Callback functions.:
@@ -105,6 +108,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // Notify Display Link Status
   void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) override;
+  void NotifyIncompatibleCable() override;
+  void NotifyDisplayConnected(
+      std::shared_ptr<DrmDisplayPipeline> pipeline) override;
 
   // Notify HDCP Termination from kernel Uevents
   void NotifyHdcpTermination(
@@ -123,7 +129,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // event callbacks from the main mutex.
   class HotplugEventQueue {
    public:
-    using Events = std::map<DisplayHandle, DisplayStatus>;
+    using Events = std::vector<std::pair<DisplayHandle, DisplayStatus>>;
 
     void Add(DisplayHandle display_handle, DisplayStatus display_status);
     Events RetrieveAndFlush();

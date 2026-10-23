@@ -52,7 +52,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   virtual ~DrmConnector();
 
   int UpdateEdidProperty();
-  auto GetEdidBlob() -> DrmModePropertyBlobUnique;
+  virtual auto GetEdidBlob() -> DrmModePropertyBlobUnique;
 
   auto GetDev() const -> DrmDevice & {
     return *drm_;
@@ -104,6 +104,9 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   auto &GetCrtcIdProperty() const {
+    return crtc_id_property_;
+  }
+  auto &GetCrtcIdProperty() {
     return crtc_id_property_;
   }
 
@@ -159,6 +162,11 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->connection == DRM_MODE_CONNECTED;
   }
 
+  virtual bool IsUnknownConnection() const {
+    return connector_ != nullptr &&
+           connector_->connection == DRM_MODE_UNKNOWNCONNECTION;
+  }
+
   virtual uint32_t GetMmWidth() const;
   virtual uint32_t GetMmHeight() const;
 
@@ -169,6 +177,22 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   bool IsMst() const;
+
+  void MarkDeleted() {
+    deleted_ = true;
+  }
+
+  bool IsDeleted() const {
+    return deleted_;
+  }
+
+  bool HasReportedIncompatibleCable() const {
+    return reported_incompatible_cable_;
+  }
+
+  void SetReportedIncompatibleCable(bool reported) {
+    reported_incompatible_cable_ = reported;
+  }
 
   std::optional<uint32_t> GetPhysicalPortBaseId() const;
 
@@ -189,6 +213,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   const uint32_t index_in_res_array_;
+  bool deleted_ = false;
+  bool reported_incompatible_cable_ = false;
 
   std::vector<DrmMode> modes_;
 
