@@ -127,14 +127,15 @@ void UEventListener::ThreadFn() {
         break;
       }
 
-      const bool needs_settle_retry = hotplug_handler_();
+      const bool needs_settle_reprobe = hotplug_handler_();
 
       // Wait up to 200ms from the end of this hotplug pass for either a
       // follow-up hotplug uevent (e.g. a rapid unplug/replug or multi-stream
       // MST burst) or a quiet settle timeout (ensuring boards like RPI4 that
       // report 0 modes or unknown connection status on the initial pulse are
-      // re-probed after 200ms). Use a fixed steady_clock deadline so unrelated
-      // non-DRM uevents do not reset the 200ms window.
+      // re-probed after 200ms while skipping duplicate sweeps when settled).
+      // Use a fixed steady_clock deadline so unrelated non-DRM uevents do not
+      // reset the 200ms window.
       const auto settle_deadline = std::chrono::steady_clock::now() +
                                    std::chrono::milliseconds(kSettleDelayMs);
       bool saw_followup_hotplug = false;
@@ -161,7 +162,7 @@ void UEventListener::ThreadFn() {
         break;
       }
       if (!saw_followup_hotplug) {
-        if (needs_settle_retry) {
+        if (needs_settle_reprobe) {
           hotplug_handler_();
         }
         break;

@@ -210,6 +210,10 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().Init();
   }
 
+  void StartUEventListenerForTest(std::unique_ptr<UEvent> uevent) {
+    hwc.GetResMan().StartUEventListener(std::move(uevent));
+  }
+
   void DeInitResManForTest() {
     hwc.GetResMan().DeInit();
   }
@@ -1579,6 +1583,106 @@ TEST_F(DrmHwcTest,
     EXPECT_NE(errors.find("Failed to get connector"), std::string::npos)
         << "Expected ALOGE on genuine -EIO connector failure, got: " << errors;
   }
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerSkipsDuplicateSettleSweepWhenSettledButRetriesUnsettled) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto* internal_conn = shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(internal_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetConnected(false);
+  shared_dev->SetResourceConnectorIds(
+      {internal_conn->GetId(), ext_conn->GetId()});
+
+  std::atomic<size_t> refresh_calls{0};
+  shared_dev->SetGetResourcesHook([&]() { ++refresh_calls; });
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+  StartUEventListenerForTest(std::move(uevent));
+
+  constexpr int kPostSettleWaitMs = 280;
+  const std::string hotplug_uevent = MakeUEventPacket(
+      {"change@/devices/drm/card0", "DEVTYPE=drm_minor", "HOTPLUG=1"});
+
+  // 1. Cleanly settled hotplug connect: ext_conn already has valid modes on the
+  // initial uevent sweep, so no duplicate 200ms trailing settle sweep should
+  // execute after the quiet timeout expires.
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+  refresh_calls.store(0);
+  internal_conn->ResetUpdateModesCallCount();
+
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  EXPECT_EQ(refresh_calls.load(), 1U)
+      << "Cleanly settled hotplug ran a duplicate 200ms trailing settle sweep";
+  EXPECT_EQ(internal_conn->GetUpdateModesCallCount(), 1U)
+      << "Cleanly settled hotplug re-probed connector modes a second time";
+
+  // Reset ext_conn to disconnected for Subtest 2.
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(false);
+  }
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+
+  // 2. Unsettled initial HPD pulse (0 modes on first probe, valid modes ready
+  // before the 200ms settle timeout with NO follow-up uevent): UEventListener
+  // MUST execute the 200ms trailing settle retry and bind the display.
+  constexpr int kInitialSweepAllowanceMs = 50;
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({});
+  }
+  refresh_calls.store(0);
+  ext_conn->ResetUpdateModesCallCount();
+
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kInitialSweepAllowanceMs));
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  EXPECT_EQ(refresh_calls.load(), 1U);
+
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U)
+      << "Unsettled 0-mode initial HPD pulse was not recovered by 200ms settle "
+         "retry";
+  EXPECT_EQ(refresh_calls.load(), 2U)
+      << "Expected initial sweep + one 200ms settle retry for unsettled "
+         "0-mode connector";
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
 }
 
 }  // namespace android::drm_hwcomposer

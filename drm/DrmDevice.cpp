@@ -391,13 +391,19 @@ auto DrmDevice::CommitAtomicReset(drmModeAtomicReq &pset) -> int {
                              this);
 }
 
-auto DrmDevice::RefreshConnectors()
+auto DrmDevice::RefreshConnectors(bool *out_had_probe_error)
     -> std::vector<std::unique_ptr<DrmConnector>> {
+  if (out_had_probe_error != nullptr) {
+    *out_had_probe_error = false;
+  }
   std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
 
   auto res = GetResources();
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
+    if (out_had_probe_error != nullptr) {
+      *out_had_probe_error = true;
+    }
     return stale_connectors;
   }
 
@@ -431,6 +437,9 @@ auto DrmDevice::RefreshConnectors()
 
   remove_stale(connectors_, false);
   remove_stale(ignored_connectors_, true);
+  for (const auto &conn : writeback_connectors_) {
+    conn_ids_present.insert(conn->GetId());
+  }
 
   // Add new connectors in DRM resources that are not present in connectors_
   // or ignored_connectors_
@@ -442,6 +451,9 @@ auto DrmDevice::RefreshConnectors()
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     auto conn = CreateConnectorInstance(res->connectors[i], i);
     if (!conn) {
+      if (out_had_probe_error != nullptr) {
+        *out_had_probe_error = true;
+      }
       continue;
     }
     if (conn->IsWriteback()) {

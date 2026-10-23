@@ -126,7 +126,8 @@ class DrmDevice {
     return cap_cursor_size_;
   }
 
-  auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
+  auto RefreshConnectors(bool *out_had_probe_error = nullptr)
+      -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
 
  protected:

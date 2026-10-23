@@ -430,10 +430,6 @@ class FakeDrmConnector : public DrmConnector {
     pending_connected_ = connected;
   }
 
-  size_t GetUpdateModesCallCount() const {
-    return update_modes_call_count_;
-  }
-
   std::string GetName() const override {
     return name_;
   }
@@ -448,6 +444,9 @@ class FakeDrmConnector : public DrmConnector {
       SetConnected(*pending_connected_);
       pending_connected_.reset();
     }
+    if (update_modes_hook_) {
+      update_modes_hook_();
+    }
     if (!IsConnected() || !modes_.empty()) {
       SetReportedIncompatibleCable(false);
     }
@@ -456,6 +455,18 @@ class FakeDrmConnector : public DrmConnector {
 
   void SetUpdateModesResult(int res) {
     update_modes_result_ = res;
+  }
+
+  void SetUpdateModesHook(std::function<void()> hook) {
+    update_modes_hook_ = std::move(hook);
+  }
+
+  size_t GetUpdateModesCallCount() const {
+    return update_modes_call_count_;
+  }
+
+  void ResetUpdateModesCallCount() {
+    update_modes_call_count_ = 0;
   }
 
   uint32_t GetConnectorType() const override {
@@ -514,8 +525,9 @@ class FakeDrmConnector : public DrmConnector {
   PropHook prop_hook_;
   bool connected_ = true;
   std::optional<bool> pending_connected_;
-  size_t update_modes_call_count_ = 0;
   int update_modes_result_ = 0;
+  size_t update_modes_call_count_ = 0;
+  std::function<void()> update_modes_hook_;
   std::string name_ = "FakeConnector-1";
   bool content_protection_enabled_simulated_ = false;
   std::vector<uint8_t> edid_bytes_;
@@ -882,8 +894,10 @@ class FakeDrmDevice : public DrmDevice {
 
   FakeDrmConnector* AddPipelineResourcesWithModes(std::vector<DrmMode> modes,
                                                   bool is_external = false) {
-    AddEncoder(std::make_unique<FakeDrmEncoder>(/*id=*/next_id_,
-                                                /*crtc_id=*/next_id_));
+    auto encoder = std::make_unique<FakeDrmEncoder>(/*id=*/next_id_,
+                                                    /*crtc_id=*/next_id_ + 1);
+    encoder->InitRawEncoder(kFakeAllCrtcsMask);
+    AddEncoder(std::move(encoder));
     AddCrtc(std::make_unique<FakeDrmCrtc>(/*id=*/next_id_ + 1));
     auto connector = std::make_unique<
         FakeDrmConnector>(this,
@@ -899,8 +913,6 @@ class FakeDrmDevice : public DrmDevice {
     connector->SetModes(std::move(modes));
     auto* connector_ptr = connector.get();
     AddConnector(std::move(connector));
-    encoders_.back() = std::make_unique<FakeDrmEncoder>(
-        /*id=*/next_id_, /*crtc_id=*/next_id_ + 1);
     AddPlane(std::make_unique<FakeDrmPlane>(*this, DRM_PLANE_TYPE_PRIMARY,
                                             /*is_valid=*/true,
                                             kFakePlaneBaseId + next_id_));

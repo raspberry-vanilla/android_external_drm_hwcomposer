@@ -40,6 +40,7 @@
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/UEventListener.h"
+#include "utils/UEvent.h"
 #if HAS_LIBDISPLAY_INFO
 #include "utils/EdidWrapper.h"
 #endif
@@ -282,19 +283,7 @@ void ResourceManager::Init() {
   } else {
     {
       std::scoped_lock lock(GetMainLock());
-      uevent_listener_ = UEventListener::CreateInstance([this]() -> bool {
-        bool any_connector_unsettled = false;
-        {
-          std::scoped_lock lock(GetMainLock());
-          for (auto &drm : drms_) {
-            auto stale_connectors = drm->RefreshConnectors();
-            DetachStalePipelines(stale_connectors);
-          }
-          any_connector_unsettled = UpdateFrontendDisplays();
-        }
-        frontend_interface_->FlushHotplugEvents();
-        return any_connector_unsettled;
-      });
+      StartUEventListener();
 
       for (auto &drm : drms_) {
         auto stale_connectors = drm->RefreshConnectors();
@@ -341,9 +330,36 @@ auto ResourceManager::GetTimeMonotonicNs() -> int64_t {
   return (int64_t(ts.tv_sec) * kNsInSec) + int64_t(ts.tv_nsec);
 }
 
+void ResourceManager::StartUEventListener() {
+  StartUEventListener(nullptr);
+}
+
+void ResourceManager::StartUEventListener(std::unique_ptr<UEvent> uevent) {
+  uevent_listener_.reset();
+  uevent_listener_ = UEventListener::CreateInstance(
+      [this]() -> bool {
+        bool needs_settle_reprobe = false;
+        {
+          std::scoped_lock lock(GetMainLock());
+          for (auto &drm : drms_) {
+            bool refresh_error = false;
+            auto stale_connectors = drm->RefreshConnectors(&refresh_error);
+            needs_settle_reprobe = needs_settle_reprobe || refresh_error;
+            DetachStalePipelines(stale_connectors);
+          }
+          if (UpdateFrontendDisplays()) {
+            needs_settle_reprobe = true;
+          }
+        }
+        frontend_interface_->FlushHotplugEvents();
+        return needs_settle_reprobe;
+      },
+      std::move(uevent));
+}
+
 bool ResourceManager::UpdateFrontendDisplays() {
   auto ordered_connectors = GetOrderedConnectors();
-  bool any_connector_unsettled = false;
+  bool needs_settle_reprobe = false;
 
   // Pass 1: Update modes and properties on all connectors and detach any
   // disconnected connectors first so their shared CRTCs, encoders, and planes
@@ -352,8 +368,8 @@ bool ResourceManager::UpdateFrontendDisplays() {
     if (conn == nullptr) {
       continue;
     }
-    if (conn->UpdateModesAndProperties() != 0 || conn->IsUnknownConnection()) {
-      any_connector_unsettled = true;
+    if (conn->UpdateModesAndProperties() != 0 || conn->IsDeleted()) {
+      needs_settle_reprobe = true;
     }
     if (!conn->IsConnected()) {
       auto it = attached_pipelines_.find(conn);
@@ -368,14 +384,17 @@ bool ResourceManager::UpdateFrontendDisplays() {
   // Pass 2: Attach pipelines for newly connected connectors using the
   // connector state already probed in Pass 1.
   for (auto *conn : ordered_connectors) {
+    if (conn == nullptr) {
+      continue;
+    }
     ProcessHotplugForConnector(conn, /*update_modes=*/false);
-    if (conn != nullptr && conn->IsConnected() &&
-        attached_pipelines_.count(conn) == 0) {
-      any_connector_unsettled = true;
+    if (conn->IsUnknownConnection() ||
+        (conn->IsConnected() && attached_pipelines_.count(conn) == 0)) {
+      needs_settle_reprobe = true;
     }
   }
   frontend_interface_->FinalizeDisplayBinding();
-  return any_connector_unsettled;
+  return needs_settle_reprobe;
 }
 
 void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,

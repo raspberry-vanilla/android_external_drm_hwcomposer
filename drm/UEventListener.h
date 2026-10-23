@@ -29,6 +29,9 @@ namespace android::drm_hwcomposer {
 
 class UEventListener {
  public:
+  // Returns true if at least one connector remained unsettled (e.g. connected
+  // with 0 modes, unknown connection, or transient vanish/probe failure) so a
+  // quiet 200ms trailing settle re-probe is required; false when settled.
   using HotplugHandler = std::function<bool()>;
 
   ~UEventListener();

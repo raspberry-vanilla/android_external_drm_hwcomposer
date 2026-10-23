@@ -35,6 +35,7 @@ enum class CtmHandling;
 class DrmConnector;
 class DrmDevice;
 struct DrmDisplayPipeline;
+class UEvent;
 class UEventListener;
 
 class PipelineToFrontendBindingInterface {
@@ -114,6 +115,8 @@ class ResourceManager {
   friend struct DrmHwcTest;
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
+  void StartUEventListener();
+  void StartUEventListener(std::unique_ptr<UEvent> uevent);
   bool UpdateFrontendDisplays();
   void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true);
   void DetachStalePipelines(
