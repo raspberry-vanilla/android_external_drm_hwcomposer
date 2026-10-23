@@ -863,6 +863,30 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
                                       kFakeLinkStatusPropId),
             static_cast<uint64_t>(DRM_MODE_LINK_STATUS_GOOD));
+  state_manager->FinishPendingRequest(modeset_args, std::move(req));
+
+  // Only full modesets (display_mode && !seamless) reset link-status to GOOD;
+  // seamless refresh-rate switches and pageflips must omit link-status.
+  constexpr uint32_t kSeamlessVRefresh = 120;
+  AtomicCommitArgs seamless_args{};
+  seamless_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                 kSeamlessVRefresh);
+  seamless_args.seamless = true;
+  auto seamless_req = state_manager->GetAtomicModeReqForArgs(seamless_args);
+  ASSERT_NE(seamless_req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(seamless_req)
+                                          ->property_set.get(),
+                                      conn_id, kFakeLinkStatusPropId),
+            std::nullopt);
+
+  AtomicCommitArgs pageflip_args{};
+  pageflip_args.composition = CreateSinglePlanePlan(kTestFbId2);
+  auto pageflip_req = state_manager->GetAtomicModeReqForArgs(pageflip_args);
+  ASSERT_NE(pageflip_req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(pageflip_req)
+                                          ->property_set.get(),
+                                      conn_id, kFakeLinkStatusPropId),
+            std::nullopt);
 }
 
 TEST_F(DrmAtomicStateManagerTest,
