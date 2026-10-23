@@ -307,6 +307,10 @@ TEST_F(DrmHwcTest, ActiveDisplayCountsAndDumpState) {
   hwc.FinalizeDisplayBinding();
   hwc.FlushHotplugEvents();
 
+  ASSERT_NE(hwc.GetDisplay(1), nullptr);
+  EXPECT_EQ(hwc.GetDisplay(1)->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
   const auto counts = hwc.PullActiveDisplayCounts();
   EXPECT_EQ(counts.num_active_physical_displays, 2);
   EXPECT_EQ(counts.num_active_external_displays, 1);
@@ -668,7 +672,7 @@ TEST_F(DrmHwcTest,
   ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
 
   auto primary_pipe = CreatePipeline(/*is_external=*/false);
-  auto secondary_pipe = CreatePipeline(/*is_external=*/true);
+  auto secondary_pipe = CreatePipeline(/*is_external=*/false);
   ASSERT_NE(primary_pipe, nullptr);
   ASSERT_NE(secondary_pipe, nullptr);
 
@@ -1217,6 +1221,8 @@ TEST_F(DrmHwcTest,
 
   HwcDisplay* ext_display = hwc.GetDisplay(1);
   ASSERT_NE(ext_display, nullptr);
+  EXPECT_EQ(ext_display->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
   const auto initial_configs = ext_display->GetDisplayConfigs();
   ASSERT_EQ(initial_configs.size(), 2U);
   ASSERT_NE(ext_display->GetCurrentConfig(), nullptr);

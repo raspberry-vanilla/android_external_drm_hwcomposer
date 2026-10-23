@@ -152,7 +152,8 @@ class HwcDisplay : public ICompositorDisplay {
   bool RefreshConfigsFromConnector();
   bool OnLinkTrainingFailed();
   bool HasStagedPowerModeOn() const {
-    return staged_power_mode_ == PowerMode::kOn;
+    return staged_power_mode_ == PowerMode::kOn &&
+           !defer_modeset_until_power_on_;
   }
 
   // Get the config representing the mode that has been committed to KMS.
@@ -463,6 +464,8 @@ class HwcDisplay : public ICompositorDisplay {
   std::optional<ConfigId> staged_mode_config_id_{};
   std::optional<PowerMode> staged_power_mode_{};
   bool link_recovery_modeset_required_ = false;
+  bool requires_reprobe_on_power_on_ = false;
+  bool defer_modeset_until_power_on_ = false;
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 
