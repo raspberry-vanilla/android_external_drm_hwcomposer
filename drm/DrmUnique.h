@@ -88,6 +88,16 @@ auto inline MakeDrmModeColorOpUnique(int fd, uint32_t color_op_id) {
       [](drmModeObjectProperties *it) { drmModeFreeObjectProperties(it); });
 }
 
+using DrmModeObjectPropertiesUnique = DUniquePtr<drmModeObjectProperties>;
+auto inline MakeDrmModeObjectPropertiesUnique(int fd, uint32_t object_id,
+                                              uint32_t object_type) {
+  return DrmModeObjectPropertiesUnique(drmModeObjectGetProperties(fd, object_id,
+                                                                  object_type),
+                                       [](drmModeObjectProperties *it) {
+                                         drmModeFreeObjectProperties(it);
+                                       });
+}
+
 using DrmModeResUnique = DUniquePtr<drmModeRes>;
 auto inline MakeDrmModeResUnique(int fd) {
   return DrmModeResUnique(drmModeGetResources(fd),

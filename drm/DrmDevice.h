@@ -119,6 +119,9 @@ class DrmDevice {
   virtual int GetProperty(uint32_t obj_id, uint32_t obj_type,
                           const char *prop_name, DrmProperty *property) const;
 
+  virtual auto GetConnector(uint32_t connector_id) const
+      -> DrmModeConnectorUnique;
+
   const std::optional<std::pair<uint64_t, uint64_t>> &GetCapCursorSize() const {
     return cap_cursor_size_;
   }
@@ -128,6 +131,8 @@ class DrmDevice {
 
  protected:
   virtual auto GetResources() const -> DrmModeResUnique;
+  virtual auto GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
+      -> DrmModeObjectPropertiesUnique;
   virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
       -> std::unique_ptr<DrmConnector>;
   virtual auto CommitAtomicReset(drmModeAtomicReq &pset) -> int;

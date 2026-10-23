@@ -793,8 +793,62 @@ class FakeDrmDevice : public DrmDevice {
     return DrmDevice::GetProperty(obj_id, obj_type, prop_name, property);
   }
 
+  DrmModeConnectorUnique GetConnector(uint32_t connector_id) const override {
+    std::optional<int> injected_err;
+    if (auto err_it = get_connector_failure_errno_.find(connector_id);
+        err_it != get_connector_failure_errno_.end()) {
+      injected_err = err_it->second;
+    }
+    if (get_connector_hook_) {
+      get_connector_hook_(connector_id);
+    }
+    if (injected_err.has_value()) {
+      errno = *injected_err;
+      return {};
+    }
+    auto raw_it = fake_raw_connectors_.find(connector_id);
+    if (raw_it != fake_raw_connectors_.end()) {
+      return FakeDrmConnector::MakeFakeRawConnector(connector_id,
+                                                    raw_it->second.first,
+                                                    raw_it->second.second);
+    }
+    return DrmDevice::GetConnector(connector_id);
+  }
+
+  void SetGetConnectorFailureErrno(uint32_t connector_id,
+                                   std::optional<int> err) {
+    if (err.has_value()) {
+      get_connector_failure_errno_[connector_id] = *err;
+    } else {
+      get_connector_failure_errno_.erase(connector_id);
+    }
+  }
+
+  void SetFakeRawConnectorForGetConnector(uint32_t connector_id,
+                                          uint32_t encoder_id,
+                                          uint32_t connector_type) {
+    fake_raw_connectors_[connector_id] = {encoder_id, connector_type};
+  }
+
+  void SetGetObjectPropertiesFailureErrno(uint32_t obj_id,
+                                          std::optional<int> err) {
+    if (err.has_value()) {
+      get_object_properties_failure_errno_[obj_id] = *err;
+    } else {
+      get_object_properties_failure_errno_.erase(obj_id);
+    }
+  }
+
+  void SetGetConnectorHook(std::function<void(uint32_t)> hook) {
+    get_connector_hook_ = std::move(hook);
+  }
+
   void SetResourceConnectorIds(std::vector<uint32_t> connector_ids) {
     resource_connector_ids_ = std::move(connector_ids);
+  }
+
+  void SetGetResourcesHook(std::function<void()> hook) {
+    get_resources_hook_ = std::move(hook);
   }
 
   std::optional<uint64_t> GetLastResetReqPropertyValue(uint32_t obj_id,
@@ -856,6 +910,9 @@ class FakeDrmDevice : public DrmDevice {
 
  protected:
   DrmModeResUnique GetResources() const override {
+    if (get_resources_hook_) {
+      get_resources_hook_();
+    }
     if (resource_connector_ids_.empty()) {
       return DrmDevice::GetResources();
     }
@@ -869,6 +926,16 @@ class FakeDrmDevice : public DrmDevice {
               delete[] it->connectors;
               delete it;
             }};
+  }
+
+  DrmModeObjectPropertiesUnique GetObjectProperties(
+      uint32_t obj_id, uint32_t obj_type) const override {
+    auto err_it = get_object_properties_failure_errno_.find(obj_id);
+    if (err_it != get_object_properties_failure_errno_.end()) {
+      errno = err_it->second;
+      return {};
+    }
+    return DrmDevice::GetObjectProperties(obj_id, obj_type);
   }
 
   std::unique_ptr<DrmConnector> CreateConnectorInstance(
@@ -906,6 +973,11 @@ class FakeDrmDevice : public DrmDevice {
   FakeAtomicCommitSink* fake_sink_ = nullptr;
   FakeDrmFbImporter* fake_importer_ = nullptr;
   std::map<std::pair<uint32_t, std::string>, FakePropertyDef> fake_properties_;
+  std::map<uint32_t, int> get_connector_failure_errno_;
+  std::map<uint32_t, std::pair<uint32_t, uint32_t>> fake_raw_connectors_;
+  std::map<uint32_t, int> get_object_properties_failure_errno_;
+  std::function<void(uint32_t)> get_connector_hook_;
+  std::function<void()> get_resources_hook_;
   std::vector<uint32_t> resource_connector_ids_;
   std::map<std::pair<uint32_t, uint32_t>, uint64_t> last_reset_req_values_;
 };

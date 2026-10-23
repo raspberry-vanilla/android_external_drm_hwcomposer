@@ -59,10 +59,19 @@ constexpr size_t kTypesCount = 21;
 auto DrmConnector::GetConnectorProperty(const char *prop_name,
                                         DrmProperty *property,
                                         bool is_optional) -> bool {
+  if (IsDeleted()) {
+    return false;
+  }
+
   auto err = drm_->GetProperty(GetId(), DRM_MODE_OBJECT_CONNECTOR, prop_name,
                                property);
   if (err == 0)
     return true;
+
+  if (err == -ENODEV) {
+    MarkDeleted();
+    return false;
+  }
 
   if (is_optional) {
     ALOGV("Could not get optional %s property from connector %d", prop_name,
@@ -76,9 +85,16 @@ auto DrmConnector::GetConnectorProperty(const char *prop_name,
 auto DrmConnector::CreateInstance(DrmDevice &dev, uint32_t connector_id,
                                   uint32_t index)
     -> std::unique_ptr<DrmConnector> {
-  auto conn = MakeDrmModeConnectorUnique(*dev.GetFd(), connector_id);
+  auto conn = dev.GetConnector(connector_id);
   if (!conn) {
-    ALOGE("Failed to get connector %d", connector_id);
+    const int err = errno;
+    if (err == ENOENT || err == ENODEV) {
+      ALOGI("Connector %u vanished during probe (%s)", connector_id,
+            std::generic_category().message(err).c_str());
+    } else {
+      ALOGE("Failed to get connector %d (%s)", connector_id,
+            std::generic_category().message(err).c_str());
+    }
     return {};
   }
 
@@ -86,7 +102,12 @@ auto DrmConnector::CreateInstance(DrmDevice &dev, uint32_t connector_id,
       new DrmConnector(std::move(conn), &dev, index));
 
   if (!c->Init()) {
-    ALOGE("Failed to initialize connector %d", connector_id);
+    // If the connector vanished (-ENODEV) during property discovery,
+    // DrmDevice::GetProperty() already logged ALOGI and GetConnectorProperty()
+    // marked the connector deleted.
+    if (!c->IsDeleted()) {
+      ALOGE("Failed to initialize connector %d", connector_id);
+    }
     return {};
   }
 
@@ -206,7 +227,7 @@ auto DrmConnector::Init() -> bool {
 
   GetOptionalConnectorProperty("link-status", &link_status_property_);
 
-  return true;
+  return !IsDeleted();
 }
 
 int DrmConnector::UpdateEdidProperty() {
@@ -309,9 +330,16 @@ std::string DrmConnector::GetName() const {
 }
 
 int DrmConnector::UpdateModesAndProperties() {
-  auto conn = MakeDrmModeConnectorUnique(*drm_->GetFd(), GetId());
+  auto conn = drm_->GetConnector(GetId());
   if (!conn) {
-    ALOGE("Failed to get connector %d", GetId());
+    const int err = errno;
+    if (err == ENOENT || err == ENODEV) {
+      ALOGI("Connector %u vanished during probe (%s)", GetId(),
+            std::generic_category().message(err).c_str());
+    } else {
+      ALOGE("Failed to get connector %d (%s)", GetId(),
+            std::generic_category().message(err).c_str());
+    }
     MarkDeleted();
     if (connector_) {
       connector_->connection = DRM_MODE_DISCONNECTED;

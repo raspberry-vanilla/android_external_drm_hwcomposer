@@ -309,12 +309,18 @@ int DrmDevice::GetProperty(uint32_t obj_id, uint32_t obj_type,
     return -ENODEV;
   }
 
-  drmModeObjectPropertiesPtr props = nullptr;
-
-  props = drmModeObjectGetProperties(*GetFd(), obj_id, obj_type);
-  if (props == nullptr) {
-    ALOGE("Failed to get properties for %d/%x", obj_id, obj_type);
-    return -ENODEV;
+  auto props = GetObjectProperties(obj_id, obj_type);
+  if (!props) {
+    const int err = errno;
+    if (obj_type == DRM_MODE_OBJECT_CONNECTOR &&
+        (err == ENOENT || err == ENODEV)) {
+      ALOGI("Connector %u vanished before getting properties (%s)", obj_id,
+            std::generic_category().message(err).c_str());
+      return -ENODEV;
+    }
+    ALOGE("Failed to get properties for %d/%x (%s)", obj_id, obj_type,
+          std::generic_category().message(err).c_str());
+    return err != 0 ? -err : -EIO;
   }
 
   bool found = false;
@@ -329,7 +335,6 @@ int DrmDevice::GetProperty(uint32_t obj_id, uint32_t obj_type,
     drmModeFreeProperty(p);
   }
 
-  drmModeFreeObjectProperties(props);
   return found ? 0 : -ENOENT;
 }
 
@@ -362,8 +367,18 @@ auto DrmDevice::GetConnectors()
   return connectors_;
 }
 
+auto DrmDevice::GetConnector(uint32_t connector_id) const
+    -> DrmModeConnectorUnique {
+  return MakeDrmModeConnectorUnique(*GetFd(), connector_id);
+}
+
 auto DrmDevice::GetResources() const -> DrmModeResUnique {
   return MakeDrmModeResUnique(*GetFd());
+}
+
+auto DrmDevice::GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
+    -> DrmModeObjectPropertiesUnique {
+  return MakeDrmModeObjectPropertiesUnique(*GetFd(), obj_id, obj_type);
 }
 
 auto DrmDevice::CreateConnectorInstance(uint32_t connector_id, uint32_t index)

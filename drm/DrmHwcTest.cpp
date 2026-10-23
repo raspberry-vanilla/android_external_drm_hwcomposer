@@ -41,6 +41,9 @@
 #include <vector>
 
 #include <android-base/file.h>
+#ifdef ANDROID
+#include <android/log.h>
+#endif
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
 
@@ -1406,6 +1409,176 @@ TEST_F(DrmHwcTest,
 
   EXPECT_GT(hotplug_callbacks.load(), after_add)
       << "UEventListener ignored DEVTYPE=drm_connector ACTION=remove uevent";
+}
+
+namespace {
+
+class ScopedErrorLogCapture {
+ public:
+  ScopedErrorLogCapture() {
+#ifdef ANDROID
+    GetCapturedErrors().clear();
+    __android_log_set_logger([](const struct __android_log_message* msg) {
+      if (msg != nullptr && msg->priority >= ANDROID_LOG_ERROR &&
+          msg->message != nullptr) {
+        std::lock_guard<std::mutex> lock(GetMutex());
+        GetCapturedErrors() += msg->message;
+        GetCapturedErrors() += "\n";
+      }
+    });
+#else
+    testing::internal::CaptureStderr();
+#endif
+  }
+
+  ~ScopedErrorLogCapture() {
+    if (!active_) {
+      return;
+    }
+    active_ = false;
+#ifdef ANDROID
+#ifdef __ANDROID__
+    __android_log_set_logger(__android_log_logd_logger);
+#else
+    __android_log_set_logger(__android_log_stderr_logger);
+#endif
+#else
+    (void)testing::internal::GetCapturedStderr();
+#endif
+  }
+
+  ScopedErrorLogCapture(const ScopedErrorLogCapture&) = delete;
+  ScopedErrorLogCapture& operator=(const ScopedErrorLogCapture&) = delete;
+  ScopedErrorLogCapture(ScopedErrorLogCapture&&) = delete;
+  ScopedErrorLogCapture& operator=(ScopedErrorLogCapture&&) = delete;
+
+  std::string StopAndGetErrors() {
+    if (!active_) {
+      return {};
+    }
+    active_ = false;
+#ifdef ANDROID
+#ifdef __ANDROID__
+    __android_log_set_logger(__android_log_logd_logger);
+#else
+    __android_log_set_logger(__android_log_stderr_logger);
+#endif
+    std::lock_guard<std::mutex> lock(GetMutex());
+    std::string result = GetCapturedErrors();
+    GetCapturedErrors().clear();
+    return result;
+#else
+    return testing::internal::GetCapturedStderr();
+#endif
+  }
+
+ private:
+#ifdef ANDROID
+  static std::mutex& GetMutex() {
+    static auto* m = new std::mutex();
+    return *m;
+  }
+  static std::string& GetCapturedErrors() {
+    static auto* s = new std::string();
+    return *s;
+  }
+#endif
+  bool active_ = true;
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest,
+       TransientConnectorVanishSuppressesErrorLogsWhileRealIoErrorLogsError) {
+  constexpr uint32_t kVanishedMstConnId = 310;
+  constexpr uint32_t kMidInitVanishedMstConnId = 311;
+  constexpr uint32_t kFaultyConnId = 312;
+  constexpr uint32_t kPostCrtcIdVanishedMstConnId = 313;
+
+  // 1. CreateInstance on a connector that vanished (-ENOENT) before
+  // drmModeGetConnector() must return nullptr without emitting ALOGE.
+  fake_device->SetGetConnectorFailureErrno(kVanishedMstConnId, ENOENT);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device, kVanishedMstConnId,
+                                             0);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_EQ(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected no ALOGE on transient -ENOENT connector vanish, got: "
+        << errors;
+  }
+
+  // 2. CreateInstance on a connector that existed during drmModeGetConnector()
+  // but vanished (-ENODEV) before drmModeObjectGetProperties() in Init() (both
+  // before required DPMS/CRTC_ID and during optional property discovery after
+  // DPMS/CRTC_ID succeed) must return nullptr without emitting ALOGE.
+  fake_device
+      ->SetFakeRawConnectorForGetConnector(kMidInitVanishedMstConnId,
+                                           /*encoder_id=*/kFirstEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  fake_device->SetGetObjectPropertiesFailureErrno(kMidInitVanishedMstConnId,
+                                                  ENODEV);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device,
+                                             kMidInitVanishedMstConnId, 1);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_TRUE(errors.empty())
+        << "Expected zero ALOGE logs when connector vanishes mid-Init(), got: "
+        << errors;
+  }
+
+  fake_device
+      ->SetFakeRawConnectorForGetConnector(kPostCrtcIdVanishedMstConnId,
+                                           /*encoder_id=*/kFirstEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  fake_device->RegisterFakeObjectProperty(kPostCrtcIdVanishedMstConnId, "DPMS",
+                                          1);
+  fake_device->RegisterFakeObjectProperty(kPostCrtcIdVanishedMstConnId,
+                                          "CRTC_ID", 2);
+  fake_device->SetGetObjectPropertiesFailureErrno(kPostCrtcIdVanishedMstConnId,
+                                                  ENODEV);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device,
+                                             kPostCrtcIdVanishedMstConnId, 1);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_TRUE(errors.empty())
+        << "Expected zero ALOGE logs when connector vanishes during optional "
+           "property discovery in Init(), got: "
+        << errors;
+  }
+
+  // 3. UpdateModesAndProperties() on an existing MST connector that vanished
+  // (-ENOENT) must mark the connector deleted and disconnected without ALOGE.
+  auto* existing_mst = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(existing_mst, nullptr);
+  fake_device->SetGetConnectorFailureErrno(existing_mst->GetId(), ENOENT);
+  {
+    ScopedErrorLogCapture capture;
+    const int ret = existing_mst->CallBaseUpdateModesAndProperties();
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(ret, -ENODEV);
+    EXPECT_TRUE(existing_mst->IsDeleted());
+    EXPECT_EQ(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected no ALOGE on transient -ENOENT UpdateModesAndProperties(), "
+           "got: "
+        << errors;
+  }
+
+  // 4. Genuine hardware/driver I/O error (-EIO) MUST still emit ALOGE.
+  fake_device->SetGetConnectorFailureErrno(kFaultyConnId, EIO);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device, kFaultyConnId, 2);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_NE(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected ALOGE on genuine -EIO connector failure, got: " << errors;
+  }
 }
 
 }  // namespace android::drm_hwcomposer
