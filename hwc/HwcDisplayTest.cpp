@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <xf86drmMode.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -38,6 +39,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "backend/BackendDisplayCapabilities.h"
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/GenericLayerMapperCompositionPlanner.h"
@@ -51,6 +53,7 @@
 #include "drm/DrmHwc.h"
 #include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
+#include "drm/ResourceManager.h"
 #include "hwc/HwcBufferCache.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
@@ -159,6 +162,35 @@ HwcLayer::LayerProperties CreateFullScreenFhdLayerProperties(
   return props;
 }
 
+class FakeDisplayCapabilities : public BackendDisplayCapabilities {
+ public:
+  explicit FakeDisplayCapabilities(
+      std::optional<std::vector<ColorMode>> color_modes,
+      std::optional<std::vector<Hdr>> hdr_types = std::nullopt,
+      std::optional<bool> hw_ctm_override = std::nullopt)
+      : color_modes_(std::move(color_modes)),
+        hdr_types_(std::move(hdr_types)),
+        hw_ctm_override_(hw_ctm_override) {
+  }
+
+  std::optional<std::vector<ColorMode>> GetColorModeOverrides() const override {
+    return color_modes_;
+  }
+
+  std::optional<std::vector<Hdr>> GetHdrTypesOverride() const override {
+    return hdr_types_;
+  }
+
+  std::optional<bool> GetHardwareColorTransformOverride() const override {
+    return hw_ctm_override_;
+  }
+
+ private:
+  std::optional<std::vector<ColorMode>> color_modes_;
+  std::optional<std::vector<Hdr>> hdr_types_;
+  std::optional<bool> hw_ctm_override_;
+};
+
 }  // namespace
 
 struct HwcDisplayTest : public ::testing::Test {
@@ -217,6 +249,10 @@ struct HwcDisplayTest : public ::testing::Test {
     fake_device->AddPipelineResourcesWithModes(modes, is_external);
     return fake_device->GetBackend().CreatePipeline(
         *fake_device->GetConnectors().back());
+  }
+
+  void ReloadProperties() {
+    hwc.GetResMan().ReloadProperties();
   }
 
   ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
@@ -1668,6 +1704,57 @@ TEST_F(HwcDisplayTest,
   ASSERT_NE(modeset_args.composition, nullptr);
   ASSERT_EQ(modeset_args.composition->plan.size(), 1U);
   EXPECT_EQ(modeset_args.composition->plan[0].layer.fb, device_fb);
+}
+
+TEST_F(HwcDisplayTest,
+       GetColorModesReturnsExpectedModesAcrossCapabilitiesAndForcedColorMode) {
+  // 1. Headless display returns {kNative}.
+  HwcDisplay headless_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  headless_display.SetPipeline(nullptr);
+  EXPECT_EQ(headless_display.GetColorModes(),
+            std::vector<ColorMode>{ColorMode::kNative});
+
+  // 2. Backend capability override returns overridden ColorModes and standard
+  // + vendor boosted render intents.
+  auto cap_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(cap_pipeline, nullptr);
+  const std::vector<ColorMode> k_override_modes = {ColorMode::kNative,
+                                                   ColorMode::kSrgb,
+                                                   ColorMode::kDisplayP3};
+  cap_pipeline->capabilities = std::make_unique<FakeDisplayCapabilities>(
+      k_override_modes);
+  HwcDisplay cap_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  cap_display.SetPipeline(cap_pipeline);
+  EXPECT_EQ(cap_display.GetColorModes(), k_override_modes);
+
+  const auto intents = cap_display.GetRenderIntents(ColorMode::kSrgb);
+  constexpr size_t kExpectedIntentsCount = 3U;
+  EXPECT_EQ(intents.size(), kExpectedIntentsCount);
+  EXPECT_NE(std::find(intents.begin(), intents.end(),
+                      kVendorBoostedRenderIntent),
+            intents.end());
+
+  // 3. Internal display with forced_color_mode_ (DisplayP3 = 9) and color
+  // pipeline enabled returns {kNative, kSrgb, kDisplayP3}.
+  ScopedTestProperty use_cp_prop("vendor.hwc.drm.enable_color_pipeline", "1");
+  ScopedTestProperty force_cm_prop("vendor.hwc.drm.force_color_mode", "9");
+  ReloadProperties();
+
+  auto forced_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(forced_pipeline, nullptr);
+  HwcDisplay forced_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  forced_display.SetPipeline(forced_pipeline);
+
+  const std::vector<ColorMode> expected_forced_modes = {ColorMode::kNative,
+                                                        ColorMode::kSrgb,
+                                                        ColorMode::kDisplayP3};
+  EXPECT_EQ(forced_display.GetColorModes(), expected_forced_modes);
 }
 
 TEST_F(HwcDisplayTest,
