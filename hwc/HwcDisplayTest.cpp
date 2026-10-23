@@ -2426,6 +2426,42 @@ TEST_F(HwcDisplayTest,
                   0.0F);
 }
 
+TEST_F(
+    HwcDisplayTest,
+    SetPowerModeOnWhenAlreadyActiveIsNoOpAndAfterOffExecutesSingleModesetCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  const size_t imports_before = fake_device->GetFakeFbImporter()
+                                    ->GetImportCount();
+
+  // 1. Calling SetPowerMode(kOn) when already active returns early without
+  // executing a modeset or empty atomic commit.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_EQ(fake_device->GetFakeFbImporter()->GetImportCount(), imports_before);
+
+  // 2. Power off the display, then re-enable via SetPowerMode(kOn).
+  // SetPowerMode(kOn) executes SetConfig() once and returns early without
+  // issuing a redundant second empty atomic commit.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  sink->ClearHistory();
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+}
+
 TEST_F(HwcDisplayTest,
        RefreshConfigsFromConnectorDefersModesetUntilClientRequestsSetConfig) {
   auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
