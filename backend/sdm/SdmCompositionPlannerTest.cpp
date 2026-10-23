@@ -332,5 +332,83 @@ TEST_F(SdmCompositionPlannerTest,
             0);
 }
 
+TEST_F(SdmCompositionPlannerTest,
+       ValidateSkipsEmptyChangedTypesAndDisplayRequestBufferQueries) {
+  const IRect full_frame{0, 0, kTestLayerWidth, kTestLayerHeight};
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&display, full_frame, 1,
+                                                     CompositionType::kDevice);
+  std::vector<const HwcLayer*> layers = {&layer1, &layer2};
+  ON_CALL(display, GetOrderLayersByZPos()).WillByDefault(Return(layers));
+
+  EXPECT_CALL(draw_cycle_intf,
+              GetChangedCompositionTypes(kTestSdmDisplayId, NotNull(), nullptr,
+                                         nullptr))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(0U), Return(sdm::kErrorNone)));
+  EXPECT_CALL(draw_cycle_intf, GetDisplayRequests(kTestSdmDisplayId, NotNull(),
+                                                  NotNull(), nullptr, nullptr))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(0), SetArgPointee<2>(0U),
+                      Return(sdm::kErrorNone)));
+
+  auto result = planner->ValidateDisplay(&display);
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNone);
+  EXPECT_TRUE(result.composition.punch_out_layers.empty());
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateHandlesPartialCompositionTypeChangesAndDisplayRequests) {
+  const IRect full_frame{0, 0, kTestLayerWidth, kTestLayerHeight};
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&display, full_frame, 1,
+                                                     CompositionType::kDevice);
+  std::vector<const HwcLayer*> layers = {&layer1, &layer2};
+  ON_CALL(display, GetOrderLayersByZPos()).WillByDefault(Return(layers));
+
+  // Only 1 of the 2 layers changes composition type to kClient, and only 1 of
+  // the 2 layers requests ClearClientTarget punch-out.
+  EXPECT_CALL(draw_cycle_intf,
+              GetChangedCompositionTypes(kTestSdmDisplayId, NotNull(), nullptr,
+                                         nullptr))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(1U), Return(sdm::kErrorNone)));
+  EXPECT_CALL(draw_cycle_intf,
+              GetChangedCompositionTypes(kTestSdmDisplayId, NotNull(),
+                                         NotNull(), NotNull()))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(1U), SetArgPointee<2>(kSecondSdmLayerId),
+                      SetArgPointee<3>(kSdmCompositionClient),
+                      Return(sdm::kErrorNone)));
+
+  constexpr auto kClearClientTargetMask = static_cast<int32_t>(
+      sdm::SDMLayerRequest::ClearClientTarget);
+  EXPECT_CALL(draw_cycle_intf, GetDisplayRequests(kTestSdmDisplayId, NotNull(),
+                                                  NotNull(), nullptr, nullptr))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(0), SetArgPointee<2>(1U),
+                      Return(sdm::kErrorNone)));
+  EXPECT_CALL(draw_cycle_intf,
+              GetDisplayRequests(kTestSdmDisplayId, NotNull(), NotNull(),
+                                 NotNull(), NotNull()))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(0), SetArgPointee<2>(1U),
+                      SetArgPointee<3>(kFirstSdmLayerId),
+                      SetArgPointee<4>(kClearClientTargetMask),
+                      Return(sdm::kErrorNone)));
+
+  auto result = planner->ValidateDisplay(&display);
+  ASSERT_EQ(result.composition.composition_types.size(), 2U);
+  EXPECT_EQ(result.composition.composition_types[&layer1],
+            CompositionType::kDevice);
+  EXPECT_EQ(result.composition.composition_types[&layer2],
+            CompositionType::kClient);
+  ASSERT_EQ(result.composition.punch_out_layers.size(), 1U);
+  EXPECT_EQ(result.composition.punch_out_layers[0], &layer1);
+}
+
 }  // namespace
 }  // namespace android::drm_hwcomposer
