@@ -276,14 +276,19 @@ TEST(ColorUtilTest, HasOffsetDetection) {
   HalColorTransformMatrix offset_r = kIdentityMatrix;
   offset_r[12] = 0.05F;
   EXPECT_TRUE(ColorUtil::HasOffset(offset_r));
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(offset_r, ColorMode::kSrgb)[12],
+                  0.05F);
 
   HalColorTransformMatrix offset_g = kIdentityMatrix;
   offset_g[13] = -0.05F;
   EXPECT_TRUE(ColorUtil::HasOffset(offset_g));
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(offset_g, ColorMode::kSrgb)[13],
+                  -0.05F);
 
   HalColorTransformMatrix offset_b = kIdentityMatrix;
   offset_b[14] = 0.1F;
   EXPECT_TRUE(ColorUtil::HasOffset(offset_b));
+  EXPECT_FLOAT_EQ(ColorUtil::ToLinearCtm(offset_b, ColorMode::kSrgb)[14], 0.1F);
 
   // Sub-epsilon offset (< std::numeric_limits<float>::epsilon()) is ignored as
   // noise

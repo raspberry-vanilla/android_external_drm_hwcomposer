@@ -87,9 +87,11 @@ constexpr int kVsyncObservationWindowMs = 50;
 constexpr size_t kCtmRScaleIdx = 0;
 constexpr size_t kCtmGScaleIdx = 5;
 constexpr size_t kCtmBScaleIdx = 10;
+constexpr size_t kCtmBOffsetIdx = 14;
 constexpr float kCtmRScale = 0.8F;
 constexpr float kCtmGScale = 0.9F;
 constexpr float kCtmBScale = 0.7F;
+constexpr float kCtmBOffset = 0.25F;
 constexpr float kFloatTolerance = 1e-5F;
 constexpr uint32_t kColorPipelinePrimaryPlaneId = 980;
 
@@ -1831,6 +1833,77 @@ TEST_F(
     EXPECT_NEAR((*commit_args.color_matrix)[i], (*expected_combined)[i],
                 kFloatTolerance);
   }
+}
+
+TEST_F(HwcDisplayTest,
+       CtmWithOffsetFallsBackToGpuAndPreservesRenderIntentMatrixInDrm) {
+  ScopedTestProperty ctm_prop("vendor.hwc.drm.ctm", "DRM_OR_GPU");
+  ScopedTestProperty offset_prop("vendor.hwc.drm.force_ctm_handles_offset",
+                                 "0");
+  ReloadProperties();
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_FALSE(display.HasHardwareColorTransform());
+
+  // Set a CTM with an offset exclusively in the blue translation channel
+  // (index 14) and zero Z-scale (index 10) so checking index 10 instead of
+  // index 14 fails to detect the offset.
+  HalColorTransformMatrix blue_offset_ctm = kIdentityMatrix;
+  blue_offset_ctm[kCtmBScaleIdx] = 0.0F;
+  blue_offset_ctm[kCtmBOffsetIdx] = kCtmBOffset;
+  display.SetColorMode(ColorMode::kSrgb, kVendorBoostedRenderIntent);
+  display.SetColorTransformMatrix(blue_offset_ctm);
+  EXPECT_TRUE(display.CtmByGpu());
+
+  // Populate client_layer_ and a single DEVICE layer; because CtmByGpu() is
+  // true and client_ctm_has_offset_ is true without hardware CTM_OFFSET,
+  // CreateFrameUpdateCommit must pass render_intent_matrix_ (boosted CTM)
+  // rather than the client offset matrix to KMS.
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  display.get_layer(kLayerId)->SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId + 1)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  auto validate_res = display.ValidateStagedComposition();
+  ASSERT_EQ(validate_res.changed_layers.size(), 1U);
+  EXPECT_EQ(validate_res.changed_layers[0].second, CompositionType::kClient);
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& commit_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(commit_args.color_matrix, GetBoostedCTMPtr());
+
+  // Under DRM_OR_IGNORE, CtmByGpu() is false, so CreateFrameUpdateCommit relies
+  // directly on client_ctm_has_offset_ (ColorUtil::HasOffset) to strip the
+  // offset matrix and commit render_intent_matrix_ (GetBoostedCTMPtr).
+  ScopedTestProperty ignore_prop("vendor.hwc.drm.ctm", "DRM_OR_IGNORE");
+  ReloadProperties();
+  EXPECT_FALSE(display.CtmByGpu());
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().color_matrix,
+            GetBoostedCTMPtr());
 }
 
 TEST_F(HwcDisplayTest,
