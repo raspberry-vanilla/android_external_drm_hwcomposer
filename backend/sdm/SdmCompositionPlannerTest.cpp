@@ -35,6 +35,7 @@
 
 #include "compositor/CompositionPlanner.h"
 #include "compositor/CompositorTestUtils.h"
+#include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"  // IWYU pragma: keep
 #include "hwc/HwcLayer.h"
@@ -49,6 +50,7 @@ using ::testing::NiceMock;
 using ::testing::NotNull;
 using ::testing::Return;
 using ::testing::ReturnRef;
+using ::testing::SaveArg;
 using ::testing::SetArgPointee;
 
 constexpr uint64_t kTestSdmDisplayId = 52;
@@ -60,6 +62,14 @@ constexpr int32_t kTestLayerWidth = 1920;
 constexpr int32_t kTestLayerHeight = 1080;
 constexpr int32_t kSdmCompositionClient = 1;
 constexpr int32_t kSdmCompositionDevice = 2;
+constexpr float kSolidRed = 0.5F;
+constexpr float kSolidGreen = 0.25F;
+constexpr float kSolidBlue = 0.75F;
+constexpr float kSolidAlpha = 1.0F;
+constexpr uint8_t kExpectedRed = 128U;
+constexpr uint8_t kExpectedGreen = 64U;
+constexpr uint8_t kExpectedBlue = 191U;
+constexpr uint8_t kExpectedAlpha = 255U;
 
 class MockSdmLayerBuilderIntf : public sdm::SDMDisplayLayerBuilderIntf {
  public:
@@ -408,6 +418,65 @@ TEST_F(SdmCompositionPlannerTest,
             CompositionType::kClient);
   ASSERT_EQ(result.composition.punch_out_layers.size(), 1U);
   EXPECT_EQ(result.composition.punch_out_layers[0], &layer1);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       SolidColorLayerRoundsFloatChannelsAndForcesClientComposition) {
+  const IRect full_frame{0, 0, kTestLayerWidth, kTestLayerHeight};
+  HwcLayer
+      wallpaper = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                   CompositionType::kDevice);
+  HwcLayer solid_layer(nullptr);
+  HwcLayer::LayerProperties props{};
+  props.composition_type = CompositionType::kSolidColor;
+  props.solid_color = SolidColor{
+      .r = kSolidRed,
+      .g = kSolidGreen,
+      .b = kSolidBlue,
+      .a = kSolidAlpha,
+  };
+  solid_layer.SetLayerProperties(props);
+  ON_CALL(display, GetOrderLayersByZPos())
+      .WillByDefault(
+          Return(std::vector<const HwcLayer*>{&wallpaper, &solid_layer}));
+
+  sdm::SDMColor captured_color{};
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kFirstSdmLayerId,
+                                      kSdmCompositionDevice))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerColor(kTestSdmDisplayId, kSecondSdmLayerId, _))
+      .Times(1)
+      .WillOnce(DoAll(SaveArg<2>(&captured_color), Return(sdm::kErrorNone)));
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kSecondSdmLayerId,
+                                      kSdmCompositionClient))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  auto validation = planner->ValidateDisplay(&display);
+
+  // Verify float [0, 1] channels were scaled by 255.0F and rounded to nearest
+  // integer (0.5 -> 127.5 -> 128, 0.25 -> 63.75 -> 64, 0.75 -> 191.25 -> 191).
+  EXPECT_EQ(captured_color.r, kExpectedRed);
+  EXPECT_EQ(captured_color.g, kExpectedGreen);
+  EXPECT_EQ(captured_color.b, kExpectedBlue);
+  EXPECT_EQ(captured_color.a, kExpectedAlpha);
+
+  // Verify only the solid-color layer is forced to kClient while the sibling
+  // device layer remains kDevice (ruling out whole-display flattening).
+  EXPECT_EQ(validation.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNone);
+  ASSERT_EQ(validation.composition.composition_types.size(), 2U);
+  EXPECT_EQ(validation.composition.composition_types.at(&wallpaper),
+            CompositionType::kDevice);
+  EXPECT_EQ(validation.composition.composition_types.at(&solid_layer),
+            CompositionType::kClient);
+  ASSERT_NE(validation.composition.composition_plan, nullptr);
+  EXPECT_EQ(validation.composition.composition_plan->plan.size(), 2U);
+  EXPECT_EQ(validation.composition.composition_plan->client_z_order, 1);
 }
 
 }  // namespace
