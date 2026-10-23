@@ -214,6 +214,11 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().StartUEventListener(std::move(uevent));
   }
 
+  bool InvokeHandleUEventHotplugForTest(
+      const UEventListener::HotplugEvent& event) {
+    return hwc.GetResMan().HandleUEventHotplug(event);
+  }
+
   void DeInitResManForTest() {
     hwc.GetResMan().DeInit();
   }
@@ -1680,6 +1685,152 @@ TEST_F(DrmHwcTest,
   EXPECT_EQ(refresh_calls.load(), 2U)
       << "Expected initial sweep + one 200ms settle retry for unsettled "
          "0-mode connector";
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugProbesConnectorsOutsideMainLockAndScopesByUeventConnectorId) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto* internal_conn = shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(internal_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetConnected(false);
+  shared_dev->SetResourceConnectorIds(
+      {internal_conn->GetId(), ext_conn->GetId()});
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+  StartUEventListenerForTest(std::move(uevent));
+
+  auto is_main_lock_free_from_other_thread = [this]() {
+    bool unlocked = false;
+    std::thread probe_thread([this, &unlocked]() {
+      if (hwc.GetResMan().GetMainLock().try_lock()) {
+        hwc.GetResMan().GetMainLock().unlock();
+        unlocked = true;
+      }
+    });
+    probe_thread.join();
+    return unlocked;
+  };
+
+  std::atomic<bool> resources_probed_unlocked{false};
+  std::atomic<bool> modes_probed_unlocked{false};
+  shared_dev_ptr->SetGetResourcesHook([&]() {
+    resources_probed_unlocked.store(is_main_lock_free_from_other_thread());
+  });
+  ext_conn->SetUpdateModesHook([&]() {
+    modes_probed_unlocked.store(is_main_lock_free_from_other_thread());
+  });
+
+  internal_conn->ResetUpdateModesCallCount();
+  ext_conn->ResetUpdateModesCallCount();
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+
+  constexpr int kDeliveryWaitMs = 80;
+  const std::string scoped_hotplug = MakeUEventPacket(
+      {"change@/devices/drm/card0", "DEVTYPE=drm_minor", "HOTPLUG=1",
+       "CONNECTOR=" + std::to_string(ext_conn->GetId())});
+
+  ASSERT_EQ(write(*write_fd, scoped_hotplug.data(), scoped_hotplug.size()),
+            static_cast<ssize_t>(scoped_hotplug.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+
+  shared_dev_ptr->SetGetResourcesHook(nullptr);
+  ext_conn->SetUpdateModesHook(nullptr);
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  EXPECT_TRUE(resources_probed_unlocked.load())
+      << "drmModeGetResources() was called while holding GetMainLock()";
+  EXPECT_TRUE(modes_probed_unlocked.load())
+      << "UpdateModesAndProperties() was called while holding GetMainLock()";
+  EXPECT_EQ(internal_conn->GetUpdateModesCallCount(), 0U)
+      << "Settled internal connector was re-probed despite CONNECTOR="
+      << ext_conn->GetId() << " scoping";
+  EXPECT_GE(ext_conn->GetUpdateModesCallCount(), 1U);
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, OffLockHotplugProbeDoesNotOverwriteFresherMainLockReprobe) {
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+
+  constexpr uint32_t kExtEncoderId = 81;
+  constexpr uint32_t kExtCrtcId = 82;
+  constexpr uint32_t kExtConnectorId = 83;
+  constexpr uint32_t kExtPlaneId = 183;
+
+  auto enc = std::make_unique<FakeDrmEncoder>(kExtEncoderId, kExtCrtcId);
+  enc->InitRawEncoder(kFakeAllCrtcsMask);
+  shared_dev->AddEncoder(std::move(enc));
+  shared_dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kExtCrtcId));
+  shared_dev->AddPlane(
+      std::make_unique<FakeDrmPlane>(*shared_dev, DRM_PLANE_TYPE_PRIMARY,
+                                     /*is_valid=*/true, kExtPlaneId));
+
+  shared_dev->RegisterFakeObjectProperty(kExtConnectorId, "DPMS", 1);
+  shared_dev->RegisterFakeObjectProperty(kExtConnectorId, "CRTC_ID", 2);
+  shared_dev
+      ->SetFakeRawConnectorForGetConnector(kExtConnectorId, kExtEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  auto real_conn = DrmConnector::CreateInstance(*shared_dev, kExtConnectorId,
+                                                /*index=*/0);
+  ASSERT_NE(real_conn, nullptr);
+  auto* real_conn_ptr = real_conn.get();
+  shared_dev->AddConnector(std::move(real_conn));
+  shared_dev->SetResourceConnectorIds({kExtConnectorId});
+
+  AddDeviceToResMan(std::move(shared_dev));
+
+  // Initially Phase 2 off-lock probe sees a vanished/disconnected connector
+  // (ENOENT), but while Phase 2 is in flight outside GetMainLock(), a
+  // synchronous caller under GetMainLock() (e.g. SetPowerMode(kOn)) re-probes
+  // the connector after it comes back online. Phase 3 must not overwrite that
+  // fresher state with the stale Phase-2 ENOENT result.
+  shared_dev_ptr->SetGetConnectorFailureErrno(kExtConnectorId, ENOENT);
+  std::atomic<bool> hook_ran{false};
+  shared_dev_ptr->SetGetConnectorHook([&](uint32_t id) {
+    if (id != kExtConnectorId || hook_ran.exchange(true)) {
+      return;
+    }
+    std::thread main_lock_prober([&]() {
+      std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+      shared_dev_ptr->SetGetConnectorFailureErrno(kExtConnectorId,
+                                                  std::nullopt);
+      EXPECT_EQ(real_conn_ptr->UpdateModesAndProperties(), 0);
+    });
+    main_lock_prober.join();
+  });
+
+  UEventListener::HotplugEvent event{};
+  event.connector_ids.insert(kExtConnectorId);
+  InvokeHandleUEventHotplugForTest(event);
+
+  shared_dev_ptr->SetGetConnectorHook(nullptr);
+  EXPECT_TRUE(hook_ran.load());
+  EXPECT_FALSE(real_conn_ptr->IsDeleted())
+      << "Stale Phase-2 off-lock probe overwrote fresher synchronous "
+         "UpdateModesAndProperties() state";
+  EXPECT_TRUE(real_conn_ptr->IsConnected());
 
   shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
   DeInitResManForTest();

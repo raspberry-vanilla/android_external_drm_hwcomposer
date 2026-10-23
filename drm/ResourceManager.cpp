@@ -241,7 +241,7 @@ void ResourceManager::Init() {
       auto hotplug_handler = [this, drm_ptr](uint32_t connector_id,
                                              bool connected) {
         {
-          std::scoped_lock lock(GetMainLock());
+          std::scoped_lock lock(hotplug_mutex_, GetMainLock());
           auto stale_connectors = drm_ptr->RefreshConnectors();
           DetachStalePipelines(stale_connectors);
           DrmConnector *conn = nullptr;
@@ -282,7 +282,7 @@ void ResourceManager::Init() {
     }
   } else {
     {
-      std::scoped_lock lock(GetMainLock());
+      std::scoped_lock lock(hotplug_mutex_, GetMainLock());
       StartUEventListener();
 
       for (auto &drm : drms_) {
@@ -336,39 +336,160 @@ void ResourceManager::StartUEventListener() {
 
 void ResourceManager::StartUEventListener(std::unique_ptr<UEvent> uevent) {
   uevent_listener_.reset();
-  uevent_listener_ = UEventListener::CreateInstance(
-      [this]() -> bool {
-        bool needs_settle_reprobe = false;
-        {
-          std::scoped_lock lock(GetMainLock());
-          for (auto &drm : drms_) {
-            bool refresh_error = false;
-            auto stale_connectors = drm->RefreshConnectors(&refresh_error);
-            needs_settle_reprobe = needs_settle_reprobe || refresh_error;
-            DetachStalePipelines(stale_connectors);
-          }
-          if (UpdateFrontendDisplays()) {
-            needs_settle_reprobe = true;
-          }
-        }
-        frontend_interface_->FlushHotplugEvents();
-        return needs_settle_reprobe;
+  uevent_listener_ = UEventListener::CreateWithScopedSettleHandler(
+      [this](const UEventListener::HotplugEvent &event) -> bool {
+        return HandleUEventHotplug(event);
       },
       std::move(uevent));
 }
 
-bool ResourceManager::UpdateFrontendDisplays() {
+bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
+  struct ConnectorProbeTarget {
+    DrmConnector *conn = nullptr;
+    uint32_t id = 0;
+    uint64_t generation = 0;
+  };
+  struct DeviceProbePlan {
+    DrmDevice *drm = nullptr;
+    DrmDevice::ConnectorSnapshot snapshot;
+    std::vector<ConnectorProbeTarget> connectors_to_probe;
+  };
+  struct ConnectorProbeEntry {
+    DrmConnector *conn = nullptr;
+    uint64_t generation = 0;
+    DrmConnector::ProbedState state;
+  };
+  struct DeviceProbeResult {
+    DrmDevice *drm = nullptr;
+    DrmDevice::ProbedConnectorResources probed_resources;
+    std::vector<ConnectorProbeEntry> probed_connectors;
+  };
+
+  bool needs_settle_reprobe = false;
+  {
+    std::scoped_lock hotplug_lock(hotplug_mutex_);
+
+    // Phase 1: Snapshot known connector IDs and select target connectors under
+    // GetMainLock() without performing any blocking DRM ioctls.
+    std::vector<DeviceProbePlan> plans;
+    {
+      std::scoped_lock main_lock(GetMainLock());
+      plans.reserve(drms_.size());
+      for (auto &drm : drms_) {
+        DeviceProbePlan plan{};
+        plan.drm = drm.get();
+        plan.snapshot = drm->SnapshotConnectorsUnderLock();
+        for (const auto &conn : drm->GetConnectors()) {
+          const bool is_unsettled = conn->IsDeleted() ||
+                                    conn->IsUnknownConnection() ||
+                                    (conn->IsConnected() &&
+                                     attached_pipelines_.count(conn.get()) ==
+                                         0);
+          const bool should_probe = event.refresh_all || is_unsettled ||
+                                    event.connector_ids.count(conn->GetId()) !=
+                                        0;
+          if (should_probe) {
+            plan.connectors_to_probe.push_back(ConnectorProbeTarget{
+                .conn = conn.get(),
+                .id = conn->GetId(),
+                .generation = conn->GetProbeGeneration(),
+            });
+          }
+        }
+        plans.emplace_back(std::move(plan));
+      }
+    }
+
+    // Phase 2: Execute DRM resource discovery and connector mode/property
+    // ioctls outside GetMainLock() so SurfaceFlinger commits are not blocked.
+    std::vector<DeviceProbeResult> results;
+    results.reserve(plans.size());
+    for (auto &plan : plans) {
+      DeviceProbeResult res{};
+      res.drm = plan.drm;
+      res.probed_resources = plan.drm->ProbeConnectorsOffLock(plan.snapshot);
+      for (const auto &target : plan.connectors_to_probe) {
+        if (res.probed_resources.has_resources &&
+            res.probed_resources.resource_ids.count(target.id) == 0) {
+          continue;
+        }
+        res.probed_connectors.push_back(ConnectorProbeEntry{
+            .conn = target.conn,
+            .generation = target.generation,
+            .state = target.conn->ProbeModesAndPropertiesOffLock(),
+        });
+      }
+      results.emplace_back(std::move(res));
+    }
+
+    // Phase 3: Atomically swap probed connector states, detach stale/unplugged
+    // pipelines, and bind newly connected pipelines under GetMainLock().
+    {
+      std::scoped_lock main_lock(GetMainLock());
+      std::set<DrmConnector *> probed_connector_set;
+      std::set<DrmConnector *> cp_updated_set;
+      for (auto &res : results) {
+        if (res.probed_resources.had_probe_error) {
+          needs_settle_reprobe = true;
+        }
+        for (auto &entry : res.probed_connectors) {
+          if (entry.conn->GetProbeGeneration() != entry.generation) {
+            if (entry.conn->IsDeleted()) {
+              needs_settle_reprobe = true;
+            } else {
+              probed_connector_set.insert(entry.conn);
+              if (entry.conn->GetContentProtectionProperty().GetId() != 0) {
+                cp_updated_set.insert(entry.conn);
+              }
+            }
+            continue;
+          }
+          const bool cp_updated = entry.state.content_protection_updated;
+          const int apply_ret = entry.conn->ApplyProbedState(
+              std::move(entry.state));
+          if (apply_ret != 0 || entry.conn->IsDeleted()) {
+            needs_settle_reprobe = true;
+          } else {
+            probed_connector_set.insert(entry.conn);
+            if (cp_updated) {
+              cp_updated_set.insert(entry.conn);
+            }
+          }
+        }
+        std::vector<DrmConnector *> added_connectors;
+        auto stale_connectors = res.drm->ApplyProbedConnectorsUnderLock(
+            std::move(res.probed_resources), &added_connectors);
+        for (auto *added : added_connectors) {
+          probed_connector_set.insert(added);
+        }
+        DetachStalePipelines(stale_connectors);
+      }
+      if (UpdateFrontendDisplays(/*update_modes=*/false, &probed_connector_set,
+                                 &cp_updated_set)) {
+        needs_settle_reprobe = true;
+      }
+    }
+  }
+  frontend_interface_->FlushHotplugEvents();
+  return needs_settle_reprobe;
+}
+
+bool ResourceManager::UpdateFrontendDisplays(
+    bool update_modes, const std::set<DrmConnector *> *scoped_status_connectors,
+    const std::set<DrmConnector *> *content_protection_updated_connectors) {
   auto ordered_connectors = GetOrderedConnectors();
   bool needs_settle_reprobe = false;
 
-  // Pass 1: Update modes and properties on all connectors and detach any
-  // disconnected connectors first so their shared CRTCs, encoders, and planes
-  // are released before Pass 2 allocates pipelines for newly connected ones.
+  // Pass 1: Update modes and properties on all connectors (when requested) and
+  // detach any disconnected connectors first so their shared CRTCs, encoders,
+  // and planes are released before Pass 2 allocates pipelines for newly
+  // connected ones.
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
       continue;
     }
-    if (conn->UpdateModesAndProperties() != 0 || conn->IsDeleted()) {
+    if (update_modes &&
+        (conn->UpdateModesAndProperties() != 0 || conn->IsDeleted())) {
       needs_settle_reprobe = true;
     }
     if (!conn->IsConnected()) {
@@ -382,12 +503,21 @@ bool ResourceManager::UpdateFrontendDisplays() {
   }
 
   // Pass 2: Attach pipelines for newly connected connectors using the
-  // connector state already probed in Pass 1.
+  // connector state already probed in Pass 1 (or off-lock).
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
       continue;
     }
-    ProcessHotplugForConnector(conn, /*update_modes=*/false);
+    const bool refresh_status_props = (scoped_status_connectors == nullptr);
+    const bool check_status_props = refresh_status_props ||
+                                    scoped_status_connectors->count(conn) != 0;
+    const bool cp_was_updated = content_protection_updated_connectors !=
+                                    nullptr &&
+                                content_protection_updated_connectors->count(
+                                    conn) != 0;
+    ProcessHotplugForConnector(conn, /*update_modes=*/false,
+                               refresh_status_props, check_status_props,
+                               cp_was_updated);
     if (conn->IsUnknownConnection() ||
         (conn->IsConnected() && attached_pipelines_.count(conn) == 0)) {
       needs_settle_reprobe = true;
@@ -398,7 +528,10 @@ bool ResourceManager::UpdateFrontendDisplays() {
 }
 
 void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
-                                                 bool update_modes) {
+                                                 bool update_modes,
+                                                 bool refresh_status_props,
+                                                 bool check_status_props,
+                                                 bool cp_was_updated) {
   if (conn == nullptr) {
     return;
   }
@@ -415,12 +548,17 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
           conn->GetName().c_str());
 
     if (connected) {
-      if (conn->GetModes().empty() && !conn->IsLinkStatusGood()) {
-        if (!conn->HasReportedIncompatibleCable()) {
-          conn->SetReportedIncompatibleCable(true);
-          frontend_interface_->NotifyIncompatibleCable();
+      if (conn->GetModes().empty()) {
+        const bool link_good = refresh_status_props
+                                   ? conn->IsLinkStatusGood()
+                                   : conn->IsCachedLinkStatusGood();
+        if (!link_good) {
+          if (!conn->HasReportedIncompatibleCable()) {
+            conn->SetReportedIncompatibleCable(true);
+            frontend_interface_->NotifyIncompatibleCable();
+          }
+          return;
         }
-        return;
       }
       std::shared_ptr<DrmDisplayPipeline>
           pipeline = conn->GetDev().GetBackend().CreatePipeline(*conn);
@@ -445,10 +583,13 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
       frontend_interface_->UnbindDisplay(it->second);
       attached_pipelines_.erase(it);
     }
-  } else if (connected) {
+  } else if (connected && check_status_props) {
     auto attached_it = attached_pipelines_.find(conn);
     if (attached_it != attached_pipelines_.end()) {
-      if (!conn->IsLinkStatusGood()) {
+      const bool link_good = refresh_status_props
+                                 ? conn->IsLinkStatusGood()
+                                 : conn->IsCachedLinkStatusGood();
+      if (!link_good) {
         if (conn->GetModes().empty()) {
           if (!conn->HasReportedIncompatibleCable()) {
             conn->SetReportedIncompatibleCable(true);
@@ -463,8 +604,10 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
 
       // If content protection is not enabled anymore, inform frontend so it
       // can terminate HDCP handling for this display.
-      if (conn->UpdateContentProtection() &&
-          !conn->IsContentProtectionEnabled()) {
+      const bool cp_present = refresh_status_props
+                                  ? conn->UpdateContentProtection()
+                                  : cp_was_updated;
+      if (cp_present && !conn->IsContentProtectionEnabled()) {
         frontend_interface_->NotifyHdcpTermination(attached_it->second);
       }
     }
@@ -633,16 +776,17 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
     // Brief pause for the link to fully go down before reprobing.
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    lock.lock();
+    {
+      std::scoped_lock reprobe_lock(hotplug_mutex_, GetMainLock());
 
-    // Re-probe: kernel re-reads DPCD/EDID since link was torn down.
-    // If scaler now serves real 4K EDID, display re-attaches at full res.
-    for (auto &drm : drms_) {
-      auto stale = drm->RefreshConnectors();
-      DetachStalePipelines(stale);
+      // Re-probe: kernel re-reads DPCD/EDID since link was torn down.
+      // If scaler now serves real 4K EDID, display re-attaches at full res.
+      for (auto &drm : drms_) {
+        auto stale = drm->RefreshConnectors();
+        DetachStalePipelines(stale);
+      }
+      UpdateFrontendDisplays();
     }
-    UpdateFrontendDisplays();
-    lock.unlock();
 
     frontend_interface_->FlushHotplugEvents();
     {

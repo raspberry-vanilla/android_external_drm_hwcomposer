@@ -25,6 +25,8 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -35,6 +37,7 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "drm/DrmColorspace.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmEncoder.h"
 #include "drm/DrmMode.h"
@@ -118,49 +121,45 @@ DrmConnector::~DrmConnector() = default;
 
 DrmConnector::DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
                            uint32_t index)
-    : connector_(std::move(connector)), drm_(drm), index_in_res_array_(index) {
+    : connector_(std::move(connector)),
+      drm_(drm),
+      connector_id_(connector_ != nullptr ? connector_->connector_id : 0),
+      index_in_res_array_(index) {
+}
+
+void DrmConnector::PopulateColorspaceEnumMap(
+    DrmProperty &colorspace_prop, std::map<DrmColorspace, uint64_t> &enum_map) {
+  enum_map.clear();
+  colorspace_prop.AddEnumToMap("Default", DrmColorspace::kDefault, enum_map);
+  colorspace_prop.AddEnumToMap("SMPTE_170M_YCC", DrmColorspace::kSmpte170MYcc,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("BT709_YCC", DrmColorspace::kBt709Ycc, enum_map);
+  colorspace_prop.AddEnumToMap("XVYCC_601", DrmColorspace::kXvycc601, enum_map);
+  colorspace_prop.AddEnumToMap("XVYCC_709", DrmColorspace::kXvycc709, enum_map);
+  colorspace_prop.AddEnumToMap("SYCC_601", DrmColorspace::kSycc601, enum_map);
+  colorspace_prop.AddEnumToMap("opYCC_601", DrmColorspace::kOpycc601, enum_map);
+  colorspace_prop.AddEnumToMap("opRGB", DrmColorspace::kOprgb, enum_map);
+  colorspace_prop.AddEnumToMap("BT2020_CYCC", DrmColorspace::kBt2020Cycc,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("BT2020_RGB", DrmColorspace::kBt2020Rgb,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("BT2020_YCC", DrmColorspace::kBt2020Ycc,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("DCI-P3_RGB_D65", DrmColorspace::kDciP3RgbD65,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("DCI-P3_RGB_Theater",
+                               DrmColorspace::kDciP3RgbTheater, enum_map);
+  colorspace_prop.AddEnumToMap("RGB_WIDE_FIXED", DrmColorspace::kRgbWideFixed,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("RGB_WIDE_FLOAT", DrmColorspace::kRgbWideFloat,
+                               enum_map);
+  colorspace_prop.AddEnumToMap("BT601_YCC", DrmColorspace::kBt601Ycc, enum_map);
 }
 
 auto DrmConnector::UpdateColorspaceProperty() -> void {
   colorspace_enum_map_.clear();
   if (GetOptionalConnectorProperty("Colorspace", &colorspace_property_)) {
-    colorspace_property_.AddEnumToMap("Default", DrmColorspace::kDefault,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("SMPTE_170M_YCC",
-                                      DrmColorspace::kSmpte170MYcc,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT709_YCC", DrmColorspace::kBt709Ycc,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("XVYCC_601", DrmColorspace::kXvycc601,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("XVYCC_709", DrmColorspace::kXvycc709,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("SYCC_601", DrmColorspace::kSycc601,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("opYCC_601", DrmColorspace::kOpycc601,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("opRGB", DrmColorspace::kOprgb,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_CYCC", DrmColorspace::kBt2020Cycc,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_RGB", DrmColorspace::kBt2020Rgb,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT2020_YCC", DrmColorspace::kBt2020Ycc,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("DCI-P3_RGB_D65",
-                                      DrmColorspace::kDciP3RgbD65,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("DCI-P3_RGB_Theater",
-                                      DrmColorspace::kDciP3RgbTheater,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("RGB_WIDE_FIXED",
-                                      DrmColorspace::kRgbWideFixed,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("RGB_WIDE_FLOAT",
-                                      DrmColorspace::kRgbWideFloat,
-                                      colorspace_enum_map_);
-    colorspace_property_.AddEnumToMap("BT601_YCC", DrmColorspace::kBt601Ycc,
-                                      colorspace_enum_map_);
+    PopulateColorspaceEnumMap(colorspace_property_, colorspace_enum_map_);
   }
 }
 
@@ -329,65 +328,146 @@ std::string DrmConnector::GetName() const {
   return "None";
 }
 
-int DrmConnector::UpdateModesAndProperties() {
-  auto conn = drm_->GetConnector(GetId());
+auto DrmConnector::ProbeModesAndPropertiesOffLock() -> ProbedState {
+  ProbedState probed{};
+  const uint32_t id = GetId();
+  auto conn = drm_->GetConnector(id);
   if (!conn) {
     const int err = errno;
     if (err == ENOENT || err == ENODEV) {
-      ALOGI("Connector %u vanished during probe (%s)", GetId(),
+      ALOGI("Connector %u vanished during probe (%s)", id,
             std::generic_category().message(err).c_str());
     } else {
-      ALOGE("Failed to get connector %d (%s)", GetId(),
+      ALOGE("Failed to get connector %d (%s)", id,
             std::generic_category().message(err).c_str());
     }
-    MarkDeleted();
-    if (connector_) {
-      connector_->connection = DRM_MODE_DISCONNECTED;
-    }
-    modes_.clear();
-    reported_incompatible_cable_ = false;
-    return -ENODEV;
+    probed.status = -ENODEV;
+    probed.connector_deleted = true;
+    return probed;
   }
-  deleted_ = false;
-  connector_ = std::move(conn);
 
-  modes_.clear();
-  for (int i = 0; i < connector_->count_modes; ++i) {
+  for (int i = 0; i < conn->count_modes; ++i) {
+    drmModeModeInfo raw_mode = *std::next(conn->modes, i);
     bool exists = false;
-    for (const DrmMode &mode : modes_) {
-      if (mode == connector_->modes[i]) {
+    for (const DrmMode &mode : probed.modes) {
+      if (mode == raw_mode) {
         exists = true;
         break;
       }
     }
 
     if (!exists) {
-      modes_.emplace_back(&connector_->modes[i]);
+      probed.modes.emplace_back(&raw_mode);
     }
   }
-  if (!IsConnected() || !modes_.empty()) {
-    reported_incompatible_cable_ = false;
+
+  const int link_err = drm_->GetProperty(id, DRM_MODE_OBJECT_CONNECTOR,
+                                         "link-status",
+                                         &probed.link_status_property);
+  if (link_err == 0) {
+    probed.link_status_updated = true;
+  } else if (link_err == -ENODEV) {
+    probed.connector_deleted = true;
   }
 
-  if (IsMst()) {
+  if (!probed.connector_deleted) {
+    const int cp_err = drm_->GetProperty(id, DRM_MODE_OBJECT_CONNECTOR,
+                                         "Content Protection",
+                                         &probed.content_protection_property);
+    if (cp_err == 0) {
+      probed.content_protection_updated = true;
+    } else if (cp_err == -ENODEV) {
+      probed.connector_deleted = true;
+    }
+  }
+
+  if (!probed.connector_deleted && IsMst()) {
     /* MST virtual connectors aggressively destroy and recreate these DRM
      * properties during link resets. Re probing these here ensures userspace
      * atomic commits aren't accessing stale property values
      */
-    UpdateColorspaceProperty();
-    GetOptionalConnectorProperty("HDR_OUTPUT_METADATA",
-                                 &hdr_output_metadata_property_);
+    probed.mst_properties_updated = true;
+    const int cs_err = drm_->GetProperty(id, DRM_MODE_OBJECT_CONNECTOR,
+                                         "Colorspace",
+                                         &probed.colorspace_property);
+    if (cs_err == 0) {
+      PopulateColorspaceEnumMap(probed.colorspace_property,
+                                probed.colorspace_enum_map);
+    } else if (cs_err == -ENODEV) {
+      probed.connector_deleted = true;
+    }
+
+    if (!probed.connector_deleted) {
+      const int hdr_err = drm_->GetProperty(id, DRM_MODE_OBJECT_CONNECTOR,
+                                            "HDR_OUTPUT_METADATA",
+                                            &probed
+                                                 .hdr_output_metadata_property);
+      if (hdr_err == -ENODEV) {
+        probed.connector_deleted = true;
+      }
+    }
+  }
+
+  probed.connector = std::move(conn);
+  if (probed.connector_deleted) {
+    probed.status = -ENODEV;
+  }
+  return probed;
+}
+
+auto DrmConnector::ApplyProbedState(ProbedState &&probed) -> int {
+  ProbedState state = std::move(probed);
+  ++probe_generation_;
+  if (state.handled_by_override) {
+    return state.status;
+  }
+  if (state.status != 0 || state.connector_deleted) {
+    MarkDeleted();
+    if (connector_) {
+      connector_->connection = DRM_MODE_DISCONNECTED;
+    }
+    modes_.clear();
+    reported_incompatible_cable_ = false;
+    return state.status != 0 ? state.status : -ENODEV;
+  }
+
+  deleted_ = false;
+  connector_ = std::move(state.connector);
+  modes_ = std::move(state.modes);
+  if (!IsConnected() || !modes_.empty()) {
+    reported_incompatible_cable_ = false;
+  }
+
+  if (state.link_status_updated) {
+    link_status_property_ = std::move(state.link_status_property);
+  }
+  if (state.content_protection_updated) {
+    content_protection_property_ = std::move(state.content_protection_property);
+  }
+  if (state.mst_properties_updated) {
+    colorspace_property_ = std::move(state.colorspace_property);
+    colorspace_enum_map_ = std::move(state.colorspace_enum_map);
+    hdr_output_metadata_property_ = std::move(
+        state.hdr_output_metadata_property);
   }
 
   return 0;
 }
 
+int DrmConnector::UpdateModesAndProperties() {
+  auto probed = DrmConnector::ProbeModesAndPropertiesOffLock();
+  return ApplyProbedState(std::move(probed));
+}
+
+bool DrmConnector::IsCachedLinkStatusGood() const {
+  auto link_status_property_value = link_status_property_.GetValue();
+  return !link_status_property_value ||
+         *link_status_property_value != DRM_MODE_LINK_STATUS_BAD;
+}
+
 bool DrmConnector::IsLinkStatusGood() {
   if (GetOptionalConnectorProperty("link-status", &link_status_property_)) {
-    auto link_status_property_value = link_status_property_.GetValue();
-    if (link_status_property_value &&
-        (link_status_property_value == DRM_MODE_LINK_STATUS_BAD))
-      return false;
+    return IsCachedLinkStatusGood();
   }
 
   return true;

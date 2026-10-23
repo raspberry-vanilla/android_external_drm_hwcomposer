@@ -1129,6 +1129,18 @@ bool HwcDisplay::Init() {
 
     if (pipeline_ && pipeline_->connector && pipeline_->connector->Get()) {
       auto *connector = pipeline_->connector->Get();
+      // Probe the connector only if it has not already been populated by
+      // ResourceManager::UpdateFrontendDisplays(). Doing this before reading
+      // the EDID blob or HDCP properties also ensures direct SetPipeline()
+      // callers observe fresh connector state without issuing a redundant
+      // second drmModeGetConnector() ioctl during hotplug.
+      if (connector->GetModes().empty()) {
+        int ret = connector->UpdateModesAndProperties();
+        if (ret != 0) {
+          ALOGE("Failed to update display modes with error: %d", ret);
+          return false;
+        }
+      }
       connector->GetDev()
           .GetBackend()
           .SetRefreshCallbackForConnector(connector->GetId(), [this]() {
@@ -1190,13 +1202,6 @@ bool HwcDisplay::Init() {
     // no real modes from the connector or if initialization fails.
     configs_ = configs_generator_.GetFakeMode(0, 0);
     active_config_id_ = configs_.preferred_config_id;
-
-    auto *connector = pipeline_->connector->Get();
-    auto ret = connector->UpdateModesAndProperties();
-    if (ret != 0) {
-      ALOGE("Failed to update display modes with error: %d", ret);
-      return false;
-    }
 
     if (!RefreshConfigsFromConnector()) {
       return false;

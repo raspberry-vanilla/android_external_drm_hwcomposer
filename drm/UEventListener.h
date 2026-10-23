@@ -17,8 +17,10 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -27,12 +29,26 @@
 
 namespace android::drm_hwcomposer {
 
+struct UEventHotplugEvent {
+  std::set<uint32_t> connector_ids;
+  bool refresh_all = false;
+
+  void Merge(const UEventHotplugEvent &other) {
+    connector_ids.insert(other.connector_ids.begin(),
+                         other.connector_ids.end());
+    refresh_all = refresh_all || other.refresh_all;
+  }
+};
+
 class UEventListener {
  public:
+  using HotplugEvent = UEventHotplugEvent;
+
   // Returns true if at least one connector remained unsettled (e.g. connected
   // with 0 modes, unknown connection, or transient vanish/probe failure) so a
   // quiet 200ms trailing settle re-probe is required; false when settled.
   using HotplugHandler = std::function<bool()>;
+  using ScopedSettleHotplugHandler = std::function<bool(const HotplugEvent &)>;
 
   ~UEventListener();
 
@@ -41,6 +57,12 @@ class UEventListener {
   static auto CreateInstance(HotplugHandler hotplug_handler,
                              std::unique_ptr<UEvent> uevent)
       -> std::shared_ptr<UEventListener>;
+  static auto CreateWithScopedSettleHandler(
+      ScopedSettleHotplugHandler hotplug_handler)
+      -> std::shared_ptr<UEventListener>;
+  static auto CreateWithScopedSettleHandler(
+      ScopedSettleHotplugHandler hotplug_handler,
+      std::unique_ptr<UEvent> uevent) -> std::shared_ptr<UEventListener>;
 
   template <typename F, typename = std::enable_if_t<
                             std::is_void_v<std::invoke_result_t<F>>>>
@@ -56,7 +78,7 @@ class UEventListener {
   }
 
  private:
-  explicit UEventListener(HotplugHandler hotplug_handler);
+  explicit UEventListener(ScopedSettleHotplugHandler hotplug_handler);
 
   void ThreadFn();
 
@@ -64,7 +86,7 @@ class UEventListener {
   std::atomic<bool> exit_ = false;
   std::unique_ptr<UEvent> uevent_;
 
-  HotplugHandler hotplug_handler_;
+  ScopedSettleHotplugHandler hotplug_handler_;
 };
 
 }  // namespace android::drm_hwcomposer

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,8 +127,25 @@ class DrmDevice {
     return cap_cursor_size_;
   }
 
-  auto RefreshConnectors(bool *out_had_probe_error = nullptr)
+  struct ConnectorSnapshot {
+    std::set<uint32_t> known_ids;
+  };
+
+  struct ProbedConnectorResources {
+    bool has_resources = false;
+    bool had_probe_error = false;
+    std::set<uint32_t> resource_ids;
+    std::vector<std::unique_ptr<DrmConnector>> new_connectors;
+  };
+
+  auto SnapshotConnectorsUnderLock() const -> ConnectorSnapshot;
+  auto ProbeConnectorsOffLock(const ConnectorSnapshot &snapshot)
+      -> ProbedConnectorResources;
+  auto ApplyProbedConnectorsUnderLock(
+      ProbedConnectorResources &&probed,
+      std::vector<DrmConnector *> *out_added_connectors = nullptr)
       -> std::vector<std::unique_ptr<DrmConnector>>;
+  auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
 
  protected:

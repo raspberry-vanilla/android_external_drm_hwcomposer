@@ -41,6 +41,8 @@ class DrmProperty {
               uint64_t value);
   DrmProperty(const DrmProperty &) = delete;
   DrmProperty &operator=(const DrmProperty &) = delete;
+  DrmProperty(DrmProperty &&) noexcept = default;
+  DrmProperty &operator=(DrmProperty &&) noexcept = default;
 
   auto Init(const SharedFd &fd, uint32_t obj_id, drmModePropertyPtr p,
             uint64_t value) -> void;

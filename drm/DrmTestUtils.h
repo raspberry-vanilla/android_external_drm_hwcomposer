@@ -439,6 +439,19 @@ class FakeDrmConnector : public DrmConnector {
   }
 
   int UpdateModesAndProperties() override {
+    IncrementProbeGeneration();
+    return UpdateModesAndPropertiesImpl();
+  }
+
+  ProbedState ProbeModesAndPropertiesOffLock() override {
+    ProbedState state{};
+    state.handled_by_override = true;
+    state.status = UpdateModesAndPropertiesImpl();
+    return state;
+  }
+
+ private:
+  int UpdateModesAndPropertiesImpl() {
     ++update_modes_call_count_;
     if (pending_connected_.has_value()) {
       SetConnected(*pending_connected_);
@@ -453,6 +466,7 @@ class FakeDrmConnector : public DrmConnector {
     return update_modes_result_;
   }
 
+ public:
   void SetUpdateModesResult(int res) {
     update_modes_result_ = res;
   }

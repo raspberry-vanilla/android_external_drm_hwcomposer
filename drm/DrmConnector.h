@@ -27,6 +27,7 @@
 
 #include "drm/DrmColorspace.h"
 #include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmMode.h"
 #include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
 
@@ -59,7 +60,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   }
 
   virtual uint32_t GetId() const {
-    return connector_->connector_id;
+    return connector_id_;
   }
 
   auto GetIndexInResArray() const {
@@ -79,9 +80,32 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   virtual std::string GetName() const;
 
+  struct ProbedState {
+    DrmModeConnectorUnique connector;
+    std::vector<DrmMode> modes;
+    std::map<DrmColorspace, uint64_t> colorspace_enum_map;
+    DrmProperty link_status_property;
+    DrmProperty content_protection_property;
+    DrmProperty colorspace_property;
+    DrmProperty hdr_output_metadata_property;
+    int status = 0;
+    bool handled_by_override = false;
+    bool connector_deleted = false;
+    bool link_status_updated = false;
+    bool content_protection_updated = false;
+    bool mst_properties_updated = false;
+  };
+
   virtual int UpdateModesAndProperties();
+  virtual auto ProbeModesAndPropertiesOffLock() -> ProbedState;
+  auto ApplyProbedState(ProbedState &&probed) -> int;
+
+  uint64_t GetProbeGeneration() const {
+    return probe_generation_;
+  }
 
   bool IsLinkStatusGood();
+  bool IsCachedLinkStatusGood() const;
 
   /** Refreshes the cached content protection property value. Returns whether
    * the property was successfully read from DRM. */
@@ -202,8 +226,12 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   DrmModeConnectorUnique connector_;
   DrmDevice *const drm_;
+  const uint32_t connector_id_;
 
   auto Init() -> bool;
+  static void PopulateColorspaceEnumMap(
+      DrmProperty &colorspace_prop,
+      std::map<DrmColorspace, uint64_t> &enum_map);
   auto UpdateColorspaceProperty() -> void;
   auto GetConnectorProperty(const char *prop_name, DrmProperty *property,
                             bool is_optional = false) -> bool;
@@ -215,7 +243,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   const uint32_t index_in_res_array_;
   bool deleted_ = false;
   bool reported_incompatible_cable_ = false;
+  uint64_t probe_generation_ = 0;
 
+ protected:
+  void IncrementProbeGeneration() {
+    ++probe_generation_;
+  }
+
+ private:
   std::vector<DrmMode> modes_;
 
   DrmProperty dpms_property_;
