@@ -94,6 +94,8 @@ constexpr float kCtmBScale = 0.7F;
 constexpr float kCtmBOffset = 0.25F;
 constexpr float kFloatTolerance = 1e-5F;
 constexpr uint32_t kColorPipelinePrimaryPlaneId = 980;
+constexpr uint32_t kTestOverlayPlaneId = 990;
+constexpr float kOpaqueAlpha = 1.0F;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -1904,6 +1906,84 @@ TEST_F(HwcDisplayTest,
   ASSERT_FALSE(sink->GetCommitHistory().empty());
   EXPECT_EQ(sink->GetCommitHistory().back().front().color_matrix,
             GetBoostedCTMPtr());
+}
+
+TEST_F(
+    HwcDisplayTest,
+    ValidateStagedCompositionMarksOccludedCachedLayerAndTransitionsToClientOnGpuCtm) {
+  ScopedTestProperty ctm_prop("vendor.hwc.drm.ctm", "DRM_OR_GPU");
+  ScopedTestProperty offset_prop("vendor.hwc.drm.force_ctm_handles_offset",
+                                 "0");
+  ReloadProperties();
+
+  fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  fake_device->AddPlane(
+      std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_OVERLAY,
+                                     /*is_valid=*/true, kTestOverlayPlaneId));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(
+          *fake_device->GetConnectors().back());
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->planner = std::make_unique<GenericLayerMapperCompositionPlanner>();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  // Layer 1: cached layer with alpha == 0.0F (occluded by cached carrier).
+  // Layer 2: cached carrier layer with alpha == 1.0F.
+  constexpr ILayerId kOccludedLayerId = 1;
+  constexpr ILayerId kCarrierLayerId = 2;
+  ASSERT_TRUE(display.CreateLayer(kOccludedLayerId));
+  ASSERT_TRUE(display.CreateLayer(kCarrierLayerId));
+
+  auto cached_occluded_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1));
+  cached_occluded_props.alpha = 0.0F;
+  cached_occluded_props.z_order = 0;
+  display.get_layer(kOccludedLayerId)
+      ->SetLayerProperties(cached_occluded_props);
+
+  auto cached_carrier_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 2));
+  cached_carrier_props.alpha = kOpaqueAlpha;
+  cached_carrier_props.z_order = 1;
+  display.get_layer(kCarrierLayerId)->SetLayerProperties(cached_carrier_props);
+
+  // Frame 1: LayerCachingMapper marks layer 1 as kDeviceOccluded, and
+  // CreateLayerToPlaneJoiningPlan drops the occluded layer so only the carrier
+  // layer is committed to KMS.
+  auto validate_frame1 = display.ValidateStagedComposition();
+  ASSERT_EQ(validate_frame1.changed_layers.size(), 1U);
+  EXPECT_EQ(validate_frame1.changed_layers[0].first, kOccludedLayerId);
+  EXPECT_EQ(validate_frame1.changed_layers[0].second,
+            CompositionType::kDeviceOccluded);
+  EXPECT_EQ(display.get_layer(kOccludedLayerId)->GetValidatedType(),
+            CompositionType::kDeviceOccluded);
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+
+  // Frame 2: Set a CTM with an offset so CtmByGpu() becomes true and forces all
+  // layers to kClient. Because layer 1 was previously kDeviceOccluded, it must
+  // NOT be omitted from changed_layers when transitioning to real kClient.
+  HalColorTransformMatrix offset_ctm = kIdentityMatrix;
+  offset_ctm[kCtmBOffsetIdx] = kCtmBOffset;
+  display.SetColorTransformMatrix(offset_ctm);
+  ASSERT_TRUE(display.CtmByGpu());
+
+  auto validate_frame2 = display.ValidateStagedComposition();
+  EXPECT_EQ(validate_frame2.changed_layers.size(), 2U);
+  EXPECT_EQ(display.get_layer(kOccludedLayerId)->GetValidatedType(),
+            CompositionType::kClient);
 }
 
 TEST_F(HwcDisplayTest,
