@@ -24,9 +24,12 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -38,9 +41,12 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicCommitSink.h"
+#include "drm/DrmColorspace.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
+#include "drm/DrmProperty.h"
 #include "drm/DrmTestUtils.h"
+#include "drm/DrmUnique.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -117,11 +123,73 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
   mutable size_t nonblock_calls_ = 0;
 };
 
+class TestDrmDevice : public FakeDrmDevice {
+ public:
+  void RegisterFakeEnumProperty(
+      uint32_t obj_id, const std::string& prop_name, uint32_t prop_id,
+      uint64_t value, std::vector<std::pair<uint64_t, std::string>> enums) {
+    fake_enum_properties_[{obj_id, prop_name}] = FakeEnumPropertyDef{
+        .prop_id = prop_id,
+        .value = value,
+        .enums = std::move(enums),
+    };
+  }
+
+  int GetProperty(uint32_t obj_id, uint32_t obj_type, const char* prop_name,
+                  DrmProperty* property) const override {
+    auto it = fake_enum_properties_.find({obj_id, std::string(prop_name)});
+    if (it != fake_enum_properties_.end()) {
+      drmModePropertyRes raw_prop{};
+      raw_prop.prop_id = it->second.prop_id;
+      raw_prop.flags = DRM_MODE_PROP_ENUM;
+      std::strncpy(raw_prop.name, prop_name, DRM_PROP_NAME_LEN - 1);
+      std::vector<drm_mode_property_enum> raw_enums(it->second.enums.size());
+      for (size_t i = 0; i < it->second.enums.size(); ++i) {
+        raw_enums[i].value = it->second.enums[i].first;
+        std::strncpy(raw_enums[i].name, it->second.enums[i].second.c_str(),
+                     DRM_PROP_NAME_LEN - 1);
+      }
+      raw_prop.count_enums = static_cast<int>(raw_enums.size());
+      raw_prop.enums = raw_enums.data();
+      property->Init(nullptr, obj_id, &raw_prop, it->second.value);
+      return 0;
+    }
+    return FakeDrmDevice::GetProperty(obj_id, obj_type, prop_name, property);
+  }
+
+  void RegisterFakeRawConnector(
+      uint32_t connector_id,
+      uint32_t connector_type = DRM_MODE_CONNECTOR_DisplayPort) {
+    fake_raw_connector_types_[connector_id] = connector_type;
+  }
+
+  DrmModeConnectorUnique GetConnector(uint32_t connector_id) const override {
+    auto it = fake_raw_connector_types_.find(connector_id);
+    if (it != fake_raw_connector_types_.end()) {
+      return FakeDrmConnector::MakeFakeRawConnector(connector_id,
+                                                    /*encoder_id=*/0,
+                                                    it->second);
+    }
+    return FakeDrmDevice::GetConnector(connector_id);
+  }
+
+ private:
+  struct FakeEnumPropertyDef {
+    uint32_t prop_id{};
+    uint64_t value{};
+    std::vector<std::pair<uint64_t, std::string>> enums;
+  };
+
+  std::map<std::pair<uint32_t, std::string>, FakeEnumPropertyDef>
+      fake_enum_properties_;
+  std::map<uint32_t, uint32_t> fake_raw_connector_types_;
+};
+
 }  // namespace
 
 struct DrmAtomicStateManagerTest : public ::testing::Test {
   void SetUp() override {
-    fake_device = std::make_unique<FakeDrmDevice>();
+    fake_device = std::make_unique<TestDrmDevice>();
     fake_connector = fake_device->AddPipelineResources();
     auto overlay = std::make_unique<FakeDrmPlane>(*fake_device,
                                                   DRM_PLANE_TYPE_OVERLAY,
@@ -173,7 +241,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
     return plan;
   }
 
-  std::unique_ptr<FakeDrmDevice> fake_device;
+  std::unique_ptr<TestDrmDevice> fake_device;
   FakeDrmConnector* fake_connector = nullptr;
   FakeDrmPlane* overlay_plane = nullptr;
   std::shared_ptr<DrmDisplayPipeline> pipeline;
@@ -821,6 +889,69 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
                                       kFakeCrtcModePropId),
             0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       MstConnectorUpdateModesAndPropertiesRefreshesDynamicProperties) {
+  auto* mst_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(mst_conn, nullptr);
+  const uint32_t conn_id = mst_conn->GetId();
+  fake_device->RegisterFakeRawConnector(conn_id,
+                                        DRM_MODE_CONNECTOR_DisplayPort);
+  constexpr uint32_t kInitialColorspacePropId = 44;
+  constexpr uint32_t kInitialHdrMetadataPropId = 45;
+  constexpr uint32_t kFakePathPropId = 46;
+  constexpr uint64_t kMstPathBlobId = 77;
+  constexpr uint64_t kInitialBt2020RgbEnumValue = 9;
+  constexpr uint32_t kRecreatedColorspacePropId = 144;
+  constexpr uint32_t kRecreatedHdrMetadataPropId = 145;
+  constexpr uint64_t kRecreatedBt2020RgbEnumValue = 12;
+
+  fake_device->RegisterFakeObjectProperty(conn_id, "DPMS", kFakeDpmsPropId,
+                                          DRM_MODE_PROP_ENUM, DRM_MODE_DPMS_ON);
+  fake_device->RegisterFakeObjectProperty(conn_id, "CRTC_ID",
+                                          kFakeConnectorCrtcPropId,
+                                          DRM_MODE_PROP_OBJECT, 0);
+  fake_device->RegisterFakeObjectProperty(conn_id, "PATH", kFakePathPropId,
+                                          DRM_MODE_PROP_BLOB, kMstPathBlobId);
+  fake_device->RegisterFakeEnumProperty(conn_id, "Colorspace",
+                                        kInitialColorspacePropId, 0,
+                                        {{0, "Default"},
+                                         {kInitialBt2020RgbEnumValue,
+                                          "BT2020_RGB"}});
+  fake_device->RegisterFakeObjectProperty(conn_id, "HDR_OUTPUT_METADATA",
+                                          kInitialHdrMetadataPropId,
+                                          DRM_MODE_PROP_BLOB, 0);
+
+  ASSERT_TRUE(mst_conn->CallBaseInit());
+  ASSERT_TRUE(mst_conn->IsExternal());
+  ASSERT_TRUE(mst_conn->IsMst());
+  EXPECT_EQ(mst_conn->GetColorspaceProperty().GetId(),
+            kInitialColorspacePropId);
+  EXPECT_EQ(mst_conn->GetColorspacePropertyValue(DrmColorspace::kBt2020Rgb),
+            kInitialBt2020RgbEnumValue);
+  EXPECT_EQ(mst_conn->GetHdrOutputMetadataProperty().GetId(),
+            kInitialHdrMetadataPropId);
+
+  // Dynamic DP MST branch device hotplugs can recreate connector properties
+  // with new kernel property IDs and updated enum value tables.
+  fake_device->RegisterFakeEnumProperty(conn_id, "Colorspace",
+                                        kRecreatedColorspacePropId, 0,
+                                        {{0, "Default"},
+                                         {kRecreatedBt2020RgbEnumValue,
+                                          "BT2020_RGB"}});
+  fake_device->RegisterFakeObjectProperty(conn_id, "HDR_OUTPUT_METADATA",
+                                          kRecreatedHdrMetadataPropId,
+                                          DRM_MODE_PROP_BLOB, 0);
+
+  EXPECT_EQ(mst_conn->CallBaseUpdateModesAndProperties(), 0);
+  EXPECT_TRUE(mst_conn->IsExternal());
+  EXPECT_EQ(mst_conn->GetColorspaceProperty().GetId(),
+            kRecreatedColorspacePropId);
+  EXPECT_EQ(mst_conn->GetColorspacePropertyValue(DrmColorspace::kBt2020Rgb),
+            kRecreatedBt2020RgbEnumValue);
+  EXPECT_EQ(mst_conn->GetHdrOutputMetadataProperty().GetId(),
+            kRecreatedHdrMetadataPropId);
 }
 
 }  // namespace android::drm_hwcomposer
