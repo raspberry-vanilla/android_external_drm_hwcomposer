@@ -107,6 +107,9 @@ constexpr float kSolidRed = 0.5F;
 constexpr float kSolidGreen = 0.25F;
 constexpr float kSolidBlue = 0.75F;
 constexpr float kSolidAlpha = 1.0F;
+constexpr float kHalfBrightness = 0.5F;
+constexpr float kExpectedScaledHalfBrightness = 0.6F;
+constexpr float kOutOfRangeBrightness = 1.5F;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -2327,6 +2330,100 @@ TEST_F(HwcDisplayTest,
             kFenceUseCountBeforeWaitForPresentTime);
   EXPECT_EQ(spy_ptr->GetFenceUseCountAtCommit(),
             kFenceUseCountAfterWaitForPresentTime);
+}
+
+TEST_F(HwcDisplayTest,
+       SetBrightnessScalesInternalDisplayAndZeroesNegativeAndExternal) {
+  ScopedTestProperty min_prop("vendor.hwc.drm.min_display_brightness", "0.2");
+  ScopedTestProperty
+      scale_prop("vendor.hwc.drm.scale_brightness_range_to_min_brightness",
+                 "1");
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  display.get_layer(kLayerId)->SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+
+  // 1. Positive brightness [0, 1] on internal display linearly remaps into
+  // [min_brightness, 1.0] (0.2 + 0.5 * 0.8 = 0.6).
+  EXPECT_TRUE(display.SetBrightness(kHalfBrightness));
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_TRUE(sink->GetCommitHistory().back().front().brightness.has_value());
+  EXPECT_NEAR(sink->GetCommitHistory().back().front().brightness.value_or(
+                  -1.0F),
+              kExpectedScaledHalfBrightness, kFloatTolerance);
+
+  // 2. Out-of-range brightness values (> 1.0 or negative values other than
+  // -1.0) are rejected and leave the previously committed brightness unchanged.
+  EXPECT_FALSE(display.SetBrightness(kOutOfRangeBrightness));
+  EXPECT_FALSE(display.SetBrightness(-kHalfBrightness));
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_TRUE(sink->GetCommitHistory().back().front().brightness.has_value());
+  EXPECT_NEAR(sink->GetCommitHistory().back().front().brightness.value_or(
+                  -1.0F),
+              kExpectedScaledHalfBrightness, kFloatTolerance);
+
+  // 3. -1.0F (turning backlight off per HAL API) sets brightness_ to 0.0F so
+  // downstream color/gamma pipelines scale to 0.
+  EXPECT_TRUE(display.SetBrightness(-1.0F));
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_TRUE(sink->GetCommitHistory().back().front().brightness.has_value());
+  EXPECT_FLOAT_EQ(sink->GetCommitHistory().back().front().brightness.value_or(
+                      -1.0F),
+                  0.0F);
+
+  // 4. External display zeroes brightness_ even for positive brightness values.
+  auto ext_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(ext_pipeline, nullptr);
+  HwcDisplay ext_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ext_display.SetPipeline(ext_pipeline);
+  ASSERT_TRUE(ext_display.CreateLayer(kLayerId));
+  ext_display.get_layer(kLayerId)->SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  EXPECT_TRUE(ext_display.SetBrightness(kHalfBrightness));
+  sink->ClearHistory();
+  (void)ext_display.ValidateStagedComposition();
+  ext_display.AcceptValidatedComposition();
+  EXPECT_TRUE(ext_display.PresentStagedComposition(std::nullopt, present_fence,
+                                                   release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_TRUE(sink->GetCommitHistory().back().front().brightness.has_value());
+  EXPECT_FLOAT_EQ(sink->GetCommitHistory().back().front().brightness.value_or(
+                      -1.0F),
+                  0.0F);
 }
 
 TEST_F(HwcDisplayTest,
