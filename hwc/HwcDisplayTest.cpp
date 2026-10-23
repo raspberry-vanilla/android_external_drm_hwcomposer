@@ -1614,7 +1614,8 @@ TEST_F(HwcDisplayTest, SameResolutionModesetReusesActiveDeviceLayer) {
   auto pipeline = CreatePipelineWithModes(
       {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
                          DRM_MODE_TYPE_PREFERRED, "1080p60"),
-       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
       /*is_external=*/true);
   ASSERT_NE(pipeline, nullptr);
 
@@ -1625,13 +1626,17 @@ TEST_F(HwcDisplayTest, SameResolutionModesetReusesActiveDeviceLayer) {
   ASSERT_NE(display.GetCurrentConfig(), nullptr);
   const ConfigId initial_config_id = display.GetCurrentConfig()->id;
   ConfigId fhd_120_config_id = 0;
+  ConfigId hd_60_config_id = 0;
   for (const auto& cfg : display.GetDisplayConfigs()) {
-    if (cfg.id != initial_config_id) {
+    if (cfg.mode.GetRawMode().hdisplay == kFhdWidth &&
+        cfg.id != initial_config_id) {
       fhd_120_config_id = cfg.id;
-      break;
+    } else if (cfg.mode.GetRawMode().hdisplay == kHdWidth) {
+      hd_60_config_id = cfg.id;
     }
   }
   ASSERT_NE(fhd_120_config_id, 0U);
+  ASSERT_NE(hd_60_config_id, 0U);
 
   constexpr ILayerId kLayerId = 1;
   constexpr uint32_t kDeviceLayerFbId = 777;
@@ -1667,6 +1672,29 @@ TEST_F(HwcDisplayTest, SameResolutionModesetReusesActiveDeviceLayer) {
   ASSERT_NE(modeset_args.composition, nullptr);
   ASSERT_EQ(modeset_args.composition->plan.size(), 1U);
   EXPECT_EQ(modeset_args.composition->plan[0].layer.fb, device_fb);
+
+  // QueueConfig across different resolution groups (1080p -> 720p) is rejected
+  // with kSeamlessNotAllowed.
+  QueuedConfigTiming queued_timing{};
+  EXPECT_EQ(display.QueueConfig(hd_60_config_id, 0, &queued_timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+
+  // Cross-resolution modeset (1080p120 -> 720p60) cannot reuse the 1080p layer
+  // and allocates + imports a new 1280x720 dumb buffer.
+  sink->ClearHistory();
+  EXPECT_EQ(display.SetConfig(hd_60_config_id), HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(fake_device->GetFakeFbImporter()->GetImportCount(),
+            imports_before_modeset + 1U);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().back().empty());
+  const auto& hd_modeset_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(hd_modeset_args.composition, nullptr);
+  ASSERT_EQ(hd_modeset_args.composition->plan.size(), 1U);
+  ASSERT_TRUE(hd_modeset_args.composition->plan[0].layer.bi.has_value());
+  const BufferInfo hd_modeset_bi = hd_modeset_args.composition->plan[0]
+                                       .layer.bi.value_or(BufferInfo{});
+  EXPECT_EQ(hd_modeset_bi.width, kHdWidth);
+  EXPECT_EQ(hd_modeset_bi.height, kHdHeight);
 }
 
 TEST_F(HwcDisplayTest,
