@@ -53,6 +53,9 @@ using ::testing::SetArgPointee;
 
 constexpr uint64_t kTestSdmDisplayId = 52;
 constexpr int64_t kFirstSdmLayerId = 10;
+constexpr int64_t kSecondSdmLayerId = 11;
+constexpr int64_t kThirdSdmLayerId = 12;
+constexpr uint32_t kSparseZOrderHigh = 100;
 constexpr int32_t kTestLayerWidth = 1920;
 constexpr int32_t kTestLayerHeight = 1080;
 constexpr int32_t kSdmCompositionClient = 1;
@@ -238,6 +241,37 @@ TEST_F(SdmCompositionPlannerTest,
   ASSERT_TRUE(result.composition.composition_plan->client_z_order.has_value());
   EXPECT_EQ(result.composition.composition_plan->client_z_order.value_or(-1),
             0);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateAssignsDenseSequentialZOrderForDuplicateOrSparseLayerZPos) {
+  const IRect full_frame{0, 0, kTestLayerWidth, kTestLayerHeight};
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer3 = CompositorTestUtils::CreateLayer(&display, full_frame,
+                                                     kSparseZOrderHigh,
+                                                     CompositionType::kDevice);
+  std::vector<const HwcLayer*> layers = {&layer1, &layer2, &layer3};
+  ON_CALL(display, GetOrderLayersByZPos()).WillByDefault(Return(layers));
+
+  EXPECT_CALL(layer_intf,
+              SetLayerZOrder(kTestSdmDisplayId, kFirstSdmLayerId, 0U))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerZOrder(kTestSdmDisplayId, kSecondSdmLayerId, 1U))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerZOrder(kTestSdmDisplayId, kThirdSdmLayerId, 2U))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  auto result = planner->ValidateDisplay(&display);
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kNone);
 }
 
 }  // namespace

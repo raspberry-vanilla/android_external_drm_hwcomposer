@@ -186,12 +186,13 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
   // the composition_type_map with the composition type initially requested from
   // the client.
   CompositionPlanner::CompositionTypeMap composition_type_map;
+  uint32_t next_z_order = 0;
   for (const auto* layer : display->GetOrderLayersByZPos()) {
     CompositionType composition_type = layer->GetSfType();
     if (ForceClientComposition(display, layer)) {
       composition_type = CompositionType::kClient;
     }
-    UpdateLayer(layer, composition_type);
+    UpdateLayer(layer, composition_type, next_z_order++);
     composition_type_map[layer] = composition_type;
   }
 
@@ -405,7 +406,8 @@ void SdmCompositionPlanner::UpdateLayerMapping(
 }
 
 void SdmCompositionPlanner::UpdateLayer(const HwcLayer* hwc_layer,
-                                        CompositionType composition_type) {
+                                        CompositionType composition_type,
+                                        uint32_t z_order) {
   if (layer_mappings_.count(hwc_layer) == 0) {
     ALOGE("couldn't find sdm layer for hwc layer");
     return;
@@ -421,7 +423,7 @@ void SdmCompositionPlanner::UpdateLayer(const HwcLayer* hwc_layer,
   UpdateLayerAlpha(sdm_layer_id, layer_data);
   UpdateLayerSourceCrop(sdm_layer_id, layer_data);
   UpdateLayerTransform(sdm_layer_id, layer_data);
-  UpdateZOrder(sdm_layer_id, hwc_layer->GetZOrder());
+  UpdateZOrder(sdm_layer_id, z_order);
   UpdateCompositionType(sdm_layer_id, composition_type);
   UpdateLayerDataspace(sdm_layer_id, layer_data);
   UpdateLayerBrightness(sdm_layer_id, layer_data);
