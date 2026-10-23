@@ -42,6 +42,7 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
+#include "drm/DrmColorOp.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmDevice.h"
@@ -82,6 +83,11 @@ constexpr uint32_t kFakeContentProtectionPropId = 40;
 constexpr uint32_t kFakeHdcpContentTypePropId = 41;
 constexpr uint32_t kFakeLinkStatusPropId = 42;
 inline constexpr uint32_t kFakeDpmsPropId = 43;
+constexpr uint32_t kFakeColorOpBaseId = 400;
+constexpr uint32_t kFakeColorOpTypePropId = 44;
+constexpr uint32_t kFakeColorOpNextPropId = 45;
+constexpr uint32_t kFakeColorOpBypassPropId = 46;
+constexpr uint32_t kFakeColorOpDataPropId = 47;
 constexpr uint32_t kFakeAllCrtcsMask = 0xFFFFFFFFU;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
@@ -609,6 +615,23 @@ class FakeDrmCrtc : public DrmCrtc {
   const uint32_t id_;
 };
 
+class FakeDrmColorOp : public DrmColorOp {
+ public:
+  explicit FakeDrmColorOp(uint64_t id = kFakeColorOpBaseId, uint32_t index = 0)
+      : DrmColorOp(nullptr, id, index) {
+    InitFakeDrmProperty(type_, static_cast<uint32_t>(id),
+                        kFakeColorOpTypePropId, "TYPE", DRM_MODE_PROP_ENUM, 0);
+    InitFakeDrmProperty(next_, static_cast<uint32_t>(id),
+                        kFakeColorOpNextPropId, "NEXT", DRM_MODE_PROP_OBJECT,
+                        0);
+    InitFakeDrmProperty(bypass_, static_cast<uint32_t>(id),
+                        kFakeColorOpBypassPropId, "BYPASS", DRM_MODE_PROP_RANGE,
+                        0);
+    InitFakeDrmProperty(data_, static_cast<uint32_t>(id),
+                        kFakeColorOpDataPropId, "DATA", DRM_MODE_PROP_BLOB, 0);
+  }
+};
+
 class FakeDrmPlane : public DrmPlane {
  public:
   FakeDrmPlane(DrmDevice& dev, uint32_t type, bool is_valid = true,
@@ -664,6 +687,15 @@ class FakeDrmPlane : public DrmPlane {
   void SetFbIdPropertyValue(uint64_t value) {
     InitFakeDrmProperty(fb_property_, plane_id_, kFakePlaneFbPropId, "FB_ID",
                         DRM_MODE_PROP_OBJECT, value);
+  }
+
+  void SetHasColorPipeline(bool has_color_pipeline) {
+    color_pipeline_.color_ops.clear();
+    color_op_type_enum_map_.clear();
+    if (has_color_pipeline) {
+      color_pipeline_.color_ops.push_back(std::make_unique<FakeDrmColorOp>());
+      color_op_type_enum_map_[0] = ColorOpType::kMatrix3x4;
+    }
   }
 
  private:
