@@ -23,6 +23,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <system/graphics-base-v1.0.h>
 
 #include <SnapHandle.h>              // IWYU pragma: keep
 #include <core/buffer_allocator.h>   // IWYU pragma: keep
@@ -33,6 +34,7 @@
 #include <sdm_display_intf_layer_builder.h>
 #include <utils/fence.h>
 
+#include "bufferinfo/BufferInfo.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/CompositorTestUtils.h"
 #include "compositor/DisplayInfo.h"
@@ -477,6 +479,66 @@ TEST_F(SdmCompositionPlannerTest,
   ASSERT_NE(validation.composition.composition_plan, nullptr);
   EXPECT_EQ(validation.composition.composition_plan->plan.size(), 2U);
   EXPECT_EQ(validation.composition.composition_plan->client_z_order, 1);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       UpdateLayerDataspaceReconstructsStandardTransferAndRangeForSdm) {
+  HwcLayer layer(nullptr);
+  ON_CALL(display, GetOrderLayersByZPos())
+      .WillByDefault(Return(std::vector<const HwcLayer*>{&layer}));
+
+  struct DataspaceTestCase {
+    HwcColorspace colorspace;
+    TransferFunction transfer;
+    BufferSampleRange range;
+    int32_t expected_dataspace;
+  };
+
+  // UpdateLayerDataspace ORs HAL_DATASPACE_STANDARD_*,
+  // HAL_DATASPACE_TRANSFER_*, and HAL_DATASPACE_RANGE_* from HwcLayer and
+  // BufferInfo fields.
+  const std::vector<DataspaceTestCase> cases = {
+      {HwcColorspace::kBt709, TransferFunction::kSrgb,
+       BufferSampleRange::kFullRange,
+       HAL_DATASPACE_STANDARD_BT709 | HAL_DATASPACE_TRANSFER_SRGB |
+           HAL_DATASPACE_RANGE_FULL},
+      {HwcColorspace::kBt601, TransferFunction::kSmpte170M,
+       BufferSampleRange::kLimitedRange,
+       HAL_DATASPACE_STANDARD_BT601_625 | HAL_DATASPACE_TRANSFER_SMPTE_170M |
+           HAL_DATASPACE_RANGE_LIMITED},
+      {HwcColorspace::kDciP3, TransferFunction::kSrgb,
+       BufferSampleRange::kFullRange,
+       HAL_DATASPACE_STANDARD_DCI_P3 | HAL_DATASPACE_TRANSFER_SRGB |
+           HAL_DATASPACE_RANGE_FULL},
+      {HwcColorspace::kBt2020, TransferFunction::kPq,
+       BufferSampleRange::kLimitedRange,
+       HAL_DATASPACE_STANDARD_BT2020 | HAL_DATASPACE_TRANSFER_ST2084 |
+           HAL_DATASPACE_RANGE_LIMITED},
+      {HwcColorspace::kBt2020, TransferFunction::kHlg,
+       BufferSampleRange::kFullRange,
+       HAL_DATASPACE_STANDARD_BT2020 | HAL_DATASPACE_TRANSFER_HLG |
+           HAL_DATASPACE_RANGE_FULL},
+      {HwcColorspace::kDefault, TransferFunction::kUnknown,
+       BufferSampleRange::kUndefined, HAL_DATASPACE_UNKNOWN},
+  };
+
+  for (const auto& tc : cases) {
+    HwcLayer::LayerProperties props{};
+    props.buffer = HwcLayer::Buffer{};
+    props.composition_type = CompositionType::kDevice;
+    props.colorspace = tc.colorspace;
+    props.transfer_func = tc.transfer;
+    props.sample_range = tc.range;
+    layer.SetLayerProperties(props);
+
+    EXPECT_CALL(layer_intf,
+                SetLayerDataspace(kTestSdmDisplayId, kFirstSdmLayerId,
+                                  tc.expected_dataspace))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNone));
+
+    (void)planner->ValidateDisplay(&display);
+  }
 }
 
 }  // namespace
