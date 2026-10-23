@@ -16,7 +16,13 @@
 
 #pragma once
 
-#if !defined(__GLIBC__)
+// Bionic's <poll.h>, <sys/socket.h>, and <sys/eventfd.h> delegate struct and
+// constant definitions to kernel UAPI headers, which clang-tidy's
+// misc-include-cleaner requires to be included directly when targeting Bionic.
+// On non-Bionic host libcs (glibc and musl), including those kernel UAPI
+// headers alongside the POSIX headers causes struct redefinition errors
+// (e.g. struct pollfd and struct f_owner_ex on musl).
+#if defined(__BIONIC__)
 #include <asm-generic/poll.h>
 #include <asm-generic/socket.h>
 #include <linux/eventfd.h>
