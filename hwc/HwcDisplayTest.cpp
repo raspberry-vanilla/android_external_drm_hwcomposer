@@ -47,6 +47,7 @@
 #include "compositor/IntelMappingValidator.h"
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
+#include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -212,6 +213,74 @@ class FakeDisplayCapabilities : public BackendDisplayCapabilities {
   std::optional<std::vector<ColorMode>> color_modes_;
   std::optional<std::vector<Hdr>> hdr_types_;
   std::optional<bool> hw_ctm_override_;
+};
+
+class SpyAtomicStateManager : public DrmAtomicStateManager {
+ public:
+  enum class Step {
+    kWaitLastFrame,
+    kGetAtomicModeReqForArgs,
+  };
+
+  explicit SpyAtomicStateManager(DrmDisplayPipeline* pipe)
+      : DrmAtomicStateManager(pipe) {
+  }
+
+  void SetNextPresentFence(SharedFd fence) {
+    next_present_fence_ = std::move(fence);
+  }
+
+  void SetTrackedFence(SharedFd fence) {
+    tracked_fence_ = std::move(fence);
+    fence_use_count_at_wait_last_frame_ = 0;
+    fence_use_count_at_commit_ = 0;
+    steps_.clear();
+  }
+
+  void WaitLastFrame() override {
+    if (steps_.empty()) {
+      steps_.push_back(Step::kWaitLastFrame);
+      fence_use_count_at_wait_last_frame_ = tracked_fence_.use_count();
+    }
+    DrmAtomicStateManager::WaitLastFrame();
+  }
+
+  std::unique_ptr<AtomicRequest> GetAtomicModeReqForArgs(
+      AtomicCommitArgs& args) override {
+    steps_.push_back(Step::kGetAtomicModeReqForArgs);
+    fence_use_count_at_commit_ = tracked_fence_.use_count();
+    return DrmAtomicStateManager::GetAtomicModeReqForArgs(args);
+  }
+
+  AtomicCommitResult FinishPendingRequest(
+      const AtomicCommitArgs& args,
+      std::unique_ptr<AtomicRequest> request) override {
+    auto res = DrmAtomicStateManager::FinishPendingRequest(args,
+                                                           std::move(request));
+    if (next_present_fence_) {
+      res.present_fence = std::move(next_present_fence_);
+    }
+    return res;
+  }
+
+  const std::vector<Step>& GetSteps() const {
+    return steps_;
+  }
+
+  int64_t GetFenceUseCountAtWaitLastFrame() const {
+    return fence_use_count_at_wait_last_frame_;
+  }
+
+  int64_t GetFenceUseCountAtCommit() const {
+    return fence_use_count_at_commit_;
+  }
+
+ private:
+  SharedFd next_present_fence_;
+  SharedFd tracked_fence_;
+  int64_t fence_use_count_at_wait_last_frame_ = 0;
+  int64_t fence_use_count_at_commit_ = 0;
+  std::vector<Step> steps_;
 };
 
 }  // namespace
@@ -2190,6 +2259,74 @@ TEST_F(HwcDisplayTest, CreateLayerToPlaneJoiningPlanSkipsSolidColorLayers) {
   EXPECT_EQ(validate_res.changed_layers.front().first, kSolidColorLayerId);
   EXPECT_EQ(validate_res.changed_layers.front().second,
             CompositionType::kClient);
+}
+
+TEST_F(HwcDisplayTest,
+       PresentStagedCompositionCallsWaitLastFrameBeforeWaitForPresentTime) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto spy_manager = std::make_unique<SpyAtomicStateManager>(pipeline.get());
+  SpyAtomicStateManager* spy_ptr = spy_manager.get();
+  pipeline->atomic_state_manager = std::move(spy_manager);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  display.get_layer(kLayerId)->SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  // Frame 1: Present with a valid out-fence so PresentStagedComposition stores
+  // a SharedFd copy in vsync_worker_->last_present_fence_.
+  SharedFd tracked_out_fence = std::make_shared<int>(-1);
+  spy_ptr->SetNextPresentFence(tracked_out_fence);
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd frame1_present_fence;
+  std::vector<HwcDisplay::ReleaseFence> frame1_release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt,
+                                               frame1_present_fence,
+                                               frame1_release_fences));
+  frame1_present_fence.reset();
+  frame1_release_fences.clear();
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  // Track tracked_out_fence in SpyAtomicStateManager: its use_count is 3
+  // (tracked_out_fence + spy_ptr->tracked_fence_ +
+  // vsync_worker_->last_present_fence_) until WaitForPresentTime() calls
+  // vsync_worker_->GetNextVsyncTimestamp() ->
+  // UpdateLastVsyncTimeWithPresentTime() which resets
+  // vsync_worker_->last_present_fence_ and drops use_count to 2.
+  constexpr int64_t kFenceUseCountBeforeWaitForPresentTime = 3;
+  constexpr int64_t kFenceUseCountAfterWaitForPresentTime = 2;
+  spy_ptr->SetTrackedFence(tracked_out_fence);
+  ASSERT_EQ(tracked_out_fence.use_count(),
+            kFenceUseCountBeforeWaitForPresentTime);
+
+  SharedFd frame2_present_fence;
+  std::vector<HwcDisplay::ReleaseFence> frame2_release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(/*desired_present_time=*/0,
+                                               frame2_present_fence,
+                                               frame2_release_fences));
+
+  const std::vector<SpyAtomicStateManager::Step> expected_steps = {
+      SpyAtomicStateManager::Step::kWaitLastFrame,
+      SpyAtomicStateManager::Step::kGetAtomicModeReqForArgs,
+  };
+  EXPECT_EQ(spy_ptr->GetSteps(), expected_steps);
+  EXPECT_EQ(spy_ptr->GetFenceUseCountAtWaitLastFrame(),
+            kFenceUseCountBeforeWaitForPresentTime);
+  EXPECT_EQ(spy_ptr->GetFenceUseCountAtCommit(),
+            kFenceUseCountAfterWaitForPresentTime);
 }
 
 TEST_F(HwcDisplayTest,
