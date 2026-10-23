@@ -72,6 +72,7 @@ constexpr uint8_t kExpectedRed = 128U;
 constexpr uint8_t kExpectedGreen = 64U;
 constexpr uint8_t kExpectedBlue = 191U;
 constexpr uint8_t kExpectedAlpha = 255U;
+constexpr float kTestBrightness = 0.65F;
 
 class MockSdmLayerBuilderIntf : public sdm::SDMDisplayLayerBuilderIntf {
  public:
@@ -539,6 +540,30 @@ TEST_F(SdmCompositionPlannerTest,
 
     (void)planner->ValidateDisplay(&display);
   }
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       UpdateLayerBrightnessAppliesWhenSetAndOmitsWhenUnset) {
+  HwcLayer layer(nullptr);
+  ON_CALL(display, GetOrderLayersByZPos())
+      .WillByDefault(Return(std::vector<const HwcLayer*>{&layer}));
+
+  HwcLayer::LayerProperties props{};
+  props.buffer = HwcLayer::Buffer{};
+  props.composition_type = CompositionType::kDevice;
+  layer.SetLayerProperties(props);
+
+  // SetLayerBrightness must only be called when LayerData::brightness is set.
+  EXPECT_CALL(layer_intf, SetLayerBrightness(_, _, _)).Times(0);
+  (void)planner->ValidateDisplay(&display);
+
+  props.brightness = kTestBrightness;
+  layer.SetLayerProperties(props);
+  EXPECT_CALL(layer_intf, SetLayerBrightness(kTestSdmDisplayId,
+                                             kFirstSdmLayerId, kTestBrightness))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  (void)planner->ValidateDisplay(&display);
 }
 
 }  // namespace
