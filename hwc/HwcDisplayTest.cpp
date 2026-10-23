@@ -57,6 +57,7 @@
 #include "hwc/HwcBufferCache.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
 #include "utils/fd.h"
 #include "utils/properties.h"
@@ -83,6 +84,14 @@ constexpr uint32_t kTestAnimWidth = 4;
 constexpr uint32_t kTestAnimHeight = 4;
 constexpr uint8_t kTestPixelByte = 0x55;
 constexpr int kVsyncObservationWindowMs = 50;
+constexpr size_t kCtmRScaleIdx = 0;
+constexpr size_t kCtmGScaleIdx = 5;
+constexpr size_t kCtmBScaleIdx = 10;
+constexpr float kCtmRScale = 0.8F;
+constexpr float kCtmGScale = 0.9F;
+constexpr float kCtmBScale = 0.7F;
+constexpr float kFloatTolerance = 1e-5F;
+constexpr uint32_t kColorPipelinePrimaryPlaneId = 980;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -1755,6 +1764,73 @@ TEST_F(HwcDisplayTest,
                                                         ColorMode::kSrgb,
                                                         ColorMode::kDisplayP3};
   EXPECT_EQ(forced_display.GetColorModes(), expected_forced_modes);
+}
+
+TEST_F(
+    HwcDisplayTest,
+    SetColorModeAndColorTransformMatrixLinearizeWithColorPipelineAndMultiplyBoostedIntent) {
+  ScopedTestProperty use_cp_prop("vendor.hwc.drm.enable_color_pipeline", "1");
+  ScopedTestProperty force_cm_prop("vendor.hwc.drm.force_color_mode", "-1");
+  ReloadProperties();
+
+  auto primary = std::make_unique<FakeDrmPlane>(*fake_device,
+                                                DRM_PLANE_TYPE_PRIMARY,
+                                                /*is_valid=*/true,
+                                                kColorPipelinePrimaryPlaneId);
+  FakeDrmPlane* primary_plane = primary.get();
+  primary_plane->SetHasColorPipeline(true);
+  fake_device->AddPlane(std::move(primary));
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->capabilities = std::make_unique<
+      FakeDisplayCapabilities>(std::nullopt, std::nullopt,
+                               /*hw_ctm_override=*/true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  EXPECT_TRUE(display.UseColorPipeline());
+
+  // Non-identity scaling matrix that ToLinearCtm transforms for kDisplayP3.
+  HalColorTransformMatrix client_ctm = kIdentityMatrix;
+  client_ctm[kCtmRScaleIdx] = kCtmRScale;
+  client_ctm[kCtmGScaleIdx] = kCtmGScale;
+  client_ctm[kCtmBScaleIdx] = kCtmBScale;
+
+  display.SetColorMode(ColorMode::kDisplayP3, kVendorBoostedRenderIntent);
+  display.SetColorTransformMatrix(client_ctm);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  display.get_layer(kLayerId)->SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& commit_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(commit_args.color_mode, ColorMode::kDisplayP3);
+  ASSERT_NE(commit_args.color_matrix, nullptr);
+
+  auto expected_linear_ctm = std::make_shared<HalColorTransformMatrix>(
+      ColorUtil::ToLinearCtm(client_ctm, ColorMode::kDisplayP3));
+  auto expected_combined = ColorUtil::Multiply(GetBoostedCTMPtr(),
+                                               expected_linear_ctm);
+  for (size_t i = 0; i < kIdentityMatrix.size(); ++i) {
+    EXPECT_NEAR((*commit_args.color_matrix)[i], (*expected_combined)[i],
+                kFloatTolerance);
+  }
 }
 
 TEST_F(HwcDisplayTest,
