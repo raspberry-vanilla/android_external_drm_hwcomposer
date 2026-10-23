@@ -21,9 +21,12 @@
 #include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -103,6 +106,14 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
     return nonblock_calls_;
   }
 
+  size_t GetRetrySleepCount() const {
+    return retry_sleep_count_;
+  }
+
+  uint32_t GetMaxRetrySleepUsec() const {
+    return max_retry_sleep_usec_;
+  }
+
  protected:
   int AtomicCommit(int fd, drmModeAtomicReqPtr req, uint32_t flags,
                    void* user_data) const override {
@@ -117,10 +128,17 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
     return err;
   }
 
+  void RetrySleep(uint32_t usec) const override {
+    ++retry_sleep_count_;
+    max_retry_sleep_usec_ = std::max(max_retry_sleep_usec_, usec);
+  }
+
  private:
   CommitHandler handler_;
   mutable size_t total_calls_ = 0;
   mutable size_t nonblock_calls_ = 0;
+  mutable size_t retry_sleep_count_ = 0;
+  mutable uint32_t max_retry_sleep_usec_ = 0;
 };
 
 class TestDrmDevice : public FakeDrmDevice {
@@ -952,6 +970,57 @@ TEST_F(DrmAtomicStateManagerTest,
             kRecreatedBt2020RgbEnumValue);
   EXPECT_EQ(mst_conn->GetHdrOutputMetadataProperty().GetId(),
             kRecreatedHdrMetadataPropId);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkExitsWithFailureAfterMaxEbusyRetries) {
+  constexpr size_t kExpectedMaxBusyRetries = 9375U;
+  constexpr int kUnexpectedExtraRetryExitCode = 2;
+
+  // Stop the fixture's background thread before forking in EXPECT_EXIT.
+  state_manager.reset();
+  RecordingAtomicStateManager threadless_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = threadless_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  threadless_manager.FinishPendingRequest(modeset0, std::move(req0));
+
+  const FakeKernelDrmAtomicCommitSink* sink_ptr = nullptr;
+  FakeKernelDrmAtomicCommitSink always_ebusy_sink(
+      [&sink_ptr](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+                  void* /*user_data*/, size_t attempt) -> int {
+        // Fail fast with a distinct exit code if CommitFrame exceeds
+        // kMaxBusyRetries (9375).
+        if (attempt > kExpectedMaxBusyRetries) {
+          std::_Exit(kUnexpectedExtraRetryExitCode);
+        }
+        if (attempt == kExpectedMaxBusyRetries) {
+          std::fprintf(stderr,
+                       "ebusy_exhausted_at_attempt=%zu,sleep_count=%zu,"
+                       "max_sleep_usec=%u\n",
+                       attempt, sink_ptr->GetRetrySleepCount(),
+                       sink_ptr->GetMaxRetrySleepUsec());
+        }
+        errno = EBUSY;
+        return -EBUSY;
+      });
+  sink_ptr = &always_ebusy_sink;
+  AtomicCommitSink& sink = always_ebusy_sink;
+
+  AtomicCommitArgs nonblock_args{};
+  nonblock_args.blocking = false;
+  nonblock_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  EXPECT_EXIT(sink.ExecuteAtomicCommit({{&threadless_manager, nonblock_args}}),
+              ::testing::ExitedWithCode(EXIT_FAILURE),
+              "ebusy_exhausted_at_attempt=9375,sleep_count=9375,max_sleep_usec="
+              "3200");
 }
 
 }  // namespace android::drm_hwcomposer
