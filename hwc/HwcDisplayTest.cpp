@@ -102,6 +102,10 @@ constexpr uint32_t kCursorTestCursorPlaneId = 993;
 constexpr float kNightLightRScale = 0.85F;
 constexpr float kNightLightGScale = 0.75F;
 constexpr float kNightLightBScale = 0.55F;
+constexpr float kSolidRed = 0.5F;
+constexpr float kSolidGreen = 0.25F;
+constexpr float kSolidBlue = 0.75F;
+constexpr float kSolidAlpha = 1.0F;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -2099,6 +2103,65 @@ TEST_F(
   no_cp_display.SetPipeline(pipeline);
   EXPECT_FALSE(no_cp_display.UseColorPipeline());
   EXPECT_FALSE(no_cp_display.CursorPlaneNeedsColorPipeline(*cursor_layer));
+}
+
+TEST_F(HwcDisplayTest, CreateLayerToPlaneJoiningPlanSkipsSolidColorLayers) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  // Create a kSolidColor layer (no buffer/fb) alongside a kDevice layer.
+  constexpr ILayerId kSolidColorLayerId = 1;
+  constexpr ILayerId kDeviceLayerId = 2;
+  ASSERT_TRUE(display.CreateLayer(kSolidColorLayerId));
+  ASSERT_TRUE(display.CreateLayer(kDeviceLayerId));
+
+  HwcLayer::LayerProperties solid_props{};
+  solid_props.composition_type = CompositionType::kSolidColor;
+  solid_props.solid_color = SolidColor{kSolidRed, kSolidGreen, kSolidBlue,
+                                       kSolidAlpha};
+  solid_props.display_frame = DstRectInfo{
+      .i_rect = IRect{0, 0, kFhdWidthSigned, kFhdHeightSigned}};
+  solid_props.z_order = 0;
+  display.get_layer(kSolidColorLayerId)->SetLayerProperties(solid_props);
+
+  auto device_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1));
+  device_props.z_order = 1;
+  display.get_layer(kDeviceLayerId)->SetLayerProperties(device_props);
+
+  // 1. Direct present without validation populates composition_types with
+  // CompositionType::kSolidColor; CreateLayerToPlaneJoiningPlan must skip the
+  // bufferless kSolidColor layer and commit only the valid kDevice layer.
+  display.get_layer(kSolidColorLayerId)
+      ->SetValidatedType(CompositionType::kSolidColor);
+  display.get_layer(kDeviceLayerId)->SetValidatedType(CompositionType::kDevice);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& commit_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(commit_args.composition, nullptr);
+  EXPECT_EQ(commit_args.composition->plan.size(), 1U);
+
+  // 2. ValidateStagedComposition marks the kSolidColor layer as kClient.
+  auto validate_res = display.ValidateStagedComposition();
+  ASSERT_FALSE(validate_res.changed_layers.empty());
+  EXPECT_EQ(validate_res.changed_layers.front().first, kSolidColorLayerId);
+  EXPECT_EQ(validate_res.changed_layers.front().second,
+            CompositionType::kClient);
 }
 
 TEST_F(HwcDisplayTest,
