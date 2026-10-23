@@ -60,6 +60,10 @@ int DrmAtomicCommitSink::AtomicCommit(int fd, drmModeAtomicReqPtr req,
   return err;
 }
 
+void DrmAtomicCommitSink::RetrySleep(uint32_t usec) const {
+  usleep(usec);
+}
+
 CommitStatus DrmAtomicCommitSink::CommitFrame(
     const std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> &args,
     bool test_only,
@@ -157,7 +161,7 @@ CommitStatus DrmAtomicCommitSink::CommitFrame(
         ATRACE_NAME("EbusyRetryWait");
         // 200, 400, 800, 1600, 3200 us
         // Max retry duration is 3200 us after the 4th retry.
-        usleep(kInitialRetryUs << std::min(retry, 4));
+        RetrySleep(kInitialRetryUs << std::min(retry, 4));
       }
       {
         ATRACE_NAME("EbusyRetryCommit");

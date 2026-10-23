@@ -41,6 +41,9 @@ class DrmAtomicCommitSink : public AtomicCommitSink {
  protected:
   virtual int AtomicCommit(int fd, drmModeAtomicReqPtr req, uint32_t flags,
                            void* user_data) const;
+  // Virtual seam allowing unit tests to intercept EBUSY backoff sleeps
+  // without waiting 30 seconds of wall-clock time.
+  virtual void RetrySleep(uint32_t usec) const;
 
  private:
   CommitStatus CommitFrame(
