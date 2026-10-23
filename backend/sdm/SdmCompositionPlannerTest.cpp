@@ -274,5 +274,63 @@ TEST_F(SdmCompositionPlannerTest,
             CompositionPlanner::FlattenReason::kNone);
 }
 
+TEST_F(SdmCompositionPlannerTest,
+       ValidateFallsBackToClientCompositionWhenCommitOrPrepareFails) {
+  const IRect full_frame{0, 0, kTestLayerWidth, kTestLayerHeight};
+  HwcLayer layer1 = CompositorTestUtils::CreateLayer(&display, full_frame, 0,
+                                                     CompositionType::kDevice);
+  HwcLayer layer2 = CompositorTestUtils::CreateLayer(&display, full_frame, 1,
+                                                     CompositionType::kDevice);
+  std::vector<const HwcLayer*> layers = {&layer1, &layer2};
+  ON_CALL(display, GetOrderLayersByZPos()).WillByDefault(Return(layers));
+
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kFirstSdmLayerId,
+                                      kSdmCompositionDevice))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kSecondSdmLayerId,
+                                      kSdmCompositionDevice))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kFirstSdmLayerId,
+                                      kSdmCompositionClient))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(layer_intf,
+              SetLayerCompositionType(kTestSdmDisplayId, kSecondSdmLayerId,
+                                      kSdmCompositionClient))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_CALL(draw_cycle_intf, LayerStackUpdated(kTestSdmDisplayId))
+      .Times(2)
+      .WillRepeatedly(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf,
+              CommitOrPrepare(kTestSdmDisplayId, true, _, _, _, _))
+      .Times(2)
+      .WillOnce(Return(sdm::kErrorNotSupported))
+      .WillOnce(Return(sdm::kErrorNeedsCommit));
+  EXPECT_CALL(draw_cycle_intf, AcceptDisplayChanges(kTestSdmDisplayId))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  auto result = planner->ValidateDisplay(&display);
+  EXPECT_EQ(result.composition.flatten_reason,
+            CompositionPlanner::FlattenReason::kValidateFailed);
+  ASSERT_EQ(result.composition.composition_types.size(), 2U);
+  EXPECT_EQ(result.composition.composition_types[&layer1],
+            CompositionType::kClient);
+  EXPECT_EQ(result.composition.composition_types[&layer2],
+            CompositionType::kClient);
+  ASSERT_NE(result.composition.composition_plan, nullptr);
+  EXPECT_EQ(result.composition.composition_plan->plan.size(), 1U);
+  ASSERT_TRUE(result.composition.composition_plan->client_z_order.has_value());
+  EXPECT_EQ(result.composition.composition_plan->client_z_order.value_or(-1),
+            0);
+}
+
 }  // namespace
 }  // namespace android::drm_hwcomposer
