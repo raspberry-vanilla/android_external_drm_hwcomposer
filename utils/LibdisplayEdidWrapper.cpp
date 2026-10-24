@@ -16,6 +16,8 @@
 
 #if HAS_LIBDISPLAY_INFO
 extern "C" {
+#include <libdisplay-info/cta.h>
+#include <libdisplay-info/displayid.h>
 #include <libdisplay-info/edid.h>
 #include <libdisplay-info/info.h>
 }
@@ -38,6 +40,7 @@ enum class Hdr : int32_t {
 }  // namespace aidl::android::hardware::graphics::common
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -131,18 +134,56 @@ void LibdisplayEdidWrapper::GetColorModes(std::vector<ColorMode> &color_modes) {
 }
 
 auto LibdisplayEdidWrapper::GetBoundsMm() -> std::pair<int32_t, int32_t> {
-  const auto edid = di_info_get_edid(info_);
-  const auto detailed_timing_defs = di_edid_get_detailed_timing_defs(edid);
-  const auto dtd = detailed_timing_defs[0];
-  if (dtd == nullptr || dtd->horiz_image_mm == 0 || dtd->vert_image_mm == 0) {
-    // try to fallback on display size if no dtd.
-    // However since edid screen size are vastly unreliable only provide a valid
-    // width to avoid invalid dpi computation.
-    const auto screen_size = di_edid_get_screen_size(edid);
-    return {screen_size->width_cm * 10, -1};
+  const auto *edid = di_info_get_edid(info_);
+  if (edid == nullptr) {
+    return {-1, -1};
   }
 
-  return {dtd->horiz_image_mm, dtd->vert_image_mm};
+  const auto *const *detailed_timing_defs = di_edid_get_detailed_timing_defs(
+      edid);
+  for (size_t i = 0; detailed_timing_defs[i] != nullptr; ++i) {
+    const auto *dtd = detailed_timing_defs[i];
+    if (dtd->horiz_image_mm > 0 && dtd->vert_image_mm > 0) {
+      return {dtd->horiz_image_mm, dtd->vert_image_mm};
+    }
+  }
+
+  const auto *const *exts = di_edid_get_extensions(edid);
+  for (size_t i = 0; exts[i] != nullptr; ++i) {
+    const auto *cta = di_edid_ext_get_cta(exts[i]);
+    if (cta != nullptr) {
+      const auto *const *cta_dtds = di_edid_cta_get_detailed_timing_defs(cta);
+      for (size_t j = 0; cta_dtds[j] != nullptr; ++j) {
+        if (cta_dtds[j]->horiz_image_mm > 0 && cta_dtds[j]->vert_image_mm > 0) {
+          return {cta_dtds[j]->horiz_image_mm, cta_dtds[j]->vert_image_mm};
+        }
+      }
+    }
+    const auto *did = di_edid_ext_get_displayid(exts[i]);
+    if (did != nullptr) {
+      const auto *const *blocks = di_displayid_get_data_blocks(did);
+      for (size_t j = 0; blocks[j] != nullptr; ++j) {
+        const auto *params = di_displayid_data_block_get_display_params(
+            blocks[j]);
+        if (params != nullptr && params->horiz_image_mm > 0 &&
+            params->vert_image_mm > 0) {
+          return {static_cast<int32_t>(std::lround(params->horiz_image_mm)),
+                  static_cast<int32_t>(std::lround(params->vert_image_mm))};
+        }
+      }
+    }
+  }
+
+  // Try to fallback on display size if no DTD or extension block specifies it.
+  // However since EDID screen size is vastly unreliable only provide a valid
+  // width to avoid invalid DPI computation. When width_cm is also 0 (e.g.
+  // projectors or undefined physical size per VESA EDID 1.4 section 3.6.2),
+  // return {0, 0} rather than mixing a 0 width with an error (-1) height.
+  const auto *screen_size = di_edid_get_screen_size(edid);
+  if (screen_size == nullptr || screen_size->width_cm <= 0) {
+    return {0, 0};
+  }
+  return {screen_size->width_cm * 10, -1};
 }
 
 EdidWrapper::VendorProductInfo LibdisplayEdidWrapper::GetVendorProductInfo()

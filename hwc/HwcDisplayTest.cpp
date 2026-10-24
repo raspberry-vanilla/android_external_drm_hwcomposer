@@ -308,6 +308,11 @@ constexpr size_t kDtdHeightMmOffset = 13;
 constexpr size_t kDtdHighMmOffset = 14;
 constexpr size_t kDtdFlagsOffset = 17;
 constexpr size_t kEdidChecksumOffset = 127;
+constexpr size_t kEdidExtensionCountOffset = 126;
+constexpr uint8_t kCtaExtensionTag = 0x02;
+constexpr uint8_t kCtaExtensionRevision = 0x03;
+constexpr size_t kCtaDtdOffsetByte = 2;
+constexpr size_t kCtaFirstDtdOffset = 4;
 constexpr uint8_t kDummyDescriptorTag = 0x10;
 constexpr uint8_t kDigitalVideoInputDef = 0x80;
 constexpr uint8_t kDefaultGammaByte = 120;
@@ -353,8 +358,8 @@ std::vector<uint8_t> MakeEdidWithBounds(uint16_t horiz_mm, uint16_t vert_mm,
   dtd[11] = 0x00;
   dtd[kDtdWidthMmOffset] = static_cast<uint8_t>(horiz_mm & 0xFFU);
   dtd[kDtdHeightMmOffset] = static_cast<uint8_t>(vert_mm & 0xFFU);
-  dtd[kDtdHighMmOffset] = static_cast<uint8_t>((((horiz_mm >> 8U) & 0x0FU) << 4U) |
-                                               ((vert_mm >> 8U) & 0x0FU));
+  dtd[kDtdHighMmOffset] = static_cast<uint8_t>(
+      (((horiz_mm >> 8U) & 0x0FU) << 4U) | ((vert_mm >> 8U) & 0x0FU));
   dtd[15] = 0x00;
   dtd[16] = 0x00;
   dtd[kDtdFlagsOffset] = 0x1E;
@@ -369,6 +374,57 @@ std::vector<uint8_t> MakeEdidWithBounds(uint16_t horiz_mm, uint16_t vert_mm,
     sum = static_cast<uint8_t>(sum + edid[i]);
   }
   edid[kEdidChecksumOffset] = static_cast<uint8_t>(0U - sum);
+  return edid;
+}
+std::vector<uint8_t> MakeEdidWithCtaExtensionBounds(
+    uint16_t base_horiz_mm, uint16_t base_vert_mm, uint8_t width_cm,
+    uint8_t height_cm, uint16_t cta_horiz_mm, uint16_t cta_vert_mm) {
+  std::vector<uint8_t> edid = MakeEdidWithBounds(base_horiz_mm, base_vert_mm,
+                                                 width_cm, height_cm);
+  // Mark 1 extension block in the base EDID and recompute base checksum.
+  edid[kEdidExtensionCountOffset] = 1;
+  uint8_t base_sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    base_sum = static_cast<uint8_t>(base_sum + edid[i]);
+  }
+  edid[kEdidChecksumOffset] = static_cast<uint8_t>(0U - base_sum);
+
+  // Append a 128-byte CTA-861 (tag 0x02, revision 3) extension block whose DTD
+  // starts at offset 4.
+  std::vector<uint8_t> cta(kEdidSize, 0);
+  cta[0] = kCtaExtensionTag;
+  cta[1] = kCtaExtensionRevision;
+  cta[kCtaDtdOffsetByte] = static_cast<uint8_t>(kCtaFirstDtdOffset);
+  cta[3] = 0x00;
+
+  uint8_t* dtd = &cta[kCtaFirstDtdOffset];
+  dtd[0] = 0x02;
+  dtd[1] = 0x3A;
+  dtd[2] = 0x80;
+  dtd[3] = 0x18;
+  dtd[4] = 0x71;
+  dtd[5] = 0x38;
+  dtd[6] = 0x2D;
+  dtd[7] = 0x40;
+  dtd[8] = 0x58;
+  dtd[9] = 0x2C;
+  dtd[10] = 0x45;
+  dtd[11] = 0x00;
+  dtd[kDtdWidthMmOffset] = static_cast<uint8_t>(cta_horiz_mm & 0xFFU);
+  dtd[kDtdHeightMmOffset] = static_cast<uint8_t>(cta_vert_mm & 0xFFU);
+  dtd[kDtdHighMmOffset] = static_cast<uint8_t>(
+      (((cta_horiz_mm >> 8U) & 0x0FU) << 4U) | ((cta_vert_mm >> 8U) & 0x0FU));
+  dtd[15] = 0x00;
+  dtd[16] = 0x00;
+  dtd[kDtdFlagsOffset] = 0x1E;
+
+  uint8_t cta_sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    cta_sum = static_cast<uint8_t>(cta_sum + cta[i]);
+  }
+  cta[kEdidChecksumOffset] = static_cast<uint8_t>(0U - cta_sum);
+
+  edid.insert(edid.end(), cta.begin(), cta.end());
   return edid;
 }
 #endif
@@ -3091,6 +3147,125 @@ TEST_F(HwcDisplayTest,
   ASSERT_TRUE(display.SetPipeline(pipeline_without_edid));
   EXPECT_EQ(display.GetDisplayBoundsMm(),
             std::make_pair(static_cast<int32_t>(kFakeConnectorMmWidth), -1));
+}
+
+TEST_F(HwcDisplayTest, GetDisplayBoundsMmReturnsDtdDimensionsWhenPresent) {
+  constexpr uint16_t kDtdHorizMm = 600;
+  constexpr uint16_t kDtdVertMm = 340;
+  constexpr uint8_t kScreenWidthCm = 60;
+  constexpr uint8_t kScreenHeightCm = 34;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(kDtdHorizMm, kDtdVertMm,
+                                                kScreenWidthCm,
+                                                kScreenHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kDtdHorizMm}, int32_t{kDtdVertMm}));
+}
+
+TEST_F(HwcDisplayTest,
+       GetDisplayBoundsMmFallsBackToCtaExtensionDtdWhenBaseDtdSizeIsZero) {
+  constexpr uint16_t kCtaHorizMm = 700;
+  constexpr uint16_t kCtaVertMm = 390;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(
+      MakeEdidWithCtaExtensionBounds(/*base_horiz_mm=*/0, /*base_vert_mm=*/0,
+                                     /*width_cm=*/0, /*height_cm=*/0,
+                                     kCtaHorizMm, kCtaVertMm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kCtaHorizMm}, int32_t{kCtaVertMm}));
+}
+
+TEST_F(HwcDisplayTest,
+       GetDisplayBoundsMmFallsBackToScreenSizeWidthWhenDtdSizeIsZero) {
+  constexpr uint8_t kScreenWidthCm = 52;
+  constexpr uint8_t kScreenHeightCm = 29;
+  constexpr int32_t kExpectedWidthMm = 520;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                kScreenWidthCm,
+                                                kScreenHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(), std::make_pair(kExpectedWidthMm, -1));
+}
+
+TEST_F(
+    HwcDisplayTest,
+    GetDisplayBoundsMmReturnsZeroPairWhenDtdAndScreenSizeAndConnectorAreZero) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                /*width_cm=*/0,
+                                                /*height_cm=*/0));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(), std::make_pair(0, 0));
+}
+
+TEST_F(
+    HwcDisplayTest,
+    GetDisplayBoundsMmFallsBackToConnectorMmWidthWhenEdidIsZeroButConnectorHasSize) {
+  constexpr uint32_t kConnectorWidthMm = 480;
+  constexpr uint32_t kConnectorHeightMm = 270;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(kConnectorWidthMm, kConnectorHeightMm);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                /*width_cm=*/0,
+                                                /*height_cm=*/0));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kConnectorWidthMm), -1));
 }
 #endif
 

@@ -604,6 +604,12 @@ auto HwcDisplay::GetDisplayBoundsMm() const -> std::pair<int32_t, int32_t> {
     if (bounds.first > 0 || bounds.second > 0) {
       return bounds;
     }
+    if (bounds.first == 0 && bounds.second == 0) {
+      if (configs_.mm_width == 0) {
+        return bounds;
+      }
+      return {configs_.mm_width, -1};
+    }
   }
 
   ALOGE("Failed to get display bounds for d=%d\n", int(handle_));
