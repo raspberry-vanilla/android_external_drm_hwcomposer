@@ -112,14 +112,12 @@ DEPS := $(patsubst %.cpp,$(OUT_DIR)/%.d,$(BUILD_FILES))
 
 build: $(OBJ)
 
+# Emit .d header dependency files inline with object compilation (-MMD -MP) so
+# make does not trigger a cold 116-file preprocessor pass before starting jobs.
 $(OUT_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CC $<"
-	@$(CLANG) $< $(CXXARGS) -c -o $@
-
-$(OUT_DIR)/%.d: $(SRC_DIR)/%.cpp
-	@mkdir -p $(dir $@)
-	@$(CLANG) $(CXXARGS) $< -MM -MT $(OUT_DIR)/$(patsubst %.cpp,%.o,$<) -o $@
+	@$(CLANG) $< $(CXXARGS) -MMD -MP -c -o $@
 
 # TIDY
 TIDY_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -not -path '*/backend/sdm/stubs/*' \( -path '*.cpp' -o -path '*.h' \))
