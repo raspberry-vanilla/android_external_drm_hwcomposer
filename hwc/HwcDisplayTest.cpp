@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include <aidl/android/hardware/graphics/common/Hdr.h>  // IWYU pragma: keep
 #include <android-base/file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
@@ -285,6 +286,92 @@ class SpyAtomicStateManager : public DrmAtomicStateManager {
   int64_t fence_use_count_at_commit_ = 0;
   std::vector<Step> steps_;
 };
+
+#if HAS_LIBDISPLAY_INFO
+constexpr size_t kEdidSize = 128;
+constexpr size_t kEdidHeaderByteCount = 6;
+constexpr size_t kEdidManufacturerIdOffset = 8;
+constexpr size_t kEdidProductCodeOffset = 10;
+constexpr size_t kEdidWeekOfManufactureOffset = 16;
+constexpr size_t kEdidYearOfManufactureOffset = 17;
+constexpr size_t kEdidVersionOffset = 18;
+constexpr size_t kEdidRevisionOffset = 19;
+constexpr size_t kEdidVideoInputDefOffset = 20;
+constexpr size_t kEdidScreenSizeOffset = 0x15;
+constexpr size_t kEdidScreenHeightCmOffset = 22;
+constexpr size_t kEdidDisplayGammaOffset = 23;
+constexpr size_t kEdidFeatureSupportOffset = 24;
+constexpr size_t kEdidChromaticityOffset = 25;
+constexpr size_t kEdidFirstDtdOffset = 0x36;
+constexpr size_t kDtdWidthMmOffset = 12;
+constexpr size_t kDtdHeightMmOffset = 13;
+constexpr size_t kDtdHighMmOffset = 14;
+constexpr size_t kDtdFlagsOffset = 17;
+constexpr size_t kEdidChecksumOffset = 127;
+constexpr uint8_t kDummyDescriptorTag = 0x10;
+constexpr uint8_t kDigitalVideoInputDef = 0x80;
+constexpr uint8_t kDefaultGammaByte = 120;
+constexpr uint8_t kDefaultFeatureByte = 0x02;
+
+std::vector<uint8_t> MakeEdidWithBounds(uint16_t horiz_mm, uint16_t vert_mm,
+                                        uint8_t width_cm, uint8_t height_cm) {
+  std::vector<uint8_t> edid(kEdidSize, 0);
+  for (size_t i = 1; i <= kEdidHeaderByteCount; ++i) {
+    edid[i] = 0xFF;
+  }
+  edid[kEdidManufacturerIdOffset] = 0x1E;
+  edid[kEdidManufacturerIdOffset + 1] = 0x6D;
+  edid[kEdidProductCodeOffset] = 0x01;
+  edid[kEdidProductCodeOffset + 1] = 0x00;
+  edid[kEdidWeekOfManufactureOffset] = 1;
+  edid[kEdidYearOfManufactureOffset] = 34;
+  edid[kEdidVersionOffset] = 1;
+  edid[kEdidRevisionOffset] = 4;
+  edid[kEdidVideoInputDefOffset] = kDigitalVideoInputDef;
+  edid[kEdidScreenSizeOffset] = width_cm;
+  edid[kEdidScreenHeightCmOffset] = height_cm;
+  edid[kEdidDisplayGammaOffset] = kDefaultGammaByte;
+  edid[kEdidFeatureSupportOffset] = kDefaultFeatureByte;
+  const uint8_t kSrgbChromaticity[10] = {0xEE, 0x91, 0xA3, 0x54, 0x4C,
+                                         0x99, 0x26, 0x0F, 0x50, 0x54};
+  std::memcpy(&edid[kEdidChromaticityOffset], kSrgbChromaticity,
+              sizeof(kSrgbChromaticity));
+
+  // DTD 0 at byte 54: 1920x1080 @ 60Hz (148.50 MHz pixel clock = 14850).
+  uint8_t* dtd = &edid[kEdidFirstDtdOffset];
+  dtd[0] = 0x02;
+  dtd[1] = 0x3A;
+  dtd[2] = 0x80;
+  dtd[3] = 0x18;
+  dtd[4] = 0x71;
+  dtd[5] = 0x38;
+  dtd[6] = 0x2D;
+  dtd[7] = 0x40;
+  dtd[8] = 0x58;
+  dtd[9] = 0x2C;
+  dtd[10] = 0x45;
+  dtd[11] = 0x00;
+  dtd[kDtdWidthMmOffset] = static_cast<uint8_t>(horiz_mm & 0xFFU);
+  dtd[kDtdHeightMmOffset] = static_cast<uint8_t>(vert_mm & 0xFFU);
+  dtd[kDtdHighMmOffset] = static_cast<uint8_t>((((horiz_mm >> 8U) & 0x0FU) << 4U) |
+                                               ((vert_mm >> 8U) & 0x0FU));
+  dtd[15] = 0x00;
+  dtd[16] = 0x00;
+  dtd[kDtdFlagsOffset] = 0x1E;
+
+  // Descriptors 1-3: Dummy descriptors (0x00 0x00 0x00 0x10 0x00).
+  for (size_t desc_offset : {72U, 90U, 108U}) {
+    edid[desc_offset + 3] = kDummyDescriptorTag;
+  }
+
+  uint8_t sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    sum = static_cast<uint8_t>(sum + edid[i]);
+  }
+  edid[kEdidChecksumOffset] = static_cast<uint8_t>(0U - sum);
+  return edid;
+}
+#endif
 
 }  // namespace
 
@@ -2890,5 +2977,121 @@ TEST_F(HwcDisplayTest,
   EXPECT_EQ(sink->GetCommitHistory().back().front().color_mode,
             std::optional<ColorMode>(ColorMode::kNative));
 }
+
+TEST_F(HwcDisplayTest, NullEdidWrapperIsHandledGracefullyAcrossDisplayQueries) {
+  auto* ext_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetColorspacePropertySupported(true);
+  ext_conn->SetEdidBlobData({});
+  std::shared_ptr<DrmDisplayPipeline>
+      ext_pipeline = fake_device->GetBackend().CreatePipeline(*ext_conn);
+  ASSERT_NE(ext_pipeline, nullptr);
+
+  HwcDisplay ext_display(kPrimaryDisplay + 1, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(ext_display.SetPipeline(ext_pipeline));
+  EXPECT_EQ(ext_display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kFakeConnectorMmWidth), -1));
+  EXPECT_EQ(ext_display.GetColorModes(),
+            std::vector<ColorMode>{ColorMode::kNative});
+  EXPECT_FLOAT_EQ(ext_display.GetMaxLuminance(), 500.0F);
+
+  // Also exercise an HDR-capable internal pipeline with forced_color_mode_ set
+  // and a null EdidWrapper so InitWcgSupported(), InitHdrSupported(),
+  // SetOutputType(OutputType::kSystem), SetHdrOutputMetadata(), and
+  // GetHdrCapabilities() all reach their GetEdid() null guards.
+  ScopedTestProperty non_existent_dev("vendor.hwc.drm.device",
+                                      "/nonexistent_drm_device");
+  ScopedTestProperty
+      enable_color_pipeline("vendor.hwc.drm.enable_color_pipeline", "1");
+  ScopedTestProperty persistent_hdr("vendor.hwc.drm.persistent_hdr", "1");
+  ScopedTestProperty force_color_mode("vendor.hwc.drm.force_color_mode", "9");
+  ScopedTestProperty bootanim_exit("service.bootanim.exit", "1");
+  hwc.GetResMan().Init();
+
+  const auto resources = fake_device->AddPipelineResourcesTyped(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  auto* int_conn = resources.connector;
+  ASSERT_NE(int_conn, nullptr);
+  int_conn->SetColorspacePropertySupported(true);
+  int_conn->SetHdrOutputMetadataPropertySupported(true);
+  int_conn->SetEdidBlobData({});
+
+  auto* fake_crtc = resources.crtc;
+  ASSERT_NE(fake_crtc, nullptr);
+  fake_crtc->SetCtmPropertySupported(true);
+  fake_crtc->SetGammaLutPropertiesSupported(true);
+
+  auto* fake_plane = resources.primary_plane;
+  ASSERT_NE(fake_plane, nullptr);
+  fake_plane->SetHasColorPipeline(true);
+
+  std::shared_ptr<DrmDisplayPipeline>
+      int_pipeline = fake_device->GetBackend().CreatePipeline(*int_conn);
+  ASSERT_NE(int_pipeline, nullptr);
+
+  HwcDisplay int_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(int_display.SetPipeline(int_pipeline));
+
+  std::vector<ui::Hdr> hdr_types{ui::Hdr::HLG};
+  constexpr float kUnsetLuminance = -1.0F;
+  float max_lum = kUnsetLuminance;
+  float max_avg_lum = kUnsetLuminance;
+  float min_lum = kUnsetLuminance;
+  int_display.GetHdrCapabilities(&hdr_types, &max_lum, &max_avg_lum, &min_lum);
+  EXPECT_EQ(hdr_types, std::vector<ui::Hdr>{ui::Hdr::HDR10});
+  EXPECT_FLOAT_EQ(max_lum, kUnsetLuminance);
+  EXPECT_FLOAT_EQ(max_avg_lum, kUnsetLuminance);
+  EXPECT_FLOAT_EQ(min_lum, kUnsetLuminance);
+
+  hwc.GetResMan().DeInit();
+}
+
+#if HAS_LIBDISPLAY_INFO
+TEST_F(HwcDisplayTest,
+       DeinitResetsEdidWrapperWhenSwitchingToConnectorWithoutEdid) {
+  constexpr uint16_t kEdidHorizMm = 600;
+  constexpr uint16_t kEdidVertMm = 340;
+  constexpr uint8_t kEdidWidthCm = 60;
+  constexpr uint8_t kEdidHeightCm = 34;
+
+  auto* conn_with_edid = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(conn_with_edid, nullptr);
+  conn_with_edid->SetEdidBlobData(MakeEdidWithBounds(kEdidHorizMm, kEdidVertMm,
+                                                     kEdidWidthCm,
+                                                     kEdidHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline_with_edid = fake_device->GetBackend().CreatePipeline(
+          *conn_with_edid);
+  ASSERT_NE(pipeline_with_edid, nullptr);
+
+  auto* conn_without_edid = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(conn_without_edid, nullptr);
+  conn_without_edid->SetEdidBlobData({});
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline_without_edid = fake_device->GetBackend().CreatePipeline(
+          *conn_without_edid);
+  ASSERT_NE(pipeline_without_edid, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline_with_edid));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kEdidHorizMm}, int32_t{kEdidVertMm}));
+
+  ASSERT_TRUE(display.SetPipeline(pipeline_without_edid));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kFakeConnectorMmWidth), -1));
+}
+#endif
 
 }  // namespace android::drm_hwcomposer
