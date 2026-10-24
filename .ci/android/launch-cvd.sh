@@ -18,11 +18,18 @@ mkdir -p "${RESULTS_DIR}"
 function my_atexit()
 {
   # shellcheck disable=SC2317
+  local status=$?
+  # shellcheck disable=SC2317
+  if [ "$status" -eq 124 ]; then
+    EXIT_CODE=124
+  fi
+  # shellcheck disable=SC2317
   cp /cuttlefish/cuttlefish/instances/cvd-1/logs/logcat "${RESULTS_DIR}" || true
   # shellcheck disable=SC2317
   cp /cuttlefish/cuttlefish/instances/cvd-1/kernel.log "${RESULTS_DIR}" || true
   # shellcheck disable=SC2317
   cp /cuttlefish/cuttlefish/instances/cvd-1/logs/launcher.log "${RESULTS_DIR}" || true
+  # shellcheck disable=SC2317
   exit $EXIT_CODE
 }
 
@@ -162,8 +169,14 @@ HOME=/cuttlefish timeout -k 30s 15m launch_cvd \
   -cpus="${FDO_CI_CONCURRENT:-4}" \
   -extra_bootconfig_args="androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer"
 
-while [ "$(adb shell dumpsys -l 2>/dev/null | grep SurfaceFlinger)" = "" ] ; do sleep 1; done
-while [ "$(adb shell dumpsys -l 2>/dev/null | grep package)" = "" ] ; do sleep 1; done
+# Wait for SurfaceFlinger, PackageManagerService, and sys.boot_completed=1 so
+# apexd is ready to accept --force-non-staged APEX installs without racing
+# package_native startup.
+timeout -k 10s 5m bash -c '
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep SurfaceFlinger)" = "" ]; do sleep 1; done
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep -E "^  package[[:space:]]*$")" = "" ]; do sleep 1; done
+  until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 1; done
+'
 adb shell dumpsys SurfaceFlinger | grep GLES
 
 adb logcat -d | grep -i vkms
@@ -234,13 +247,16 @@ mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
 mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex \
   /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
 
-safe_adb -t 60 install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+safe_adb -t 90 install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
 
-# Reboot and wait for drmhwc to start up again with new apex
+# Reboot and wait for drmhwc to start up again with new apex. Bound
+# wait-for-device with a 3-minute timeout so a wedged Cuttlefish vsock/adbd
+# fails fast and triggers automatic job retry instead of stalling for 60m.
 adb logcat -c
 adb reboot
 sleep 2
-adb wait-for-device devices
+timeout -k 10s 3m adb wait-for-device
+adb devices
 fdo_log_section_end push_new_apex
 
 # Define helper to wait for critical services with a timeout
@@ -261,9 +277,12 @@ function wait_for_services() {
   while [ "$(adb shell dumpsys -l 2>/dev/null | grep logcat)" = "" ] ; do sleep 1; done
   echo "logcat ok"
 
-  # package manager is needed before CTS can install APKs
-  while [ "$(adb shell dumpsys -l 2>/dev/null | grep package)" = "" ]; do sleep 1; done
+  # package manager and boot completion are needed before CTS/VTS can install APKs
+  while [ "$(adb shell dumpsys -l 2>/dev/null | grep -E '^  package[[:space:]]*$')" = "" ]; do sleep 1; done
   echo "package ok"
+
+  until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do sleep 1; done
+  echo "boot_completed ok"
 }
 
 export -f wait_for_services
