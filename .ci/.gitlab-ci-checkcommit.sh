@@ -40,8 +40,36 @@ findtag() {
 check_tool_installed bpfmt
 check_tool_installed clang-format-diff-19
 
-git fetch https://gitlab.freedesktop.org/drm-hwcomposer/drm-hwcomposer.git
-merge_base=$(git merge-base FETCH_HEAD HEAD)
+resolve_base_ref() {
+	if [ -n "${BASE_REF:-}" ]; then
+		echo "$BASE_REF"
+		return 0
+	fi
+
+	for sha in "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" "${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-}"; do
+		if [ -n "$sha" ] && git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+			echo "$sha"
+			return 0
+		fi
+	done
+
+	local attempt=0
+	local delay=5
+	until git fetch https://gitlab.freedesktop.org/drm-hwcomposer/drm-hwcomposer.git; do
+		attempt=$((attempt + 1))
+		if [ "$attempt" -ge 4 ]; then
+			echoerr "git fetch from gitlab.freedesktop.org failed after $attempt attempts"
+			return 1
+		fi
+		echoerr "git fetch failed; retrying in ${delay}s (attempt ${attempt}/4)..."
+		sleep "$delay"
+		delay=$((delay * 2))
+	done
+	echo "FETCH_HEAD"
+}
+
+base_ref=$(resolve_base_ref)
+merge_base=$(git merge-base "$base_ref" HEAD)
 
 # Validate the MR diff against merge-base rather than diffing each commit
 # against the working tree (where git diff HEAD -- is empty on single-commit MRs).
