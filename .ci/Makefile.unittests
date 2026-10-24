@@ -27,7 +27,7 @@ HOST_INCLUDES := \
 	-I$(HOST_AOSPLESS_DIR)/includes/frameworks/native/libs/math/include \
 	-I$(HOST_AOSPLESS_DIR)/includes/bionic/libc/kernel/uapi
 
-HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Wno-missing-designated-field-initializers
+HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Werror -Wno-missing-designated-field-initializers -MMD -MP
 HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4 -DHAS_LIBDISPLAY_INFO=1 -D__INTRODUCED_IN\(x\)=
 HOST_CXXFLAGS += $(HOST_INCLUDES)
 
@@ -139,6 +139,7 @@ HOST_EXT_OBJS := $(HOST_OUT_DIR)/ColorSpace.o $(HOST_OUT_DIR)/trace-host.o
 
 HOST_OBJS := $(patsubst %.cpp,$(HOST_OUT_DIR)/%.o,$(UNITTEST_SRCS))
 HOST_GTEST_OBJS := $(HOST_OUT_DIR)/gtest-all.o $(HOST_OUT_DIR)/gmock-all.o $(HOST_OUT_DIR)/gtest_main.o
+HOST_DEPS := $(HOST_OBJS:.o=.d) $(HOST_EXT_OBJS:.o=.d)
 
 .PHONY: all check clean unittests
 
@@ -186,3 +187,5 @@ $(HOST_OUT_DIR)/drm_hwcomposer_unittests: $(HOST_OBJS) $(HOST_EXT_OBJS) $(HOST_G
 	@mkdir -p $(dir $@)
 	@echo "HOST_LD $@"
 	@$(CLANG) $^ -ldisplay-info -ldrm -llz4 -lpthread -o $@
+
+-include $(HOST_DEPS)
