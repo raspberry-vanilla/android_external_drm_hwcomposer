@@ -76,7 +76,6 @@ tidy:
   extends:
     .use-ubuntu/x86_64_aospless
   script:
-    - cp -r /aospless_arm64 ../aospless
     - make -j$(nproc) -k -f "${CI_PROJECT_DIR}/.ci/Makefile"
 
 checkstyle:

@@ -1,5 +1,5 @@
 
-BASE_DIR:=../aospless
+BASE_DIR ?= $(firstword $(wildcard /aospless_arm64 ../aospless))
 
 SYSTEM_INCLUDE_DIRS := /usr/include/libdrm
 
