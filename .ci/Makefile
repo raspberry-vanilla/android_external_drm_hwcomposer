@@ -131,6 +131,13 @@ TIDY_FILES := $(sort $(TIDY_FILES_AUTO) $(TIDY_FILES_OVERRIDE_name_only))
 space := $(subst ,, )
 comma := ,
 
+# Disable symbolic path exploration (clang-analyzer-*) on GTest suites and test
+# utility headers, where macro expansion across hundreds of TEST_F cases
+# dominates CI wall-clock time (~175s on HwcDisplayTest.cpp and ~92s on
+# CompositorTestUtils.h), while keeping full AST lint checks on tests and full
+# clang-analyzer-* coverage on all production .cpp/.h files.
+TIDY_TEST_FILTER := ",-clang-analyzer-*"
+
 TIDY_ARGS_NONE := --checks="-*,llvm-include-order"
 TIDY_ARGS_     := --checks="-*,llvm-include-order"
 TIDY_ARGS_FINE := --checks="$(subst $(space),$(comma),$(strip $(TIDY_CHECKS_FINE)))"
@@ -148,7 +155,7 @@ TIDY_LEVEL_1 := $$(strip $$(foreach pair,$$(TIDY_FILES_OVERRIDE_path),$$(if $$(f
 
 TIDY_LEVEL_2 := $$(if $$(TIDY_LEVEL_1),$$(TIDY_LEVEL_1),NORMAL)
 
-TIDY_ARGS := $$(TIDY_ARGS_$$(TIDY_LEVEL_2))
+TIDY_ARGS := $$(TIDY_ARGS_$$(TIDY_LEVEL_2))$$(if $$(filter %Test.cpp %Tests.cpp %TestUtils.cpp %Test.h %Tests.h %TestUtils.h,$1),$$(TIDY_TEST_FILTER),)
 
 $$(_TARG): _DEP := $$(_DEP)
 $$(_TARG): _TARG := $$(_TARG)
