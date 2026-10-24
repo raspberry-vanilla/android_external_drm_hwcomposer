@@ -6,6 +6,7 @@ SYSTEM_INCLUDE_DIRS := /usr/include/libdrm
 CLANG := clang++-19
 CLANG_TIDY := clang-tidy-19
 OUT_DIR := /tmp/drm_hwcomposer/build
+TIDY_CACHE_DIR ?= $(OUT_DIR)/tidy_cache
 SRC_DIR := .
 ANDROID_SDK_VERSION ?= 37
 STD ?= gnu++17
@@ -161,9 +162,22 @@ $$(_TARG): _DEP := $$(_DEP)
 $$(_TARG): _TARG := $$(_TARG)
 $$(_TARG): TIDY_ARGS := $$(TIDY_ARGS)
 $$(_TARG): $$(_DEP)
-	@mkdir -p $$(dir $$(_TARG))
-	@echo "TIDY $$<"
-	@$$(CLANG_TIDY) $$(_DEP) $$(TIDY_ARGS) --quiet -- -x c++ $$(CXXARGS) -Wno-pragma-once-outside-header
+	@mkdir -p $$(dir $$(_TARG)) $$(TIDY_CACHE_DIR)
+	@set -e; \
+	pre=$$$$(mktemp); \
+	if $$(CLANG) -E -C -frewrite-includes -x c++ $$(_DEP) $$(CXXARGS) -Wno-builtin-macro-redefined -D__DATE__= -D__TIME__= -D__TIMESTAMP__= -Wno-pragma-once-outside-header >"$$$$pre" 2>/dev/null; then \
+		digest=$$$$( (printf '%s\n' "$$(CLANG_TIDY)" '$$(TIDY_ARGS)' "$$(CXXARGS)"; cat "$$(SRC_DIR)/.clang-tidy" "$$$$pre") | sha256sum | cut -d' ' -f1 ); \
+	else \
+		digest=""; \
+	fi; \
+	rm -f "$$$$pre"; \
+	if [ -n "$$$$digest" ] && [ -f "$$(TIDY_CACHE_DIR)/$$$$digest" ]; then \
+		echo "TIDY (cached) $$<"; \
+	else \
+		echo "TIDY $$<"; \
+		$$(CLANG_TIDY) $$(_DEP) $$(TIDY_ARGS) --quiet -- -x c++ $$(CXXARGS) -Wno-pragma-once-outside-header; \
+		if [ -n "$$$$digest" ]; then touch "$$(TIDY_CACHE_DIR)/$$$$digest"; fi; \
+	fi
 	@touch $$(_TARG)
 
 endef

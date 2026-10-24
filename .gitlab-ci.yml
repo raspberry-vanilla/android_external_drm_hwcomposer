@@ -90,6 +90,12 @@ tidy:
   stage: tidy
   extends:
     .use-ubuntu/x86_64_aospless
+  variables:
+    TIDY_CACHE_DIR: "${CI_PROJECT_DIR}/.ci_cache/tidy"
+  cache:
+    key: "tidy-v1-${UBUNTU_AOSPLESS_TAG}"
+    paths:
+      - .ci_cache/tidy/
   script:
     - make -j$(nproc) -k -f "${CI_PROJECT_DIR}/.ci/Makefile"
 
