@@ -1,8 +1,11 @@
+# Personal forks lack FDO container registry push permissions (issues/540) and
+# upstream KVM runners, so only run pipelines on MRs or the upstream namespace.
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PROJECT_NAMESPACE == "drm-hwcomposer" && $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
       when: never
-    - when: always
+    - if: $CI_PROJECT_NAMESPACE == "drm-hwcomposer"
 
 variables:
   ANDROID_BRANCH: android17-release
