@@ -84,3 +84,5 @@ if [ -s /tmp/bpfmt.patch ]; then
 	cat /tmp/bpfmt.patch >&2
 	exit 1
 fi
+
+python3 ./.ci/check-build-sync.py .
