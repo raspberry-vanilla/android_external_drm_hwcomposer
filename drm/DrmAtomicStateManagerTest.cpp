@@ -21,12 +21,18 @@
 #include <drm/drm_mode.h>
 #include <xf86drmMode.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -38,9 +44,12 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicCommitSink.h"
+#include "drm/DrmColorspace.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmPlane.h"
+#include "drm/DrmProperty.h"
 #include "drm/DrmTestUtils.h"
+#include "drm/DrmUnique.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -97,6 +106,14 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
     return nonblock_calls_;
   }
 
+  size_t GetRetrySleepCount() const {
+    return retry_sleep_count_;
+  }
+
+  uint32_t GetMaxRetrySleepUsec() const {
+    return max_retry_sleep_usec_;
+  }
+
  protected:
   int AtomicCommit(int fd, drmModeAtomicReqPtr req, uint32_t flags,
                    void* user_data) const override {
@@ -111,17 +128,86 @@ class FakeKernelDrmAtomicCommitSink : public DrmAtomicCommitSink {
     return err;
   }
 
+  void RetrySleep(uint32_t usec) const override {
+    ++retry_sleep_count_;
+    max_retry_sleep_usec_ = std::max(max_retry_sleep_usec_, usec);
+  }
+
  private:
   CommitHandler handler_;
   mutable size_t total_calls_ = 0;
   mutable size_t nonblock_calls_ = 0;
+  mutable size_t retry_sleep_count_ = 0;
+  mutable uint32_t max_retry_sleep_usec_ = 0;
+};
+
+class TestDrmDevice : public FakeDrmDevice {
+ public:
+  void RegisterFakeEnumProperty(
+      uint32_t obj_id, const std::string& prop_name, uint32_t prop_id,
+      uint64_t value, std::vector<std::pair<uint64_t, std::string>> enums) {
+    fake_enum_properties_[{obj_id, prop_name}] = FakeEnumPropertyDef{
+        .prop_id = prop_id,
+        .value = value,
+        .enums = std::move(enums),
+    };
+  }
+
+  int GetProperty(uint32_t obj_id, uint32_t obj_type, const char* prop_name,
+                  DrmProperty* property) const override {
+    auto it = fake_enum_properties_.find({obj_id, std::string(prop_name)});
+    if (it != fake_enum_properties_.end()) {
+      drmModePropertyRes raw_prop{};
+      raw_prop.prop_id = it->second.prop_id;
+      raw_prop.flags = DRM_MODE_PROP_ENUM;
+      std::strncpy(raw_prop.name, prop_name, DRM_PROP_NAME_LEN - 1);
+      std::vector<drm_mode_property_enum> raw_enums(it->second.enums.size());
+      for (size_t i = 0; i < it->second.enums.size(); ++i) {
+        raw_enums[i].value = it->second.enums[i].first;
+        std::strncpy(raw_enums[i].name, it->second.enums[i].second.c_str(),
+                     DRM_PROP_NAME_LEN - 1);
+      }
+      raw_prop.count_enums = static_cast<int>(raw_enums.size());
+      raw_prop.enums = raw_enums.data();
+      property->Init(nullptr, obj_id, &raw_prop, it->second.value);
+      return 0;
+    }
+    return FakeDrmDevice::GetProperty(obj_id, obj_type, prop_name, property);
+  }
+
+  void RegisterFakeRawConnector(
+      uint32_t connector_id,
+      uint32_t connector_type = DRM_MODE_CONNECTOR_DisplayPort) {
+    fake_raw_connector_types_[connector_id] = connector_type;
+  }
+
+  DrmModeConnectorUnique GetConnector(uint32_t connector_id) const override {
+    auto it = fake_raw_connector_types_.find(connector_id);
+    if (it != fake_raw_connector_types_.end()) {
+      return FakeDrmConnector::MakeFakeRawConnector(connector_id,
+                                                    /*encoder_id=*/0,
+                                                    it->second);
+    }
+    return FakeDrmDevice::GetConnector(connector_id);
+  }
+
+ private:
+  struct FakeEnumPropertyDef {
+    uint32_t prop_id{};
+    uint64_t value{};
+    std::vector<std::pair<uint64_t, std::string>> enums;
+  };
+
+  std::map<std::pair<uint32_t, std::string>, FakeEnumPropertyDef>
+      fake_enum_properties_;
+  std::map<uint32_t, uint32_t> fake_raw_connector_types_;
 };
 
 }  // namespace
 
 struct DrmAtomicStateManagerTest : public ::testing::Test {
   void SetUp() override {
-    fake_device = std::make_unique<FakeDrmDevice>();
+    fake_device = std::make_unique<TestDrmDevice>();
     fake_connector = fake_device->AddPipelineResources();
     auto overlay = std::make_unique<FakeDrmPlane>(*fake_device,
                                                   DRM_PLANE_TYPE_OVERLAY,
@@ -173,7 +259,7 @@ struct DrmAtomicStateManagerTest : public ::testing::Test {
     return plan;
   }
 
-  std::unique_ptr<FakeDrmDevice> fake_device;
+  std::unique_ptr<TestDrmDevice> fake_device;
   FakeDrmConnector* fake_connector = nullptr;
   FakeDrmPlane* overlay_plane = nullptr;
   std::shared_ptr<DrmDisplayPipeline> pipeline;
@@ -777,6 +863,30 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), conn_id,
                                       kFakeLinkStatusPropId),
             static_cast<uint64_t>(DRM_MODE_LINK_STATUS_GOOD));
+  state_manager->FinishPendingRequest(modeset_args, std::move(req));
+
+  // Only full modesets (display_mode && !seamless) reset link-status to GOOD;
+  // seamless refresh-rate switches and pageflips must omit link-status.
+  constexpr uint32_t kSeamlessVRefresh = 120;
+  AtomicCommitArgs seamless_args{};
+  seamless_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                 kSeamlessVRefresh);
+  seamless_args.seamless = true;
+  auto seamless_req = state_manager->GetAtomicModeReqForArgs(seamless_args);
+  ASSERT_NE(seamless_req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(seamless_req)
+                                          ->property_set.get(),
+                                      conn_id, kFakeLinkStatusPropId),
+            std::nullopt);
+
+  AtomicCommitArgs pageflip_args{};
+  pageflip_args.composition = CreateSinglePlanePlan(kTestFbId2);
+  auto pageflip_req = state_manager->GetAtomicModeReqForArgs(pageflip_args);
+  ASSERT_NE(pageflip_req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(pageflip_req)
+                                          ->property_set.get(),
+                                      conn_id, kFakeLinkStatusPropId),
+            std::nullopt);
 }
 
 TEST_F(DrmAtomicStateManagerTest,
@@ -821,6 +931,306 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(drm_req->property_set.get(), crtc_id,
                                       kFakeCrtcModePropId),
             0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       MstConnectorUpdateModesAndPropertiesRefreshesDynamicProperties) {
+  auto* mst_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(mst_conn, nullptr);
+  const uint32_t conn_id = mst_conn->GetId();
+  fake_device->RegisterFakeRawConnector(conn_id,
+                                        DRM_MODE_CONNECTOR_DisplayPort);
+  constexpr uint32_t kInitialColorspacePropId = 44;
+  constexpr uint32_t kInitialHdrMetadataPropId = 45;
+  constexpr uint32_t kFakePathPropId = 46;
+  constexpr uint64_t kMstPathBlobId = 77;
+  constexpr uint64_t kInitialBt2020RgbEnumValue = 9;
+  constexpr uint32_t kRecreatedColorspacePropId = 144;
+  constexpr uint32_t kRecreatedHdrMetadataPropId = 145;
+  constexpr uint64_t kRecreatedBt2020RgbEnumValue = 12;
+
+  fake_device->RegisterFakeObjectProperty(conn_id, "DPMS", kFakeDpmsPropId,
+                                          DRM_MODE_PROP_ENUM, DRM_MODE_DPMS_ON);
+  fake_device->RegisterFakeObjectProperty(conn_id, "CRTC_ID",
+                                          kFakeConnectorCrtcPropId,
+                                          DRM_MODE_PROP_OBJECT, 0);
+  fake_device->RegisterFakeObjectProperty(conn_id, "PATH", kFakePathPropId,
+                                          DRM_MODE_PROP_BLOB, kMstPathBlobId);
+  fake_device->RegisterFakeEnumProperty(conn_id, "Colorspace",
+                                        kInitialColorspacePropId, 0,
+                                        {{0, "Default"},
+                                         {kInitialBt2020RgbEnumValue,
+                                          "BT2020_RGB"}});
+  fake_device->RegisterFakeObjectProperty(conn_id, "HDR_OUTPUT_METADATA",
+                                          kInitialHdrMetadataPropId,
+                                          DRM_MODE_PROP_BLOB, 0);
+
+  ASSERT_TRUE(mst_conn->CallBaseInit());
+  ASSERT_TRUE(mst_conn->IsExternal());
+  ASSERT_TRUE(mst_conn->IsMst());
+  EXPECT_EQ(mst_conn->GetColorspaceProperty().GetId(),
+            kInitialColorspacePropId);
+  EXPECT_EQ(mst_conn->GetColorspacePropertyValue(DrmColorspace::kBt2020Rgb),
+            kInitialBt2020RgbEnumValue);
+  EXPECT_EQ(mst_conn->GetHdrOutputMetadataProperty().GetId(),
+            kInitialHdrMetadataPropId);
+
+  // Dynamic DP MST branch device hotplugs can recreate connector properties
+  // with new kernel property IDs and updated enum value tables.
+  fake_device->RegisterFakeEnumProperty(conn_id, "Colorspace",
+                                        kRecreatedColorspacePropId, 0,
+                                        {{0, "Default"},
+                                         {kRecreatedBt2020RgbEnumValue,
+                                          "BT2020_RGB"}});
+  fake_device->RegisterFakeObjectProperty(conn_id, "HDR_OUTPUT_METADATA",
+                                          kRecreatedHdrMetadataPropId,
+                                          DRM_MODE_PROP_BLOB, 0);
+
+  EXPECT_EQ(mst_conn->CallBaseUpdateModesAndProperties(), 0);
+  EXPECT_TRUE(mst_conn->IsExternal());
+  EXPECT_EQ(mst_conn->GetColorspaceProperty().GetId(),
+            kRecreatedColorspacePropId);
+  EXPECT_EQ(mst_conn->GetColorspacePropertyValue(DrmColorspace::kBt2020Rgb),
+            kRecreatedBt2020RgbEnumValue);
+  EXPECT_EQ(mst_conn->GetHdrOutputMetadataProperty().GetId(),
+            kRecreatedHdrMetadataPropId);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkExitsWithFailureAfterMaxEbusyRetries) {
+  constexpr size_t kExpectedMaxBusyRetries = 9375U;
+  constexpr int kUnexpectedExtraRetryExitCode = 2;
+
+  // Stop the fixture's background thread before forking in EXPECT_EXIT.
+  state_manager.reset();
+  RecordingAtomicStateManager threadless_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = threadless_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  threadless_manager.FinishPendingRequest(modeset0, std::move(req0));
+
+  const FakeKernelDrmAtomicCommitSink* sink_ptr = nullptr;
+  FakeKernelDrmAtomicCommitSink always_ebusy_sink(
+      [&sink_ptr](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+                  void* /*user_data*/, size_t attempt) -> int {
+        // Fail fast with a distinct exit code if CommitFrame exceeds
+        // kMaxBusyRetries (9375).
+        if (attempt > kExpectedMaxBusyRetries) {
+          std::_Exit(kUnexpectedExtraRetryExitCode);
+        }
+        if (attempt == kExpectedMaxBusyRetries) {
+          std::fprintf(stderr,
+                       "ebusy_exhausted_at_attempt=%zu,sleep_count=%zu,"
+                       "max_sleep_usec=%u\n",
+                       attempt, sink_ptr->GetRetrySleepCount(),
+                       sink_ptr->GetMaxRetrySleepUsec());
+        }
+        errno = EBUSY;
+        return -EBUSY;
+      });
+  sink_ptr = &always_ebusy_sink;
+  AtomicCommitSink& sink = always_ebusy_sink;
+
+  AtomicCommitArgs nonblock_args{};
+  nonblock_args.blocking = false;
+  nonblock_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  EXPECT_EXIT(sink.ExecuteAtomicCommit({{&threadless_manager, nonblock_args}}),
+              ::testing::ExitedWithCode(EXIT_FAILURE),
+              "ebusy_exhausted_at_attempt=9375,sleep_count=9375,max_sleep_usec="
+              "3200");
+}
+
+TEST_F(
+    DrmAtomicStateManagerTest,
+    CursorPlaneShiftsNegativeCrtcPositionAndClearsSrcOffsetAtLeftAndTopEdges) {
+  constexpr uint32_t kCursorPlaneId = 320;
+  constexpr uint16_t kCursorSize = 64;
+  constexpr int32_t kClippedLeft = 24;
+  constexpr int32_t kClippedTop = 16;
+  constexpr int32_t kVisibleWidth = 40;
+  constexpr int32_t kVisibleHeight = 48;
+  constexpr float kSrcLeft = 24.0F;
+  constexpr float kSrcTop = 16.0F;
+  constexpr float kSrcRight = 64.0F;
+  constexpr float kSrcBottom = 64.0F;
+  constexpr uint64_t kFixedPointShift = 16;
+
+  // DRM cursor planes require full unclipped dimensions with negative
+  // CRTC_X/CRTC_Y offsets and zero SRC_X/SRC_Y when partially off-screen.
+  FakeDrmPlane cursor_plane(*fake_device, DRM_PLANE_TYPE_CURSOR,
+                            /*is_valid=*/true, kCursorPlaneId);
+  LayerData layer = CreateTestLayerData(kTestFbId1, kCursorSize, kCursorSize);
+  layer.pi.display_frame.i_rect = IRect{0, 0, kVisibleWidth, kVisibleHeight};
+  layer.pi.source_crop.f_rect = FRect{kSrcLeft, kSrcTop, kSrcRight, kSrcBottom};
+
+  DstRectInfo whole_display_rect{
+      .i_rect = IRect{0, 0, kTestWidth, kTestHeight}};
+  DrmModeAtomicReqUnique pset = MakeDrmModeAtomicReqUnique();
+  ASSERT_NE(pset, nullptr);
+  DrmModeUserPropertyBlobUnique damage_out;
+
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(cursor_plane.AtomicSetState(*pset, layer, /*zpos=*/1, crtc_id,
+                                        whole_display_rect, damage_out),
+            0);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcXPropId),
+            static_cast<uint64_t>(static_cast<int64_t>(-kClippedLeft)));
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcYPropId),
+            static_cast<uint64_t>(static_cast<int64_t>(-kClippedTop)));
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcWPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcHPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcXPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcYPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcWPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcHPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+}
+
+TEST_F(
+    DrmAtomicStateManagerTest,
+    CursorPlaneRestoresUnclippedDimensionsAndCrtcOffsetsAtRightAndBottomEdges) {
+  constexpr uint32_t kCursorPlaneId = 321;
+  constexpr uint16_t kCursorSize = 64;
+  constexpr int32_t kCursorLeft = 1900;
+  constexpr int32_t kCursorTop = 1050;
+  constexpr int32_t kClippedWidth = 20;
+  constexpr int32_t kClippedHeight = 30;
+  constexpr uint64_t kFixedPointShift = 16;
+
+  // SurfaceFlinger clips the display_frame to screen boundaries when the cursor
+  // extends beyond the right or bottom edges. DrmPlane::AtomicSetState must
+  // restore the full unclipped buffer dimensions (CRTC_W/CRTC_H) at the given
+  // CRTC_X/CRTC_Y position and unscale SRC_W/SRC_H so the hardware cursor
+  // engine can display the visible portion without distortion.
+  FakeDrmPlane cursor_plane(*fake_device, DRM_PLANE_TYPE_CURSOR,
+                            /*is_valid=*/true, kCursorPlaneId);
+  LayerData layer = CreateTestLayerData(kTestFbId1, kCursorSize, kCursorSize);
+  layer.pi.display_frame.i_rect = IRect{kCursorLeft, kCursorTop,
+                                        kCursorLeft + kClippedWidth,
+                                        kCursorTop + kClippedHeight};
+  layer.pi.source_crop.f_rect = FRect{0.0F, 0.0F,
+                                      static_cast<float>(kClippedWidth),
+                                      static_cast<float>(kClippedHeight)};
+
+  DstRectInfo whole_display_rect{
+      .i_rect = IRect{0, 0, kTestWidth, kTestHeight}};
+  DrmModeAtomicReqUnique pset = MakeDrmModeAtomicReqUnique();
+  ASSERT_NE(pset, nullptr);
+  DrmModeUserPropertyBlobUnique damage_out;
+
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(cursor_plane.AtomicSetState(*pset, layer, /*zpos=*/1, crtc_id,
+                                        whole_display_rect, damage_out),
+            0);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcXPropId),
+            uint64_t{kCursorLeft});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcYPropId),
+            uint64_t{kCursorTop});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcWPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcHPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcXPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcYPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcWPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcHPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       GetAtomicModeReqForArgsUsesPerConnectorAndPerPlaneCrtcPropertyIds) {
+  constexpr uint32_t kConn1CrtcPropId = 101;
+  constexpr uint32_t kPlane1CrtcPropId = 201;
+  constexpr uint32_t kConn2CrtcPropId = 102;
+  constexpr uint32_t kPlane2CrtcPropId = 202;
+
+  auto* conn1 = fake_connector;
+  ASSERT_NE(conn1, nullptr);
+  DrmPlane* plane1 = pipeline->primary_plane->Get();
+  ASSERT_NE(plane1, nullptr);
+  InitFakeDrmProperty(conn1->GetCrtcIdProperty(), conn1->GetId(),
+                      kConn1CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+  InitFakeDrmProperty(plane1->GetCrtcProperty(), plane1->GetId(),
+                      kPlane1CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+
+  auto* conn2 = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(conn2, nullptr);
+  auto pipeline2 = fake_device->GetBackend().CreatePipeline(*conn2);
+  ASSERT_NE(pipeline2, nullptr);
+  DrmPlane* plane2 = pipeline2->primary_plane->Get();
+  ASSERT_NE(plane2, nullptr);
+  InitFakeDrmProperty(conn2->GetCrtcIdProperty(), conn2->GetId(),
+                      kConn2CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+  InitFakeDrmProperty(plane2->GetCrtcProperty(), plane2->GetId(),
+                      kPlane2CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+
+  auto state_manager2 = DrmAtomicStateManager::CreateInstance(pipeline2.get());
+  ASSERT_NE(state_manager2, nullptr);
+
+  AtomicCommitArgs args1{};
+  args1.power_mode = PowerMode::kOn;
+  args1.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                         kTestVRefresh);
+  args1.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req1 = state_manager->GetAtomicModeReqForArgs(args1);
+  ASSERT_NE(req1, nullptr);
+
+  AtomicCommitArgs args2{};
+  args2.power_mode = PowerMode::kOn;
+  args2.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                         kTestVRefresh);
+  args2.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+  args2.composition->plan.emplace_back(CreateTestLayerData(kTestFbId2),
+                                       pipeline2->primary_plane, 0);
+  auto req2 = state_manager2->GetAtomicModeReqForArgs(args2);
+  ASSERT_NE(req2, nullptr);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req1)->property_set.get(),
+                                      conn1->GetId(), kConn1CrtcPropId),
+            pipeline->crtc->Get()->GetId());
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req1)->property_set.get(),
+                                      plane1->GetId(), kPlane1CrtcPropId),
+            pipeline->crtc->Get()->GetId());
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req2)->property_set.get(),
+                                      conn2->GetId(), kConn2CrtcPropId),
+            pipeline2->crtc->Get()->GetId());
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req2)->property_set.get(),
+                                      plane2->GetId(), kPlane2CrtcPropId),
+            pipeline2->crtc->Get()->GetId());
 }
 
 }  // namespace android::drm_hwcomposer
