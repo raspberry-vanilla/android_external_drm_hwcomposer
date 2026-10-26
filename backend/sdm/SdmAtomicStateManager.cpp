@@ -266,9 +266,10 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
         sdm_display_id_, static_cast<int32_t>(*args.color_mode),
         kColorimetricRenderIntent);
     if (display_error != sdm::kErrorNone) {
+      // Log the error and let the rest of the composition proceed so an
+      // invalid or unsupported color mode does not blank the display.
       ALOGE("SetColorModeWithRenderIntent failed: %s",
             ErrorToString(display_error).c_str());
-      return std::nullopt;
     }
     last_color_mode_ = args.color_mode;
   }

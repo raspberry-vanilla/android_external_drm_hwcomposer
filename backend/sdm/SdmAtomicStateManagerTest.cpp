@@ -280,5 +280,61 @@ TEST_F(SdmAtomicStateManagerTest,
   EXPECT_TRUE(result.has_value());
 }
 
+// Verifies that if SDM rejects SetColorModeWithRenderIntent (e.g. with
+// kErrorNotSupported), ExecuteAtomicCommit logs the error and continues
+// presenting the frame rather than aborting the commit, and caches
+// last_color_mode_ so the rejected mode is not retried on every frame.
+TEST_F(SdmAtomicStateManagerTest,
+       SetColorModeFailureDoesNotAbortCommitOrRetrySameMode) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData client_layer{};
+  client_layer.bi = BufferInfo{};
+  client_layer.bi->fds_shared = SnapAllocHandle::Create(nullptr);
+  plan->plan.emplace_back(std::move(client_layer), nullptr, 0);
+  plan->client_z_order = 0;
+
+  AtomicCommitArgs args{};
+  args.color_mode = ColorMode::kSrgb;
+  args.composition = plan;
+
+  {
+    InSequence seq;
+    EXPECT_CALL(settings_intf,
+                SetColorModeWithRenderIntent(kTestSdmDisplayId,
+                                             static_cast<int32_t>(
+                                                 ColorMode::kSrgb),
+                                             0))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNotSupported));
+    EXPECT_CALL(draw_cycle_intf,
+                SetClientTarget(kTestSdmDisplayId, nullptr, _, _, _, _))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNone));
+    EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNone));
+  }
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
+
+  EXPECT_CALL(settings_intf, SetColorModeWithRenderIntent(_, _, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf,
+              SetClientTarget(kTestSdmDisplayId, nullptr, _, _, _, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
+}
+
 }  // namespace
 }  // namespace android::drm_hwcomposer
