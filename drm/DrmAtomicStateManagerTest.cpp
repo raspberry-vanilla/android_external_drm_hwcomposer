@@ -1047,4 +1047,127 @@ TEST_F(DrmAtomicStateManagerTest,
               "3200");
 }
 
+TEST_F(
+    DrmAtomicStateManagerTest,
+    CursorPlaneShiftsNegativeCrtcPositionAndClearsSrcOffsetAtLeftAndTopEdges) {
+  constexpr uint32_t kCursorPlaneId = 320;
+  constexpr uint16_t kCursorSize = 64;
+  constexpr int32_t kClippedLeft = 24;
+  constexpr int32_t kClippedTop = 16;
+  constexpr int32_t kVisibleWidth = 40;
+  constexpr int32_t kVisibleHeight = 48;
+  constexpr float kSrcLeft = 24.0F;
+  constexpr float kSrcTop = 16.0F;
+  constexpr float kSrcRight = 64.0F;
+  constexpr float kSrcBottom = 64.0F;
+  constexpr uint64_t kFixedPointShift = 16;
+
+  // DRM cursor planes require full unclipped dimensions with negative
+  // CRTC_X/CRTC_Y offsets and zero SRC_X/SRC_Y when partially off-screen.
+  FakeDrmPlane cursor_plane(*fake_device, DRM_PLANE_TYPE_CURSOR,
+                            /*is_valid=*/true, kCursorPlaneId);
+  LayerData layer = CreateTestLayerData(kTestFbId1, kCursorSize, kCursorSize);
+  layer.pi.display_frame.i_rect = IRect{0, 0, kVisibleWidth, kVisibleHeight};
+  layer.pi.source_crop.f_rect = FRect{kSrcLeft, kSrcTop, kSrcRight, kSrcBottom};
+
+  DstRectInfo whole_display_rect{
+      .i_rect = IRect{0, 0, kTestWidth, kTestHeight}};
+  DrmModeAtomicReqUnique pset = MakeDrmModeAtomicReqUnique();
+  ASSERT_NE(pset, nullptr);
+  DrmModeUserPropertyBlobUnique damage_out;
+
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(cursor_plane.AtomicSetState(*pset, layer, /*zpos=*/1, crtc_id,
+                                        whole_display_rect, damage_out),
+            0);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcXPropId),
+            static_cast<uint64_t>(static_cast<int64_t>(-kClippedLeft)));
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcYPropId),
+            static_cast<uint64_t>(static_cast<int64_t>(-kClippedTop)));
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcWPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcHPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcXPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcYPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcWPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcHPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+}
+
+TEST_F(
+    DrmAtomicStateManagerTest,
+    CursorPlaneRestoresUnclippedDimensionsAndCrtcOffsetsAtRightAndBottomEdges) {
+  constexpr uint32_t kCursorPlaneId = 321;
+  constexpr uint16_t kCursorSize = 64;
+  constexpr int32_t kCursorLeft = 1900;
+  constexpr int32_t kCursorTop = 1050;
+  constexpr int32_t kClippedWidth = 20;
+  constexpr int32_t kClippedHeight = 30;
+  constexpr uint64_t kFixedPointShift = 16;
+
+  // SurfaceFlinger clips the display_frame to screen boundaries when the cursor
+  // extends beyond the right or bottom edges. DrmPlane::AtomicSetState must
+  // restore the full unclipped buffer dimensions (CRTC_W/CRTC_H) at the given
+  // CRTC_X/CRTC_Y position and unscale SRC_W/SRC_H so the hardware cursor
+  // engine can display the visible portion without distortion.
+  FakeDrmPlane cursor_plane(*fake_device, DRM_PLANE_TYPE_CURSOR,
+                            /*is_valid=*/true, kCursorPlaneId);
+  LayerData layer = CreateTestLayerData(kTestFbId1, kCursorSize, kCursorSize);
+  layer.pi.display_frame.i_rect = IRect{kCursorLeft, kCursorTop,
+                                        kCursorLeft + kClippedWidth,
+                                        kCursorTop + kClippedHeight};
+  layer.pi.source_crop.f_rect = FRect{0.0F, 0.0F,
+                                      static_cast<float>(kClippedWidth),
+                                      static_cast<float>(kClippedHeight)};
+
+  DstRectInfo whole_display_rect{
+      .i_rect = IRect{0, 0, kTestWidth, kTestHeight}};
+  DrmModeAtomicReqUnique pset = MakeDrmModeAtomicReqUnique();
+  ASSERT_NE(pset, nullptr);
+  DrmModeUserPropertyBlobUnique damage_out;
+
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(cursor_plane.AtomicSetState(*pset, layer, /*zpos=*/1, crtc_id,
+                                        whole_display_rect, damage_out),
+            0);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcXPropId),
+            uint64_t{kCursorLeft});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcYPropId),
+            uint64_t{kCursorTop});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcWPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneCrtcHPropId),
+            uint64_t{kCursorSize});
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcXPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcYPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcWPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), kCursorPlaneId,
+                                      kFakePlaneSrcHPropId),
+            uint64_t{kCursorSize} << kFixedPointShift);
+}
+
 }  // namespace android::drm_hwcomposer
