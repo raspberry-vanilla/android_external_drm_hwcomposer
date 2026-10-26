@@ -1170,4 +1170,67 @@ TEST_F(
             uint64_t{kCursorSize} << kFixedPointShift);
 }
 
+TEST_F(DrmAtomicStateManagerTest,
+       GetAtomicModeReqForArgsUsesPerConnectorAndPerPlaneCrtcPropertyIds) {
+  constexpr uint32_t kConn1CrtcPropId = 101;
+  constexpr uint32_t kPlane1CrtcPropId = 201;
+  constexpr uint32_t kConn2CrtcPropId = 102;
+  constexpr uint32_t kPlane2CrtcPropId = 202;
+
+  auto* conn1 = fake_connector;
+  ASSERT_NE(conn1, nullptr);
+  DrmPlane* plane1 = pipeline->primary_plane->Get();
+  ASSERT_NE(plane1, nullptr);
+  InitFakeDrmProperty(conn1->GetCrtcIdProperty(), conn1->GetId(),
+                      kConn1CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+  InitFakeDrmProperty(plane1->GetCrtcProperty(), plane1->GetId(),
+                      kPlane1CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+
+  auto* conn2 = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(conn2, nullptr);
+  auto pipeline2 = fake_device->GetBackend().CreatePipeline(*conn2);
+  ASSERT_NE(pipeline2, nullptr);
+  DrmPlane* plane2 = pipeline2->primary_plane->Get();
+  ASSERT_NE(plane2, nullptr);
+  InitFakeDrmProperty(conn2->GetCrtcIdProperty(), conn2->GetId(),
+                      kConn2CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+  InitFakeDrmProperty(plane2->GetCrtcProperty(), plane2->GetId(),
+                      kPlane2CrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT, 0);
+
+  auto state_manager2 = DrmAtomicStateManager::CreateInstance(pipeline2.get());
+  ASSERT_NE(state_manager2, nullptr);
+
+  AtomicCommitArgs args1{};
+  args1.power_mode = PowerMode::kOn;
+  args1.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                         kTestVRefresh);
+  args1.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req1 = state_manager->GetAtomicModeReqForArgs(args1);
+  ASSERT_NE(req1, nullptr);
+
+  AtomicCommitArgs args2{};
+  args2.power_mode = PowerMode::kOn;
+  args2.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                         kTestVRefresh);
+  args2.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+  args2.composition->plan.emplace_back(CreateTestLayerData(kTestFbId2),
+                                       pipeline2->primary_plane, 0);
+  auto req2 = state_manager2->GetAtomicModeReqForArgs(args2);
+  ASSERT_NE(req2, nullptr);
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req1)->property_set.get(),
+                                      conn1->GetId(), kConn1CrtcPropId),
+            pipeline->crtc->Get()->GetId());
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req1)->property_set.get(),
+                                      plane1->GetId(), kPlane1CrtcPropId),
+            pipeline->crtc->Get()->GetId());
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req2)->property_set.get(),
+                                      conn2->GetId(), kConn2CrtcPropId),
+            pipeline2->crtc->Get()->GetId());
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req2)->property_set.get(),
+                                      plane2->GetId(), kPlane2CrtcPropId),
+            pipeline2->crtc->Get()->GetId());
+}
+
 }  // namespace android::drm_hwcomposer
