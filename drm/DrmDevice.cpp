@@ -309,12 +309,18 @@ int DrmDevice::GetProperty(uint32_t obj_id, uint32_t obj_type,
     return -ENODEV;
   }
 
-  drmModeObjectPropertiesPtr props = nullptr;
-
-  props = drmModeObjectGetProperties(*GetFd(), obj_id, obj_type);
-  if (props == nullptr) {
-    ALOGE("Failed to get properties for %d/%x", obj_id, obj_type);
-    return -ENODEV;
+  auto props = GetObjectProperties(obj_id, obj_type);
+  if (!props) {
+    const int err = errno;
+    if (obj_type == DRM_MODE_OBJECT_CONNECTOR &&
+        (err == ENOENT || err == ENODEV)) {
+      ALOGI("Connector %u vanished before getting properties (%s)", obj_id,
+            std::generic_category().message(err).c_str());
+      return -ENODEV;
+    }
+    ALOGE("Failed to get properties for %d/%x (%s)", obj_id, obj_type,
+          std::generic_category().message(err).c_str());
+    return err != 0 ? -err : -EIO;
   }
 
   bool found = false;
@@ -329,7 +335,6 @@ int DrmDevice::GetProperty(uint32_t obj_id, uint32_t obj_type,
     drmModeFreeProperty(p);
   }
 
-  drmModeFreeObjectProperties(props);
   return found ? 0 : -ENOENT;
 }
 
@@ -362,8 +367,18 @@ auto DrmDevice::GetConnectors()
   return connectors_;
 }
 
+auto DrmDevice::GetConnector(uint32_t connector_id) const
+    -> DrmModeConnectorUnique {
+  return MakeDrmModeConnectorUnique(*GetFd(), connector_id);
+}
+
 auto DrmDevice::GetResources() const -> DrmModeResUnique {
   return MakeDrmModeResUnique(*GetFd());
+}
+
+auto DrmDevice::GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
+    -> DrmModeObjectPropertiesUnique {
+  return MakeDrmModeObjectPropertiesUnique(*GetFd(), obj_id, obj_type);
 }
 
 auto DrmDevice::CreateConnectorInstance(uint32_t connector_id, uint32_t index)
@@ -376,32 +391,94 @@ auto DrmDevice::CommitAtomicReset(drmModeAtomicReq &pset) -> int {
                              this);
 }
 
-auto DrmDevice::RefreshConnectors()
-    -> std::vector<std::unique_ptr<DrmConnector>> {
-  std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
+auto DrmDevice::SnapshotConnectorsUnderLock() const -> ConnectorSnapshot {
+  ConnectorSnapshot snapshot{};
+  for (const auto &conn : connectors_) {
+    if (!conn->IsDeleted()) {
+      snapshot.known_ids.insert(conn->GetId());
+    }
+  }
+  for (const auto &conn : ignored_connectors_) {
+    if (!conn->IsDeleted()) {
+      snapshot.known_ids.insert(conn->GetId());
+    }
+  }
+  for (const auto &conn : writeback_connectors_) {
+    snapshot.known_ids.insert(conn->GetId());
+  }
+  return snapshot;
+}
 
+auto DrmDevice::ProbeConnectorsOffLock(const ConnectorSnapshot &snapshot)
+    -> ProbedConnectorResources {
+  ProbedConnectorResources probed{};
   auto res = GetResources();
   if (!res) {
     ALOGE("Failed to get DrmDevice resources");
+    probed.had_probe_error = true;
+    return probed;
+  }
+
+  probed.has_resources = true;
+  for (int i = 0; i < res->count_connectors; ++i) {
+    probed.resource_ids.insert(*std::next(res->connectors, i));
+  }
+
+  std::set<uint32_t> seen_ids = snapshot.known_ids;
+  for (int i = 0; i < res->count_connectors; ++i) {
+    const uint32_t conn_id = *std::next(res->connectors, i);
+    if (seen_ids.count(conn_id) != 0) {
+      continue;
+    }
+    seen_ids.insert(conn_id);
+    auto conn = CreateConnectorInstance(conn_id, i);
+    if (!conn) {
+      probed.had_probe_error = true;
+      continue;
+    }
+    if (conn->IsWriteback()) {
+      continue;
+    }
+    if (conn->GetModes().empty()) {
+      auto conn_probed = conn->ProbeModesAndPropertiesOffLock();
+      if (conn->ApplyProbedState(std::move(conn_probed)) != 0 ||
+          conn->IsDeleted()) {
+        probed.had_probe_error = true;
+        continue;
+      }
+    }
+    probed.new_connectors.emplace_back(std::move(conn));
+  }
+
+  return probed;
+}
+
+auto DrmDevice::ApplyProbedConnectorsUnderLock(
+    ProbedConnectorResources &&probed,
+    std::vector<DrmConnector *> *out_added_connectors)
+    -> std::vector<std::unique_ptr<DrmConnector>> {
+  ProbedConnectorResources state = std::move(probed);
+  std::vector<std::unique_ptr<DrmConnector>> stale_connectors;
+  if (!state.has_resources) {
     return stale_connectors;
   }
 
-  // Remove stale connectors (present in connectors_ or ignored_connectors_ but
-  // not in DRM resources) and transfer their ownership to the returned vector.
   std::set<uint32_t> conn_ids_present;
+  for (const auto &conn : writeback_connectors_) {
+    conn_ids_present.insert(conn->GetId());
+  }
+
   auto remove_stale = [&](std::vector<std::unique_ptr<DrmConnector>> &conns,
                           bool is_ignored) {
     auto stale_it = std::
         stable_partition(conns.begin(), conns.end(), [&](const auto &conn) {
-          auto *first = res->connectors;
-          auto *last = std::next(res->connectors, res->count_connectors);
-          const bool in_resources = std::find(first, last, conn->GetId()) !=
-                                    last;
-          const bool keep_alive = in_resources && !conn->IsDeleted();
-          if (keep_alive) {
+          const bool in_resources = state.resource_ids.count(conn->GetId()) !=
+                                    0;
+          if (in_resources && !conn->IsDeleted()) {
             conn_ids_present.insert(conn->GetId());
+            return true;
           }
-          return keep_alive;
+          return false;
         });
 
     for (auto it = stale_it; it != conns.end(); ++it) {
@@ -417,23 +494,16 @@ auto DrmDevice::RefreshConnectors()
   remove_stale(connectors_, false);
   remove_stale(ignored_connectors_, true);
 
-  // Add new connectors in DRM resources that are not present in connectors_
-  // or ignored_connectors_
-  for (int i = 0; i < res->count_connectors; ++i) {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    if (conn_ids_present.count(res->connectors[i]) != 0) {
+  for (auto &conn : state.new_connectors) {
+    if (!conn || conn->IsDeleted() ||
+        conn_ids_present.count(conn->GetId()) != 0) {
       continue;
     }
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    auto conn = CreateConnectorInstance(res->connectors[i], i);
-    if (!conn) {
-      continue;
-    }
-    if (conn->IsWriteback()) {
-      continue;
-    }
-
+    conn_ids_present.insert(conn->GetId());
     if (IsConnectorAllowed(*conn)) {
+      if (out_added_connectors != nullptr) {
+        out_added_connectors->push_back(conn.get());
+      }
       connectors_.emplace_back(std::move(conn));
     } else {
       ignored_connectors_.emplace_back(std::move(conn));
@@ -441,6 +511,13 @@ auto DrmDevice::RefreshConnectors()
   }
 
   return stale_connectors;
+}
+
+auto DrmDevice::RefreshConnectors()
+    -> std::vector<std::unique_ptr<DrmConnector>> {
+  auto snapshot = SnapshotConnectorsUnderLock();
+  auto probed = ProbeConnectorsOffLock(snapshot);
+  return ApplyProbedConnectorsUnderLock(std::move(probed));
 }
 
 auto DrmDevice::ResetConnectorsAndCrtcs() -> void {

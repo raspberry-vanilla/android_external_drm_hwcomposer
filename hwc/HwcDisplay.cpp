@@ -411,6 +411,20 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
     staged_mode_config_id_.reset();
     staged_power_mode_.reset();
     link_recovery_modeset_required_ = false;
+    defer_modeset_until_power_on_ = false;
+    hwc_->LogRefreshRateChanges();
+    return ConfigError::kNone;
+  }
+
+  // While the display's initial KMS modeset is deferred (or the display is
+  // powered off), stage the client-selected mode in memory without activating
+  // the CRTC in KMS until SetPowerMode(PowerMode::kOn) is called.
+  if (defer_modeset_until_power_on_) {
+    active_config_id_ = config;
+    staged_mode_config_id_.reset();
+    SetOutputType(new_config->output_type);
+    vsync_worker_->SetVsyncTimestampTracking(false);
+    vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -438,6 +452,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   staged_mode_config_id_.reset();
   staged_power_mode_.reset();
   link_recovery_modeset_required_ = false;
+  requires_reprobe_on_power_on_ = false;
   // CreateModesetCommit() may scan out a temporary zero-filled dumb buffer or
   // disable planes when the resolution changes. Invalidate the cached
   // composition and request a client refresh so SurfaceFlinger presents a real
@@ -445,6 +460,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   // screen.
   last_presented_composition_.Reset();
   // set new vsync period
+  vsync_worker_->SetVsyncTimestampTracking(false);
   vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
   hwc_->LogRefreshRateChanges();
   hwc_->SendRefreshEventToClient(handle_);
@@ -460,8 +476,9 @@ auto HwcDisplay::QueueConfig(ConfigId config, int64_t desired_time,
   }
 
   const HwcDisplayConfig *current_config = GetCurrentConfig();
-  if (link_recovery_modeset_required_ || !current_config ||
-      current_config->group_id != new_config->group_id) {
+  if (link_recovery_modeset_required_ || defer_modeset_until_power_on_ ||
+      (!IsInHeadlessMode() && !GetPipe().atomic_state_manager->IsActive()) ||
+      !current_config || current_config->group_id != new_config->group_id) {
     return ConfigError::kSeamlessNotAllowed;
   }
 
@@ -853,6 +870,7 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   // If the request is to enable the display, the CRTC is not active, and an
   // active config is set, try to reconfigure the pipeline with SetConfig.
   if (enabled) {
+    defer_modeset_until_power_on_ = false;
     if (GetPipe().atomic_state_manager->IsActive() &&
         GetCurrentConfig() != nullptr) {
       if (vsync_event_en_) {
@@ -867,7 +885,9 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
                                  GetPipe().connector->Get()->IsExternal();
     if (has_external_connector) {
       auto *connector = GetPipe().connector->Get();
-      connector->UpdateModesAndProperties();
+      if (requires_reprobe_on_power_on_ || connector->GetModes().empty()) {
+        connector->UpdateModesAndProperties();
+      }
       if (!connector->IsConnected()) {
         ALOGW("Cannot enable external display on disconnected connector %u",
               connector->GetId());
@@ -897,6 +917,26 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
         return HwcDisplay::Error::kNone;
       }
     }
+  } else {
+    staged_power_mode_.reset();
+    // Clear the VSyncWorker callback directly so VSync events stop firing while
+    // the display is powered off, while preserving vsync_event_en_ to restore
+    // callbacks when the display is powered back on.
+    if (vsync_worker_) {
+      vsync_worker_->SetTimestampCallback(std::nullopt);
+    }
+    const bool has_kernel_crtc = HasPhysicalConnector() &&
+                                 GetPipe()
+                                         .connector->Get()
+                                         ->GetCrtcIdProperty()
+                                         .GetValue()
+                                         .value_or(0) != 0;
+    if (!GetPipe().atomic_state_manager->IsActive() && !has_kernel_crtc) {
+      defer_modeset_until_power_on_ = true;
+      last_presented_composition_.Reset();
+      return HwcDisplay::Error::kNone;
+    }
+    requires_reprobe_on_power_on_ = true;
   }
 
   // Set the display active state.
@@ -904,7 +944,6 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   a_args.blocking = true;
   a_args.power_mode = mode;
   if (!enabled) {
-    staged_power_mode_.reset();
     a_args.teardown = true;
   }
 
@@ -921,14 +960,11 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     return HwcDisplay::Error::kNone;
   }
   staged_power_mode_.reset();
-  if (!enabled) {
+  if (enabled) {
+    requires_reprobe_on_power_on_ = false;
+  } else {
+    defer_modeset_until_power_on_ = true;
     last_presented_composition_.Reset();
-    // Clear the VSyncWorker callback directly so VSync events stop firing while
-    // the display is powered off, while preserving vsync_event_en_ to restore
-    // callbacks when the display is powered back on.
-    if (vsync_worker_) {
-      vsync_worker_->SetTimestampCallback(std::nullopt);
-    }
   }
   return HwcDisplay::Error::kNone;
 }
@@ -1005,6 +1041,7 @@ void HwcDisplay::Deinit() {
     last_presented_composition_.Reset();
   }
   link_recovery_modeset_required_ = false;
+  defer_modeset_until_power_on_ = false;
 
   if (vsync_worker_) {
     vsync_worker_->StopThread();
@@ -1122,6 +1159,8 @@ bool HwcDisplay::Init() {
     }
   }
 
+  requires_reprobe_on_power_on_ = false;
+  defer_modeset_until_power_on_ = false;
   if (!IsInHeadlessMode()) {
     if (Properties::FlatteningEnabled()) {
       auto flatcbk = (struct FlatConCallbacks){
@@ -1132,6 +1171,18 @@ bool HwcDisplay::Init() {
 
     if (pipeline_ && pipeline_->connector && pipeline_->connector->Get()) {
       auto *connector = pipeline_->connector->Get();
+      // Probe the connector only if it has not already been populated by
+      // ResourceManager::UpdateFrontendDisplays(). Doing this before reading
+      // the EDID blob or HDCP properties also ensures direct SetPipeline()
+      // callers observe fresh connector state without issuing a redundant
+      // second drmModeGetConnector() ioctl during hotplug.
+      if (connector->GetModes().empty()) {
+        int ret = connector->UpdateModesAndProperties();
+        if (ret != 0) {
+          ALOGE("Failed to update display modes with error: %d", ret);
+          return false;
+        }
+      }
       connector->GetDev()
           .GetBackend()
           .SetRefreshCallbackForConnector(connector->GetId(), [this]() {
@@ -1194,13 +1245,6 @@ bool HwcDisplay::Init() {
     configs_ = configs_generator_.GetFakeMode(0, 0);
     active_config_id_ = configs_.preferred_config_id;
 
-    auto *connector = pipeline_->connector->Get();
-    auto ret = connector->UpdateModesAndProperties();
-    if (ret != 0) {
-      ALOGE("Failed to update display modes with error: %d", ret);
-      return false;
-    }
-
     if (!RefreshConfigsFromConnector()) {
       return false;
     }
@@ -1229,8 +1273,25 @@ bool HwcDisplay::Init() {
   static constexpr ColorMode kDefaultColorMode = ColorMode::kSrgb;
   SetColorMode(kDefaultColorMode, ui::RenderIntent::COLORIMETRIC);
 
-  if (SetConfig(configs_.preferred_config_id) !=
-      HwcDisplay::ConfigError::kNone) {
+  if (GetDisplayType() == DisplayType::kExternal) {
+    // Defer the initial blocking KMS modeset on external displays until the
+    // client (SurfaceFlinger / DisplayManager) finishes selecting its target
+    // mode and calls SetPowerMode(PowerMode::kOn). This avoids holding
+    // GetMainLock() on UEventThread across a blocking modeset, eliminates the
+    // ON -> OFF -> ON triple-modeset during SurfaceFlinger display
+    // registration, and avoids forcing the connector's raw preferred mode
+    // before DisplayManager applies its multi-display topology policy.
+    if (const HwcDisplayConfig *preferred_config = GetConfig(
+            configs_.preferred_config_id);
+        preferred_config != nullptr) {
+      SetOutputType(preferred_config->output_type);
+      vsync_worker_->SetVsyncPeriodNs(
+          preferred_config->mode.GetVSyncPeriodNs());
+    }
+    defer_modeset_until_power_on_ = true;
+    staged_power_mode_ = PowerMode::kOn;
+  } else if (SetConfig(configs_.preferred_config_id) !=
+             HwcDisplay::ConfigError::kNone) {
     ALOGW(
         "Failed to set preferred config %u during Init on display %d; keeping "
         "display initialized for subsequent userspace modesets.",
@@ -1666,12 +1727,12 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
   // display_mode.
   if (staged_power_mode_) {
     if (!a_args.display_mode) {
-      const auto *current_config = GetCurrentConfig();
-      if (current_config == nullptr) {
+      const auto *target_config = GetLastRequestedConfig();
+      if (target_config == nullptr) {
         return std::nullopt;
       }
-      a_args.display_mode = current_config->mode;
-      a_args.display_config_id = current_config->id;
+      a_args.display_mode = target_config->mode;
+      a_args.display_config_id = target_config->id;
     }
     a_args.power_mode = staged_power_mode_;
     a_args.seamless = false;
@@ -1857,6 +1918,9 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
   writeback_complete_fence_ = result.writeback_complete_fence;
   if (a_args.power_mode) {
     staged_power_mode_.reset();
+    if (*a_args.power_mode != PowerMode::kOff) {
+      defer_modeset_until_power_on_ = false;
+    }
   }
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.

@@ -1910,4 +1910,156 @@ TEST_F(HwcDisplayTest,
          "connector must not re-enable VSyncWorker callbacks";
 }
 
+TEST_F(HwcDisplayTest,
+       ExternalDisplayInitDefersKmsModesetAndSkipsRedundantProbesAndOffCommit) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  fake_conn->ResetUpdateModesCallCount();
+
+  // External display (handle = 1 -> DisplayType::kExternal) defers its KMS
+  // modeset in Init() and skips redundant UpdateModesAndProperties() when
+  // ResourceManager has already populated connector modes.
+  HwcDisplay display(DisplayHandle{1}, /*is_virtual=*/false, &hwc);
+  EXPECT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayType(), HwcDisplay::DisplayType::kExternal);
+  EXPECT_EQ(fake_conn->GetUpdateModesCallCount(), 0U);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+  EXPECT_FALSE(display.HasStagedPowerModeOn())
+      << "Deferred external Init() must not report HasStagedPowerModeOn(), or "
+         "a follow-up NotifyDisplayConnected() will modeset on UEventThread";
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+
+  // SurfaceFlinger + DisplayPowerController's initial SetPowerMode(kOff) on the
+  // newly registered display is a no-op because the CRTC is not yet active.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_EQ(fake_conn->GetUpdateModesCallCount(), 0U);
+
+  // DisplayPowerController's subsequent SetPowerMode(kOn) performs the single
+  // blocking KMS modeset without a redundant connector probe.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_EQ(fake_conn->GetUpdateModesCallCount(), 0U);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 1U);
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+
+  // After a real power-off teardown (suspend), the next SetPowerMode(kOn) must
+  // re-probe UpdateModesAndProperties() once.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 2U);
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_EQ(fake_conn->GetUpdateModesCallCount(), 1U);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 3U);
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+}
+
+TEST_F(HwcDisplayTest,
+       ExternalDisplayQueueConfigWhileInactiveStagesClientModeForPowerOn) {
+  constexpr uint16_t kUhdWidth = 3840;
+  constexpr uint16_t kUhdHeight = 2160;
+  constexpr uint32_t kRefresh30Hz = 30;
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kUhdWidth, kUhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "2160p60"),
+       CreateFakeDrmMode(kUhdWidth, kUhdHeight, kRefresh30Hz, 0, "2160p30"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz, 0, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  HwcDisplay display(DisplayHandle{1}, /*is_virtual=*/false, &hwc);
+  EXPECT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_FALSE(pipeline->atomic_state_manager->IsActive());
+
+  ConfigId uhd_60_config_id = 0;
+  ConfigId uhd_30_config_id = 0;
+  ConfigId fhd_config_id = 0;
+  for (const auto& cfg : display.GetDisplayConfigs()) {
+    if (cfg.mode.GetRawMode().hdisplay == kUhdWidth &&
+        cfg.mode.GetRawMode().vrefresh == kRefresh60Hz) {
+      uhd_60_config_id = cfg.id;
+    } else if (cfg.mode.GetRawMode().hdisplay == kUhdWidth &&
+               cfg.mode.GetRawMode().vrefresh == kRefresh30Hz) {
+      uhd_30_config_id = cfg.id;
+    } else if (cfg.mode.GetRawMode().hdisplay == kFhdWidth) {
+      fhd_config_id = cfg.id;
+    }
+  }
+  ASSERT_NE(uhd_60_config_id, 0U);
+  ASSERT_NE(uhd_30_config_id, 0U);
+  ASSERT_NE(fhd_config_id, 0U);
+
+  // While the external display is inactive (deferred Init() or
+  // PowerMode::kOff), QueueConfig() returns kSeamlessNotAllowed for both
+  // non-preferred and preferred configs, and
+  // ComposerClient::setActiveConfigWithConstraints()'s fallback SetConfig()
+  // stages the selected mode in memory with 0 KMS commits without prematurely
+  // activating the CRTC.
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  QueuedConfigTiming timing{};
+  EXPECT_EQ(display.QueueConfig(fhd_config_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  EXPECT_EQ(display.SetConfig(fhd_config_id), HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, fhd_config_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fhd_config_id);
+
+  EXPECT_EQ(display.QueueConfig(uhd_30_config_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  EXPECT_EQ(display.SetConfig(uhd_30_config_id),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, uhd_30_config_id);
+
+  // Selecting the preferred config while inactive also takes the
+  // QueueConfig() -> kSeamlessNotAllowed -> SetConfig() staging path with 0 KMS
+  // commits, and the subsequent SetPowerMode(PowerMode::kOn) executes a single
+  // blocking KMS modeset.
+  EXPECT_EQ(display.QueueConfig(uhd_60_config_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  EXPECT_EQ(display.SetConfig(uhd_60_config_id),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_FALSE(pipeline->atomic_state_manager->IsActive());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, uhd_60_config_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, uhd_60_config_id);
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  ASSERT_EQ(sink->GetExecuteCommitCount(), 1U);
+  EXPECT_TRUE(pipeline->atomic_state_manager->IsActive());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, uhd_60_config_id);
+  const auto& modeset_args = sink->GetCommitHistory().back().front();
+  ASSERT_TRUE(modeset_args.display_mode.has_value());
+  if (modeset_args.display_mode.has_value()) {
+    EXPECT_EQ(modeset_args.display_mode->GetRawMode().hdisplay, kUhdWidth);
+    EXPECT_EQ(modeset_args.display_mode->GetRawMode().vdisplay, kUhdHeight);
+    EXPECT_EQ(modeset_args.display_mode->GetRawMode().vrefresh, kRefresh60Hz);
+  }
+}
+
 }  // namespace android::drm_hwcomposer

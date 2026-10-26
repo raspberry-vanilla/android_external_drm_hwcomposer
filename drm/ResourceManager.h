@@ -35,7 +35,9 @@ enum class CtmHandling;
 class DrmConnector;
 class DrmDevice;
 struct DrmDisplayPipeline;
+class UEvent;
 class UEventListener;
+struct UEventHotplugEvent;
 
 class PipelineToFrontendBindingInterface {
  public:
@@ -114,8 +116,18 @@ class ResourceManager {
   friend struct DrmHwcTest;
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
-  bool UpdateFrontendDisplays();
-  void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true);
+  void StartUEventListener();
+  void StartUEventListener(std::unique_ptr<UEvent> uevent);
+  bool HandleUEventHotplug(const UEventHotplugEvent &event);
+  bool UpdateFrontendDisplays(
+      bool update_modes = true,
+      const std::set<DrmConnector *> *scoped_status_connectors = nullptr,
+      const std::set<DrmConnector *> *content_protection_updated_connectors =
+          nullptr);
+  void ProcessHotplugForConnector(DrmConnector *conn, bool update_modes = true,
+                                  bool refresh_status_props = true,
+                                  bool check_status_props = true,
+                                  bool cp_was_updated = false);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
@@ -136,6 +148,9 @@ class ResourceManager {
 
   std::shared_ptr<UEventListener> uevent_listener_;
 
+  // Serializes off-lock DRM connector probing during hotplugs.
+  // Lock hierarchy: acquire hotplug_mutex_ before main_lock_.
+  std::mutex hotplug_mutex_;
   std::mutex main_lock_;
 
   std::map<DrmConnector *, std::shared_ptr<DrmDisplayPipeline>>

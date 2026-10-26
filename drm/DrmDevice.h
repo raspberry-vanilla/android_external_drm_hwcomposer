@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,15 +120,38 @@ class DrmDevice {
   virtual int GetProperty(uint32_t obj_id, uint32_t obj_type,
                           const char *prop_name, DrmProperty *property) const;
 
+  virtual auto GetConnector(uint32_t connector_id) const
+      -> DrmModeConnectorUnique;
+
   const std::optional<std::pair<uint64_t, uint64_t>> &GetCapCursorSize() const {
     return cap_cursor_size_;
   }
 
+  struct ConnectorSnapshot {
+    std::set<uint32_t> known_ids;
+  };
+
+  struct ProbedConnectorResources {
+    bool has_resources = false;
+    bool had_probe_error = false;
+    std::set<uint32_t> resource_ids;
+    std::vector<std::unique_ptr<DrmConnector>> new_connectors;
+  };
+
+  auto SnapshotConnectorsUnderLock() const -> ConnectorSnapshot;
+  auto ProbeConnectorsOffLock(const ConnectorSnapshot &snapshot)
+      -> ProbedConnectorResources;
+  auto ApplyProbedConnectorsUnderLock(
+      ProbedConnectorResources &&probed,
+      std::vector<DrmConnector *> *out_added_connectors = nullptr)
+      -> std::vector<std::unique_ptr<DrmConnector>>;
   auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
 
  protected:
   virtual auto GetResources() const -> DrmModeResUnique;
+  virtual auto GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
+      -> DrmModeObjectPropertiesUnique;
   virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
       -> std::unique_ptr<DrmConnector>;
   virtual auto CommitAtomicReset(drmModeAtomicReq &pset) -> int;

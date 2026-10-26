@@ -41,6 +41,9 @@
 #include <vector>
 
 #include <android-base/file.h>
+#ifdef ANDROID
+#include <android/log.h>
+#endif
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
 
@@ -207,6 +210,15 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().Init();
   }
 
+  void StartUEventListenerForTest(std::unique_ptr<UEvent> uevent) {
+    hwc.GetResMan().StartUEventListener(std::move(uevent));
+  }
+
+  bool InvokeHandleUEventHotplugForTest(
+      const UEventListener::HotplugEvent& event) {
+    return hwc.GetResMan().HandleUEventHotplug(event);
+  }
+
   void DeInitResManForTest() {
     hwc.GetResMan().DeInit();
   }
@@ -294,6 +306,10 @@ TEST_F(DrmHwcTest, ActiveDisplayCountsAndDumpState) {
   EXPECT_TRUE(hwc.BindDisplay(external_pipe));
   hwc.FinalizeDisplayBinding();
   hwc.FlushHotplugEvents();
+
+  ASSERT_NE(hwc.GetDisplay(1), nullptr);
+  EXPECT_EQ(hwc.GetDisplay(1)->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
 
   const auto counts = hwc.PullActiveDisplayCounts();
   EXPECT_EQ(counts.num_active_physical_displays, 2);
@@ -656,7 +672,7 @@ TEST_F(DrmHwcTest,
   ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
 
   auto primary_pipe = CreatePipeline(/*is_external=*/false);
-  auto secondary_pipe = CreatePipeline(/*is_external=*/true);
+  auto secondary_pipe = CreatePipeline(/*is_external=*/false);
   ASSERT_NE(primary_pipe, nullptr);
   ASSERT_NE(secondary_pipe, nullptr);
 
@@ -1205,6 +1221,8 @@ TEST_F(DrmHwcTest,
 
   HwcDisplay* ext_display = hwc.GetDisplay(1);
   ASSERT_NE(ext_display, nullptr);
+  EXPECT_EQ(ext_display->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
   const auto initial_configs = ext_display->GetDisplayConfigs();
   ASSERT_EQ(initial_configs.size(), 2U);
   ASSERT_NE(ext_display->GetCurrentConfig(), nullptr);
@@ -1406,6 +1424,422 @@ TEST_F(DrmHwcTest,
 
   EXPECT_GT(hotplug_callbacks.load(), after_add)
       << "UEventListener ignored DEVTYPE=drm_connector ACTION=remove uevent";
+}
+
+namespace {
+
+class ScopedErrorLogCapture {
+ public:
+  ScopedErrorLogCapture() {
+#ifdef ANDROID
+    GetCapturedErrors().clear();
+    __android_log_set_logger([](const struct __android_log_message* msg) {
+      if (msg != nullptr && msg->priority >= ANDROID_LOG_ERROR &&
+          msg->message != nullptr) {
+        std::lock_guard<std::mutex> lock(GetMutex());
+        GetCapturedErrors() += msg->message;
+        GetCapturedErrors() += "\n";
+      }
+    });
+#else
+    testing::internal::CaptureStderr();
+#endif
+  }
+
+  ~ScopedErrorLogCapture() {
+    if (!active_) {
+      return;
+    }
+    active_ = false;
+#ifdef ANDROID
+#ifdef __ANDROID__
+    __android_log_set_logger(__android_log_logd_logger);
+#else
+    __android_log_set_logger(__android_log_stderr_logger);
+#endif
+#else
+    (void)testing::internal::GetCapturedStderr();
+#endif
+  }
+
+  ScopedErrorLogCapture(const ScopedErrorLogCapture&) = delete;
+  ScopedErrorLogCapture& operator=(const ScopedErrorLogCapture&) = delete;
+  ScopedErrorLogCapture(ScopedErrorLogCapture&&) = delete;
+  ScopedErrorLogCapture& operator=(ScopedErrorLogCapture&&) = delete;
+
+  std::string StopAndGetErrors() {
+    if (!active_) {
+      return {};
+    }
+    active_ = false;
+#ifdef ANDROID
+#ifdef __ANDROID__
+    __android_log_set_logger(__android_log_logd_logger);
+#else
+    __android_log_set_logger(__android_log_stderr_logger);
+#endif
+    std::lock_guard<std::mutex> lock(GetMutex());
+    std::string result = GetCapturedErrors();
+    GetCapturedErrors().clear();
+    return result;
+#else
+    return testing::internal::GetCapturedStderr();
+#endif
+  }
+
+ private:
+#ifdef ANDROID
+  static std::mutex& GetMutex() {
+    static auto* m = new std::mutex();
+    return *m;
+  }
+  static std::string& GetCapturedErrors() {
+    static auto* s = new std::string();
+    return *s;
+  }
+#endif
+  bool active_ = true;
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest,
+       TransientConnectorVanishSuppressesErrorLogsWhileRealIoErrorLogsError) {
+  constexpr uint32_t kVanishedMstConnId = 310;
+  constexpr uint32_t kMidInitVanishedMstConnId = 311;
+  constexpr uint32_t kFaultyConnId = 312;
+  constexpr uint32_t kPostCrtcIdVanishedMstConnId = 313;
+
+  // 1. CreateInstance on a connector that vanished (-ENOENT) before
+  // drmModeGetConnector() must return nullptr without emitting ALOGE.
+  fake_device->SetGetConnectorFailureErrno(kVanishedMstConnId, ENOENT);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device, kVanishedMstConnId,
+                                             0);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_EQ(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected no ALOGE on transient -ENOENT connector vanish, got: "
+        << errors;
+  }
+
+  // 2. CreateInstance on a connector that existed during drmModeGetConnector()
+  // but vanished (-ENODEV) before drmModeObjectGetProperties() in Init() (both
+  // before required DPMS/CRTC_ID and during optional property discovery after
+  // DPMS/CRTC_ID succeed) must return nullptr without emitting ALOGE.
+  fake_device
+      ->SetFakeRawConnectorForGetConnector(kMidInitVanishedMstConnId,
+                                           /*encoder_id=*/kFirstEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  fake_device->SetGetObjectPropertiesFailureErrno(kMidInitVanishedMstConnId,
+                                                  ENODEV);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device,
+                                             kMidInitVanishedMstConnId, 1);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_TRUE(errors.empty())
+        << "Expected zero ALOGE logs when connector vanishes mid-Init(), got: "
+        << errors;
+  }
+
+  fake_device
+      ->SetFakeRawConnectorForGetConnector(kPostCrtcIdVanishedMstConnId,
+                                           /*encoder_id=*/kFirstEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  fake_device->RegisterFakeObjectProperty(kPostCrtcIdVanishedMstConnId, "DPMS",
+                                          1);
+  fake_device->RegisterFakeObjectProperty(kPostCrtcIdVanishedMstConnId,
+                                          "CRTC_ID", 2);
+  fake_device->SetGetObjectPropertiesFailureErrno(kPostCrtcIdVanishedMstConnId,
+                                                  ENODEV);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device,
+                                             kPostCrtcIdVanishedMstConnId, 1);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_TRUE(errors.empty())
+        << "Expected zero ALOGE logs when connector vanishes during optional "
+           "property discovery in Init(), got: "
+        << errors;
+  }
+
+  // 3. UpdateModesAndProperties() on an existing MST connector that vanished
+  // (-ENOENT) must mark the connector deleted and disconnected without ALOGE.
+  auto* existing_mst = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(existing_mst, nullptr);
+  fake_device->SetGetConnectorFailureErrno(existing_mst->GetId(), ENOENT);
+  {
+    ScopedErrorLogCapture capture;
+    const int ret = existing_mst->CallBaseUpdateModesAndProperties();
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(ret, -ENODEV);
+    EXPECT_TRUE(existing_mst->IsDeleted());
+    EXPECT_EQ(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected no ALOGE on transient -ENOENT UpdateModesAndProperties(), "
+           "got: "
+        << errors;
+  }
+
+  // 4. Genuine hardware/driver I/O error (-EIO) MUST still emit ALOGE.
+  fake_device->SetGetConnectorFailureErrno(kFaultyConnId, EIO);
+  {
+    ScopedErrorLogCapture capture;
+    auto conn = DrmConnector::CreateInstance(*fake_device, kFaultyConnId, 2);
+    const std::string errors = capture.StopAndGetErrors();
+    EXPECT_EQ(conn, nullptr);
+    EXPECT_NE(errors.find("Failed to get connector"), std::string::npos)
+        << "Expected ALOGE on genuine -EIO connector failure, got: " << errors;
+  }
+}
+
+TEST_F(DrmHwcTest,
+       UEventListenerSkipsDuplicateSettleSweepWhenSettledButRetriesUnsettled) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto* internal_conn = shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(internal_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetConnected(false);
+  shared_dev->SetResourceConnectorIds(
+      {internal_conn->GetId(), ext_conn->GetId()});
+
+  std::atomic<size_t> refresh_calls{0};
+  shared_dev->SetGetResourcesHook([&]() { ++refresh_calls; });
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+  StartUEventListenerForTest(std::move(uevent));
+
+  constexpr int kPostSettleWaitMs = 280;
+  const std::string hotplug_uevent = MakeUEventPacket(
+      {"change@/devices/drm/card0", "DEVTYPE=drm_minor", "HOTPLUG=1"});
+
+  // 1. Cleanly settled hotplug connect: ext_conn already has valid modes on the
+  // initial uevent sweep, so no duplicate 200ms trailing settle sweep should
+  // execute after the quiet timeout expires.
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+  refresh_calls.store(0);
+  internal_conn->ResetUpdateModesCallCount();
+
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  EXPECT_EQ(refresh_calls.load(), 1U)
+      << "Cleanly settled hotplug ran a duplicate 200ms trailing settle sweep";
+  EXPECT_EQ(internal_conn->GetUpdateModesCallCount(), 1U)
+      << "Cleanly settled hotplug re-probed connector modes a second time";
+
+  // Reset ext_conn to disconnected for Subtest 2.
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(false);
+  }
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+  ASSERT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+
+  // 2. Unsettled initial HPD pulse (0 modes on first probe, valid modes ready
+  // before the 200ms settle timeout with NO follow-up uevent): UEventListener
+  // MUST execute the 200ms trailing settle retry and bind the display.
+  constexpr int kInitialSweepAllowanceMs = 50;
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({});
+  }
+  refresh_calls.store(0);
+  ext_conn->ResetUpdateModesCallCount();
+
+  ASSERT_EQ(write(*write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kInitialSweepAllowanceMs));
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 0U);
+  EXPECT_EQ(refresh_calls.load(), 1U);
+
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(kPostSettleWaitMs));
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U)
+      << "Unsettled 0-mode initial HPD pulse was not recovered by 200ms settle "
+         "retry";
+  EXPECT_EQ(refresh_calls.load(), 2U)
+      << "Expected initial sweep + one 200ms settle retry for unsettled "
+         "0-mode connector";
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       HotplugProbesConnectorsOutsideMainLockAndScopesByUeventConnectorId) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto* internal_conn = shared_dev->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(internal_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetConnected(false);
+  shared_dev->SetResourceConnectorIds(
+      {internal_conn->GetId(), ext_conn->GetId()});
+
+  auto* shared_dev_ptr = shared_dev.get();
+  AddDeviceToResMan(std::move(shared_dev));
+  InitResManForTest();
+
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+  auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+  UniqueFd write_fd = MakeUniqueFd(fds[1]);
+  ASSERT_NE(uevent, nullptr);
+  StartUEventListenerForTest(std::move(uevent));
+
+  auto is_main_lock_free_from_other_thread = [this]() {
+    bool unlocked = false;
+    std::thread probe_thread([this, &unlocked]() {
+      if (hwc.GetResMan().GetMainLock().try_lock()) {
+        hwc.GetResMan().GetMainLock().unlock();
+        unlocked = true;
+      }
+    });
+    probe_thread.join();
+    return unlocked;
+  };
+
+  std::atomic<bool> resources_probed_unlocked{false};
+  std::atomic<bool> modes_probed_unlocked{false};
+  shared_dev_ptr->SetGetResourcesHook([&]() {
+    resources_probed_unlocked.store(is_main_lock_free_from_other_thread());
+  });
+  ext_conn->SetUpdateModesHook([&]() {
+    modes_probed_unlocked.store(is_main_lock_free_from_other_thread());
+  });
+
+  internal_conn->ResetUpdateModesCallCount();
+  ext_conn->ResetUpdateModesCallCount();
+  {
+    std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    ext_conn->SetConnected(true);
+    ext_conn->SetModes({CreateFakeDrmMode()});
+  }
+
+  constexpr int kDeliveryWaitMs = 80;
+  const std::string scoped_hotplug = MakeUEventPacket(
+      {"change@/devices/drm/card0", "DEVTYPE=drm_minor", "HOTPLUG=1",
+       "CONNECTOR=" + std::to_string(ext_conn->GetId())});
+
+  ASSERT_EQ(write(*write_fd, scoped_hotplug.data(), scoped_hotplug.size()),
+            static_cast<ssize_t>(scoped_hotplug.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kDeliveryWaitMs));
+
+  shared_dev_ptr->SetGetResourcesHook(nullptr);
+  ext_conn->SetUpdateModesHook(nullptr);
+
+  EXPECT_EQ(GetAttachedPipelineCount(ext_conn), 1U);
+  EXPECT_TRUE(resources_probed_unlocked.load())
+      << "drmModeGetResources() was called while holding GetMainLock()";
+  EXPECT_TRUE(modes_probed_unlocked.load())
+      << "UpdateModesAndProperties() was called while holding GetMainLock()";
+  EXPECT_EQ(internal_conn->GetUpdateModesCallCount(), 0U)
+      << "Settled internal connector was re-probed despite CONNECTOR="
+      << ext_conn->GetId() << " scoping";
+  EXPECT_GE(ext_conn->GetUpdateModesCallCount(), 1U);
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, OffLockHotplugProbeDoesNotOverwriteFresherMainLockReprobe) {
+  auto shared_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  auto* shared_dev_ptr = shared_dev.get();
+
+  constexpr uint32_t kExtEncoderId = 81;
+  constexpr uint32_t kExtCrtcId = 82;
+  constexpr uint32_t kExtConnectorId = 83;
+  constexpr uint32_t kExtPlaneId = 183;
+
+  auto enc = std::make_unique<FakeDrmEncoder>(kExtEncoderId, kExtCrtcId);
+  enc->InitRawEncoder(kFakeAllCrtcsMask);
+  shared_dev->AddEncoder(std::move(enc));
+  shared_dev->AddCrtc(std::make_unique<FakeDrmCrtc>(kExtCrtcId));
+  shared_dev->AddPlane(
+      std::make_unique<FakeDrmPlane>(*shared_dev, DRM_PLANE_TYPE_PRIMARY,
+                                     /*is_valid=*/true, kExtPlaneId));
+
+  shared_dev->RegisterFakeObjectProperty(kExtConnectorId, "DPMS", 1);
+  shared_dev->RegisterFakeObjectProperty(kExtConnectorId, "CRTC_ID", 2);
+  shared_dev
+      ->SetFakeRawConnectorForGetConnector(kExtConnectorId, kExtEncoderId,
+                                           DRM_MODE_CONNECTOR_DisplayPort);
+  auto real_conn = DrmConnector::CreateInstance(*shared_dev, kExtConnectorId,
+                                                /*index=*/0);
+  ASSERT_NE(real_conn, nullptr);
+  auto* real_conn_ptr = real_conn.get();
+  shared_dev->AddConnector(std::move(real_conn));
+  shared_dev->SetResourceConnectorIds({kExtConnectorId});
+
+  AddDeviceToResMan(std::move(shared_dev));
+
+  // Initially Phase 2 off-lock probe sees a vanished/disconnected connector
+  // (ENOENT), but while Phase 2 is in flight outside GetMainLock(), a
+  // synchronous caller under GetMainLock() (e.g. SetPowerMode(kOn)) re-probes
+  // the connector after it comes back online. Phase 3 must not overwrite that
+  // fresher state with the stale Phase-2 ENOENT result.
+  shared_dev_ptr->SetGetConnectorFailureErrno(kExtConnectorId, ENOENT);
+  std::atomic<bool> hook_ran{false};
+  shared_dev_ptr->SetGetConnectorHook([&](uint32_t id) {
+    if (id != kExtConnectorId || hook_ran.exchange(true)) {
+      return;
+    }
+    std::thread main_lock_prober([&]() {
+      std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+      shared_dev_ptr->SetGetConnectorFailureErrno(kExtConnectorId,
+                                                  std::nullopt);
+      EXPECT_EQ(real_conn_ptr->UpdateModesAndProperties(), 0);
+    });
+    main_lock_prober.join();
+  });
+
+  UEventListener::HotplugEvent event{};
+  event.connector_ids.insert(kExtConnectorId);
+  InvokeHandleUEventHotplugForTest(event);
+
+  shared_dev_ptr->SetGetConnectorHook(nullptr);
+  EXPECT_TRUE(hook_ran.load());
+  EXPECT_FALSE(real_conn_ptr->IsDeleted())
+      << "Stale Phase-2 off-lock probe overwrote fresher synchronous "
+         "UpdateModesAndProperties() state";
+  EXPECT_TRUE(real_conn_ptr->IsConnected());
+
+  shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
 }
 
 }  // namespace android::drm_hwcomposer
