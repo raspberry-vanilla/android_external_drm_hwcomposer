@@ -96,6 +96,12 @@ constexpr float kFloatTolerance = 1e-5F;
 constexpr uint32_t kColorPipelinePrimaryPlaneId = 980;
 constexpr uint32_t kTestOverlayPlaneId = 990;
 constexpr float kOpaqueAlpha = 1.0F;
+constexpr uint32_t kCursorTestPrimaryPlaneId = 991;
+constexpr uint32_t kCursorTestOverlayPlaneId = 992;
+constexpr uint32_t kCursorTestCursorPlaneId = 993;
+constexpr float kNightLightRScale = 0.85F;
+constexpr float kNightLightGScale = 0.75F;
+constexpr float kNightLightBScale = 0.55F;
 
 class TestDrmHwc : public DrmHwc {
  public:
@@ -1984,6 +1990,115 @@ TEST_F(
   EXPECT_EQ(validate_frame2.changed_layers.size(), 2U);
   EXPECT_EQ(display.get_layer(kOccludedLayerId)->GetValidatedType(),
             CompositionType::kClient);
+}
+
+TEST_F(
+    HwcDisplayTest,
+    CursorPlaneNeedsColorPipelineWithholdsCursorPlaneWhenCtmOrGamutRequiresColorOps) {
+  ScopedTestProperty use_cp_prop("vendor.hwc.drm.enable_color_pipeline", "1");
+  ScopedTestProperty force_cm_prop("vendor.hwc.drm.force_color_mode", "-1");
+  ReloadProperties();
+
+  auto primary = std::make_unique<FakeDrmPlane>(*fake_device,
+                                                DRM_PLANE_TYPE_PRIMARY,
+                                                /*is_valid=*/true,
+                                                kCursorTestPrimaryPlaneId);
+  FakeDrmPlane* primary_plane = primary.get();
+  primary_plane->SetHasColorPipeline(true);
+  fake_device->AddPlane(std::move(primary));
+
+  fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  fake_device->AddPlane(
+      std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_OVERLAY,
+                                     /*is_valid=*/true,
+                                     kCursorTestOverlayPlaneId));
+  fake_device->AddPlane(
+      std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_CURSOR,
+                                     /*is_valid=*/true,
+                                     kCursorTestCursorPlaneId));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(
+          *fake_device->GetConnectors().back());
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->capabilities = std::make_unique<
+      FakeDisplayCapabilities>(std::nullopt, std::nullopt,
+                               /*hw_ctm_override=*/true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ASSERT_TRUE(display.UseColorPipeline());
+  ASSERT_NE(display.GetCursorPlane(), nullptr);
+
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  constexpr ILayerId kBgLayerId = 1;
+  constexpr ILayerId kCursorLayerId = 2;
+  ASSERT_TRUE(display.CreateLayer(kBgLayerId));
+  ASSERT_TRUE(display.CreateLayer(kCursorLayerId));
+
+  auto bg_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1));
+  bg_props.colorspace = HwcColorspace::kBt709;
+  bg_props.z_order = 0;
+  display.get_layer(kBgLayerId)->SetLayerProperties(bg_props);
+
+  auto cursor_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 2));
+  cursor_props.composition_type = CompositionType::kCursor;
+  cursor_props.colorspace = HwcColorspace::kBt709;
+  cursor_props.z_order = 1;
+  display.get_layer(kCursorLayerId)->SetLayerProperties(cursor_props);
+  HwcLayer* cursor_layer = display.get_layer(kCursorLayerId);
+  ASSERT_NE(cursor_layer, nullptr);
+
+  // (a) Identity CTM + matching colorspace (kBt709) -> cursor plane does NOT
+  // need color pipeline and validates as CompositionType::kCursor.
+  display.SetColorMode(ColorMode::kSrgb, static_cast<ui::RenderIntent>(0));
+  display.SetColorTransformMatrix(kIdentityMatrix);
+  EXPECT_FALSE(display.CursorPlaneNeedsColorPipeline(*cursor_layer));
+  auto validate_identity = display.ValidateStagedComposition();
+  EXPECT_TRUE(validate_identity.changed_layers.empty());
+  EXPECT_EQ(cursor_layer->GetValidatedType(), CompositionType::kCursor);
+  display.AcceptValidatedComposition();
+
+  // (b) Non-identity Night Light CTM -> CursorPlaneNeedsColorPipeline returns
+  // true and ValidateStagedComposition withholds the cursor plane, falling back
+  // the cursor layer to CompositionType::kDevice on the available overlay
+  // plane.
+  HalColorTransformMatrix night_light_ctm = kIdentityMatrix;
+  night_light_ctm[kCtmRScaleIdx] = kNightLightRScale;
+  night_light_ctm[kCtmGScaleIdx] = kNightLightGScale;
+  night_light_ctm[kCtmBScaleIdx] = kNightLightBScale;
+  display.SetColorTransformMatrix(night_light_ctm);
+  EXPECT_TRUE(display.CursorPlaneNeedsColorPipeline(*cursor_layer));
+  auto validate_night_light = display.ValidateStagedComposition();
+  EXPECT_NE(cursor_layer->GetValidatedType(), CompositionType::kCursor);
+  EXPECT_EQ(cursor_layer->GetValidatedType(), CompositionType::kDevice);
+
+  // (c) Identity CTM, but cursor layer colorspace (kDciP3) differs from
+  // display colorspace (kBt709) -> CursorPlaneNeedsColorPipeline returns true
+  // due to gamut adjustment matrix.
+  display.SetColorTransformMatrix(kIdentityMatrix);
+  HwcLayer::LayerProperties p3_cursor_props{};
+  p3_cursor_props.colorspace = HwcColorspace::kDciP3;
+  cursor_layer->SetLayerProperties(p3_cursor_props);
+  EXPECT_TRUE(display.CursorPlaneNeedsColorPipeline(*cursor_layer));
+
+  // (d) When UseColorPipeline() is false, CursorPlaneNeedsColorPipeline returns
+  // false.
+  ScopedTestProperty disable_cp_prop("vendor.hwc.drm.enable_color_pipeline",
+                                     "0");
+  ReloadProperties();
+  primary_plane->SetHasColorPipeline(false);
+  HwcDisplay no_cp_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  no_cp_display.SetPipeline(pipeline);
+  EXPECT_FALSE(no_cp_display.UseColorPipeline());
+  EXPECT_FALSE(no_cp_display.CursorPlaneNeedsColorPipeline(*cursor_layer));
 }
 
 TEST_F(HwcDisplayTest,
