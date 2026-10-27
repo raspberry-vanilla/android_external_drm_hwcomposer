@@ -145,12 +145,15 @@ class EarlyBootAnimation {
       std::vector<uint8_t>& out_compressed_buf) const;
 
   bool WriteFrameToDmaBuf(const std::vector<uint8_t>& frame_buf, int back_idx,
-                          uint32_t bytes_per_pixel);
+                          uint32_t bytes_per_pixel,
+                          bool wait_for_recycle = false);
   [[nodiscard]] bool DecompressAndWriteFrame(
       const std::vector<uint8_t>& compressed_buf, uint32_t compressed_size,
       int back_idx, uint32_t bytes_per_pixel,
-      std::vector<uint8_t>& out_decompressed_buf);
+      std::vector<uint8_t>& out_decompressed_buf,
+      bool wait_for_recycle = false);
   [[nodiscard]] bool PresentFrame(int back_idx, uint32_t frame_count) const;
+  void WaitForLastFrame() const;
   void SetAnimationState(AnimationState state);
 
   // Non-owning pointer to the primary internal display. Owned by DrmHwc;

@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -48,15 +49,18 @@
 #include <drm/drm_mode.h>
 
 #include "backend/GenericBackend.h"
+#include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/HdcpController.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
+#include "drm/DrmAtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
 #include "drm/DrmMode.h"
 #include "drm/DrmTestUtils.h"
 #include "drm/ResourceManager.h"
 #include "drm/UEventListener.h"
+#include "early_animation/EarlyBootAnimation.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "utils/TestUtils.h"
@@ -111,7 +115,8 @@ class RecordingDrmHwc : public DrmHwc {
 }  // namespace
 
 struct DrmHwcTest : public ::testing::Test {
-  static void WriteValidRawAnimationFile(int fd, uint32_t num_frames = 2) {
+  static void WriteValidRawAnimationFile(int fd, uint32_t num_frames = 2,
+                                         uint32_t fps = kTestAnimFps) {
     struct PackedHeader {
       char magic[4];
       uint32_t width;
@@ -127,7 +132,7 @@ struct DrmHwcTest : public ::testing::Test {
     std::memcpy(hdr.magic, "RAWF", sizeof(hdr.magic));
     hdr.width = kTestAnimWidth;
     hdr.height = kTestAnimHeight;
-    hdr.fps = kTestAnimFps;
+    hdr.fps = fps;
     hdr.num_frames = num_frames;
     hdr.format = DRM_FORMAT_ARGB8888;
     hdr.hold_frame = 0;
@@ -2166,6 +2171,204 @@ TEST_F(DrmHwcTest,
   hwc.WaitForCompletionAndStopEarlyBootAnimation();
 
   EXPECT_GE(sink->GetCommitHistory().size(), 2U);
+  sink->ClearHistory();
+}
+
+namespace {
+
+class CountingWaitStateManager : public DrmAtomicStateManager {
+ public:
+  explicit CountingWaitStateManager(DrmDisplayPipeline* pipe)
+      : DrmAtomicStateManager(pipe) {
+  }
+
+  void SetOnWaitHook(std::function<void()> hook) {
+    on_wait_hook_ = std::move(hook);
+  }
+
+  void WaitLastFrame() override {
+    if (on_wait_hook_) {
+      on_wait_hook_();
+    }
+    DrmAtomicStateManager::WaitLastFrame();
+  }
+
+ private:
+  std::function<void()> on_wait_hook_;
+};
+
+class DumbBufferTrackingFakeDevice : public FakeDrmDevice {
+ public:
+  explicit DumbBufferTrackingFakeDevice(ResourceManager* res_man)
+      : FakeDrmDevice(res_man) {
+  }
+
+  std::optional<BufferInfo> CreateDumbBuffer(uint32_t width, uint32_t height,
+                                             uint32_t format,
+                                             uint32_t prime_fd_flags) override {
+    auto bo = FakeDrmDevice::CreateDumbBuffer(width, height, format,
+                                              prime_fd_flags);
+    if (bo.has_value()) {
+      dumb_fds_.push_back(bo->prime_fds[0]);
+    }
+    return bo;
+  }
+
+  const std::vector<int>& GetDumbFds() const {
+    return dumb_fds_;
+  }
+
+ private:
+  std::vector<int> dumb_fds_;
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest, EarlyBootAnimationSubmitsNonBlockingPageflipCommits) {
+  constexpr uint32_t kNumTestFrames = 4;
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, kNumTestFrames, /*fps=*/kTestRefresh60Hz);
+
+  const ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  const ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  const ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  const ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, DRM_MODE_TYPE_PREFERRED,
+                         "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  const auto& history = sink->GetCommitHistory();
+  ASSERT_EQ(history.size(), kNumTestFrames);
+  for (const auto& frame_commit : history) {
+    ASSERT_FALSE(frame_commit.empty());
+    EXPECT_FALSE(frame_commit.front().blocking);
+  }
+  sink->ClearHistory();
+}
+
+TEST_F(DrmHwcTest,
+       EarlyBootAnimationCopiesSecondBufferBeforeWaitingForFirstFlip) {
+  constexpr uint32_t kNumTestFrames = 3;
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, kNumTestFrames, /*fps=*/kTestRefresh60Hz);
+
+  const ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  const ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  const ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  const ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  // Hand ownership to the fixture so the device outlives the display pipeline
+  // until TearDown() unbinds it.
+  auto tracking_dev_owner = std::make_unique<DumbBufferTrackingFakeDevice>(
+      &hwc.GetResMan());
+  auto* tracking_dev = tracking_dev_owner.get();
+  fake_device = std::move(tracking_dev_owner);
+  auto* sink = tracking_dev->GetFakeAtomicCommitSink();
+  sink->SetDriveStateManager(true);
+  tracking_dev
+      ->AddPipelineResourcesWithModes({CreateFakeDrmMode(kTestAnimWidth,
+                                                         kTestAnimHeight,
+                                                         kTestRefresh120Hz)},
+                                      /*is_external=*/false);
+  std::shared_ptr<DrmDisplayPipeline>
+      primary_pipe = tracking_dev->GetBackend().CreatePipeline(
+          *tracking_dev->GetConnectors().back());
+  ASSERT_NE(primary_pipe, nullptr);
+
+  auto wait_mgr = std::make_unique<CountingWaitStateManager>(
+      primary_pipe.get());
+  auto* wait_mgr_ptr = wait_mgr.get();
+  primary_pipe->atomic_state_manager = std::move(wait_mgr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  // Sample animation buffer 1 at the last WaitLastFrame() issued while only
+  // frame 0 has been committed, i.e. when frame 1 blocks on frame 0's flip.
+  // EarlyBootAnimation allocates its two scanout buffers after the modeset
+  // buffers, so animation buffer 1 is the most recently created dumb buffer.
+  const size_t commits_before_start = sink->GetExecuteCommitCount();
+  uint8_t second_buf_byte_before_frame1_wait = 0;
+  wait_mgr_ptr->SetOnWaitHook([&]() {
+    if (sink->GetExecuteCommitCount() == commits_before_start + 1 &&
+        !tracking_dev->GetDumbFds().empty() &&
+        pread(tracking_dev->GetDumbFds().back(),
+              &second_buf_byte_before_frame1_wait, 1, 0) != 1) {
+      second_buf_byte_before_frame1_wait = 0;
+    }
+  });
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+  wait_mgr_ptr->SetOnWaitHook(nullptr);
+
+  ASSERT_GE(tracking_dev->GetDumbFds().size(), 2U);
+  EXPECT_EQ(second_buf_byte_before_frame1_wait, kTestPixelByte);
+  sink->ClearHistory();
+}
+
+TEST_F(DrmHwcTest,
+       EarlyBootAnimationWaitsForFinalFlipBeforeSignalingCompletion) {
+  constexpr uint32_t kNumTestFrames = 4;
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, kNumTestFrames, /*fps=*/kTestRefresh60Hz);
+
+  const ScopedTestProperty
+      disable_on_bind_prop("vendor.hwc.drm.bootanim.enable", "0");
+  const ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  const ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  const ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, DRM_MODE_TYPE_PREFERRED,
+                         "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+
+  auto wait_mgr = std::make_unique<CountingWaitStateManager>(
+      primary_pipe.get());
+  auto* wait_mgr_ptr = wait_mgr.get();
+  primary_pipe->atomic_state_manager = std::move(wait_mgr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  const ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  auto anim = EarlyBootAnimation::CreateInstance(
+      hwc.GetDisplay(kPrimaryDisplay));
+  ASSERT_NE(anim, nullptr);
+
+  // Stop the fake sink from issuing its own pre-commit WaitLastFrame() so every
+  // observed wait comes from EarlyBootAnimation itself.
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetDriveStateManager(false);
+  sink->ClearHistory();
+  const size_t commits_before_start = sink->GetExecuteCommitCount();
+  std::atomic<size_t> commits_at_last_wait{0};
+  wait_mgr_ptr->SetOnWaitHook(
+      [&]() { commits_at_last_wait.store(sink->GetExecuteCommitCount()); });
+
+  ASSERT_TRUE(anim->Start());
+  anim->WaitForCompletion();
+  const size_t commits_at_final_wait = commits_at_last_wait.load() -
+                                       commits_before_start;
+  anim->Stop();
+  wait_mgr_ptr->SetOnWaitHook(nullptr);
+
+  EXPECT_EQ(commits_at_final_wait, kNumTestFrames);
   sink->ClearHistory();
 }
 
