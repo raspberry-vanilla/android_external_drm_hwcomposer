@@ -1,11 +1,12 @@
 
-BASE_DIR:=../aospless
+BASE_DIR ?= $(firstword $(wildcard /aospless_arm64 ../aospless))
 
 SYSTEM_INCLUDE_DIRS := /usr/include/libdrm
 
 CLANG := clang++-19
 CLANG_TIDY := clang-tidy-19
 OUT_DIR := /tmp/drm_hwcomposer/build
+TIDY_CACHE_DIR ?= $(OUT_DIR)/tidy_cache
 SRC_DIR := .
 ANDROID_SDK_VERSION ?= 37
 STD ?= gnu++17
@@ -112,14 +113,12 @@ DEPS := $(patsubst %.cpp,$(OUT_DIR)/%.d,$(BUILD_FILES))
 
 build: $(OBJ)
 
+# Emit .d header dependency files inline with object compilation (-MMD -MP) so
+# make does not trigger a cold 116-file preprocessor pass before starting jobs.
 $(OUT_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CC $<"
-	@$(CLANG) $< $(CXXARGS) -c -o $@
-
-$(OUT_DIR)/%.d: $(SRC_DIR)/%.cpp
-	@mkdir -p $(dir $@)
-	@$(CLANG) $(CXXARGS) $< -MM -MT $(OUT_DIR)/$(patsubst %.cpp,%.o,$<) -o $@
+	@$(CLANG) $< $(CXXARGS) -MMD -MP -c -o $@
 
 # TIDY
 TIDY_FILES_AUTO := $(shell find -L $(SRC_DIR) -not -path '*/\.*' -not -path '*/tests/test_include/*' -not -path '*/backend/sdm/stubs/*' \( -path '*.cpp' -o -path '*.h' \))
@@ -132,6 +131,13 @@ TIDY_FILES := $(sort $(TIDY_FILES_AUTO) $(TIDY_FILES_OVERRIDE_name_only))
 
 space := $(subst ,, )
 comma := ,
+
+# Disable symbolic path exploration (clang-analyzer-*) on GTest suites and test
+# utility headers, where macro expansion across hundreds of TEST_F cases
+# dominates CI wall-clock time (~175s on HwcDisplayTest.cpp and ~92s on
+# CompositorTestUtils.h), while keeping full AST lint checks on tests and full
+# clang-analyzer-* coverage on all production .cpp/.h files.
+TIDY_TEST_FILTER := ",-clang-analyzer-*"
 
 TIDY_ARGS_NONE := --checks="-*,llvm-include-order"
 TIDY_ARGS_     := --checks="-*,llvm-include-order"
@@ -150,15 +156,28 @@ TIDY_LEVEL_1 := $$(strip $$(foreach pair,$$(TIDY_FILES_OVERRIDE_path),$$(if $$(f
 
 TIDY_LEVEL_2 := $$(if $$(TIDY_LEVEL_1),$$(TIDY_LEVEL_1),NORMAL)
 
-TIDY_ARGS := $$(TIDY_ARGS_$$(TIDY_LEVEL_2))
+TIDY_ARGS := $$(TIDY_ARGS_$$(TIDY_LEVEL_2))$$(if $$(filter %Test.cpp %Tests.cpp %TestUtils.cpp %Test.h %Tests.h %TestUtils.h,$1),$$(TIDY_TEST_FILTER),)
 
 $$(_TARG): _DEP := $$(_DEP)
 $$(_TARG): _TARG := $$(_TARG)
 $$(_TARG): TIDY_ARGS := $$(TIDY_ARGS)
 $$(_TARG): $$(_DEP)
-	@mkdir -p $$(dir $$(_TARG))
-	@echo "TIDY $$<"
-	@$$(CLANG_TIDY) $$(_DEP) $$(TIDY_ARGS) --quiet -- -x c++ $$(CXXARGS) -Wno-pragma-once-outside-header
+	@mkdir -p $$(dir $$(_TARG)) $$(TIDY_CACHE_DIR)
+	@set -e; \
+	pre=$$$$(mktemp); \
+	if $$(CLANG) -E -C -frewrite-includes -x c++ $$(_DEP) $$(CXXARGS) -Wno-builtin-macro-redefined -D__DATE__= -D__TIME__= -D__TIMESTAMP__= -Wno-pragma-once-outside-header >"$$$$pre" 2>/dev/null; then \
+		digest=$$$$( (printf '%s\n' "$$(CLANG_TIDY)" '$$(TIDY_ARGS)' "$$(CXXARGS)"; cat "$$(SRC_DIR)/.clang-tidy" "$$$$pre") | sha256sum | cut -d' ' -f1 ); \
+	else \
+		digest=""; \
+	fi; \
+	rm -f "$$$$pre"; \
+	if [ -n "$$$$digest" ] && [ -f "$$(TIDY_CACHE_DIR)/$$$$digest" ]; then \
+		echo "TIDY (cached) $$<"; \
+	else \
+		echo "TIDY $$<"; \
+		$$(CLANG_TIDY) $$(_DEP) $$(TIDY_ARGS) --quiet -- -x c++ $$(CXXARGS) -Wno-pragma-once-outside-header; \
+		if [ -n "$$$$digest" ]; then touch "$$(TIDY_CACHE_DIR)/$$$$digest"; fi; \
+	fi
 	@touch $$(_TARG)
 
 endef

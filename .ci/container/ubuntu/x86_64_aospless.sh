@@ -27,6 +27,8 @@ DEPS_FOR_BUILD=(
   clang-19
   git
   hwdata
+  libdrm-dev
+  liblz4-dev
   lld
   llvm
   make

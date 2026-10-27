@@ -1,8 +1,11 @@
+# Personal forks lack FDO container registry push permissions (issues/540) and
+# upstream KVM runners, so only run pipelines on MRs or the upstream namespace.
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PROJECT_NAMESPACE == "drm-hwcomposer" && $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
       when: never
-    - when: always
+    - if: $CI_PROJECT_NAMESPACE == "drm-hwcomposer"
 
 variables:
   ANDROID_BRANCH: android17-release
@@ -34,6 +37,21 @@ stages:
   - tidy
   - style
   - android
+
+# Automatically retry jobs that fail due to transient freedesktop.org registry
+# HTTP 500/502 responses, runner Docker daemon image-cache misses, runner
+# timeouts, or Cuttlefish boot/reboot timeout exits (exit code 124) without
+# masking genuine build/lint/test failures (exit code 1).
+default:
+  retry:
+    max: 2
+    exit_codes: 124
+    when:
+      - runner_system_failure
+      - api_failure
+      - stuck_or_timeout_failure
+      - job_execution_timeout
+      - unknown_failure
 
 build_arm64:
   stage: build
@@ -75,8 +93,13 @@ tidy:
   stage: tidy
   extends:
     .use-ubuntu/x86_64_aospless
+  variables:
+    TIDY_CACHE_DIR: "${CI_PROJECT_DIR}/.ci_cache/tidy"
+  cache:
+    key: "tidy-v1-${UBUNTU_AOSPLESS_TAG}"
+    paths:
+      - .ci_cache/tidy/
   script:
-    - cp -r /aospless_arm64 ../aospless
     - make -j$(nproc) -k -f "${CI_PROJECT_DIR}/.ci/Makefile"
 
 checkstyle:
