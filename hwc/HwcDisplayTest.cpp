@@ -933,6 +933,144 @@ TEST_F(HwcDisplayTest,
   EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
 }
 
+TEST_F(HwcDisplayTest,
+       StagedSeamlessConfigClearedOnBlockingSetConfigAndPowerOff) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  ASSERT_EQ(configs[0].group_id, configs[1].group_id);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId next_id = (configs[0].id == initial_id) ? configs[1].id
+                                                         : configs[0].id;
+
+  // 1. When a staged seamless config is superseded by a blocking SetConfig()
+  // before being presented, VSync timestamp tracking and staged config state
+  // must be cleared.
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(next_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
+
+  EXPECT_EQ(display.SetConfig(initial_id), HwcDisplay::ConfigError::kNone);
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_id);
+
+  // 2. When a staged seamless config is pending and the display is powered off
+  // before presentation, SetPowerMode(kOff) must disable VSync timestamp
+  // tracking while preserving staged_mode_config_id_ so SetPowerMode(kOn)
+  // applies the pending requested config.
+  ASSERT_EQ(display.QueueConfig(next_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, next_id);
+}
+
+TEST_F(HwcDisplayTest,
+       OnLinkTrainingFailedPreservesFallbackConfigWhenRecoverySetConfigFails) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId seamless_id = (configs[0].id == initial_id) ? configs[1].id
+                                                             : configs[0].id;
+
+  // Stage a seamless switch before DP link training fails.
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(seamless_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+
+  // DP link training failure prunes 1080p modes, leaving 720p60 as preferred.
+  // RefreshConfigsFromConnector() must disable VSync timestamp tracking from
+  // the earlier QueueConfig() while staging the fallback preferred config.
+  fake_conn->SetModes({CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz,
+                                         DRM_MODE_TYPE_PREFERRED, "720p60")});
+  fake_conn->SetLinkStatusPropertyValue(DRM_MODE_LINK_STATUS_BAD);
+  EXPECT_TRUE(display.OnLinkTrainingFailed());
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  const ConfigId fallback_id = display.GetLastRequestedConfig()->id;
+
+  // If a recovery SetConfig(), SetPowerMode(kOn), or subsequent frame commit
+  // fails while active_config_id_ is 0, the fallback staged_mode_config_id_
+  // must be preserved so GetLastRequestedConfig() never returns nullptr.
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-EINVAL));
+  EXPECT_EQ(display.SetConfig(fallback_id),
+            HwcDisplay::ConfigError::kConfigFailed);
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fallback_id);
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn),
+            HwcDisplay::Error::kBadParameter);
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fallback_id);
+
+  StageSingleDeviceLayer(display);
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-EINVAL));
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fallback_id);
+
+  // Powering off while active_config_id_ == 0 must also preserve the fallback
+  // staged_mode_config_id_ so GetLastRequestedConfig() stays valid and the
+  // next SetPowerMode(kOn) applies the fallback config via SetConfig().
+  sink->SetNextExecuteStatus(CommitStatus::Success());
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  EXPECT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fallback_id);
+
+  EXPECT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, fallback_id);
+}
+
 TEST_F(HwcDisplayTest, StartHdcpRepeatedNotifications) {
   auto pipeline = CreatePipelineWithModes(
       {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
