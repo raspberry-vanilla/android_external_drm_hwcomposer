@@ -73,5 +73,11 @@ skopeo copy --retry-times 3 \
   "oci:${TMP_DIR}/tools-oci:cf"
 umoci unpack --image "${TMP_DIR}/tools-oci:cf" "${TMP_DIR}"
 cp -a "${TMP_DIR}/rootfs/${ANDROID_TOOLS_TARBALL}"  /"${ANDROID_TOOLS_TARBALL}"
+tar -xf "/${ANDROID_TOOLS_TARBALL}" -C "${TMP_DIR}" --wildcards \
+  "${TOOLS_DIR}/cuttlefish-base_*.deb" \
+  "${TOOLS_DIR}/cuttlefish-user_*.deb"
+apt-get install -y --no-remove --no-install-recommends --allow-downgrades \
+  "${TMP_DIR}/${TOOLS_DIR}"/cuttlefish-base_*.deb \
+  "${TMP_DIR}/${TOOLS_DIR}"/cuttlefish-user_*.deb
 rm --preserve-root "${TMP_DIR}" -rf
 fdo_log_section_end get_tools

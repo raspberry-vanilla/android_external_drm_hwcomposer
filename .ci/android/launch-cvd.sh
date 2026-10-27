@@ -129,13 +129,6 @@ tar xf "/${ANDROID_TOOLS_TARBALL}" -C /
 mv "/${BINARIES_DIR}/apexer" "/${TOOLS_DIR}/build-tools"
 fdo_log_section_end get_tools
 
-fdo_log_section_start_collapsed install_packages "install_packages"
-apt-get update
-apt-get upgrade -y
-apt-get install -y --allow-downgrades /"${TOOLS_DIR}"/cuttlefish-base_*.deb
-apt-get install -y --allow-downgrades /"${TOOLS_DIR}"/cuttlefish-user_*.deb
-fdo_log_section_end install_packages
-
 export PATH=/cuttlefish/bin:/android-tools/android-cts/jdk/bin/:/android-tools/build-tools:$PATH
 
 [ -e /dev/kvm ] || echo "Warning: /dev/kvm is not available"
