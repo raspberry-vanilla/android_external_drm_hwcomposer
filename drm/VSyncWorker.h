@@ -53,6 +53,7 @@ class VSyncWorker {
   // vsync tracking is disabled, or if no vsync has happened since it was
   // enabled.
   void SetVsyncTimestampTracking(bool enabled);
+  bool IsVsyncTimestampTrackingEnabled() const;
   uint32_t GetLastVsyncTimestamp();
 
   void AddLastPresentFence(SharedFd &fence);
@@ -94,7 +95,7 @@ class VSyncWorker {
 
   std::condition_variable cv_;
   std::thread vswt_;
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
 };
 
 }  // namespace android::drm_hwcomposer

@@ -257,8 +257,8 @@ bool HwcDisplay::RefreshConfigsFromConnector() {
   }
   configs_ = std::move(*configs);
   active_config_id_ = 0;
+  ClearStagedModeConfig();
   staged_mode_config_id_ = configs_.preferred_config_id;
-  staged_mode_change_time_ = 0;
   link_recovery_modeset_required_ = true;
   return true;
 }
@@ -407,12 +407,12 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   ALOGW_IF(staged_mode_config_id_ && *staged_mode_config_id_ != config,
            "overriding staged_mode_config_id_");
   if (active_config_id_ != 0) {
-    staged_mode_config_id_.reset();
+    ClearStagedModeConfig();
   }
 
   if (IsInHeadlessMode()) {
     active_config_id_ = config;
-    staged_mode_config_id_.reset();
+    ClearStagedModeConfig();
     staged_power_mode_.reset();
     link_recovery_modeset_required_ = false;
     defer_modeset_until_power_on_ = false;
@@ -425,10 +425,11 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   // the CRTC in KMS until SetPowerMode(PowerMode::kOn) is called.
   if (defer_modeset_until_power_on_) {
     active_config_id_ = config;
-    staged_mode_config_id_.reset();
+    ClearStagedModeConfig();
     SetOutputType(new_config->output_type);
-    vsync_worker_->SetVsyncTimestampTracking(false);
-    vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+    if (vsync_worker_) {
+      vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+    }
     hwc_->LogRefreshRateChanges();
     return ConfigError::kNone;
   }
@@ -453,7 +454,7 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
 
   ALOGV("Blocking config succeeded.");
   active_config_id_ = config;
-  staged_mode_config_id_.reset();
+  ClearStagedModeConfig();
   staged_power_mode_.reset();
   link_recovery_modeset_required_ = false;
   requires_reprobe_on_power_on_ = false;
@@ -464,8 +465,9 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   // screen.
   last_presented_composition_.Reset();
   // set new vsync period
-  vsync_worker_->SetVsyncTimestampTracking(false);
-  vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+  if (vsync_worker_) {
+    vsync_worker_->SetVsyncPeriodNs(new_config->mode.GetVSyncPeriodNs());
+  }
   hwc_->LogRefreshRateChanges();
   hwc_->SendRefreshEventToClient(handle_);
   return ConfigError::kNone;
@@ -839,6 +841,19 @@ void HwcDisplay::SetVsyncCallbacksEnabled(bool enabled) {
   vsync_worker_->SetTimestampCallback(std::move(callback));
 }
 
+bool HwcDisplay::IsVsyncTimestampTrackingEnabled() const {
+  return vsync_worker_ != nullptr &&
+         vsync_worker_->IsVsyncTimestampTrackingEnabled();
+}
+
+void HwcDisplay::ClearStagedModeConfig() {
+  staged_mode_config_id_.reset();
+  staged_mode_change_time_ = 0;
+  if (vsync_worker_) {
+    vsync_worker_->SetVsyncTimestampTracking(false);
+  }
+}
+
 bool HwcDisplay::IsDozeSupported() const {
   if (IsInHeadlessMode()) {
     return false;
@@ -931,11 +946,13 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     }
   } else {
     staged_power_mode_.reset();
-    // Clear the VSyncWorker callback directly so VSync events stop firing while
-    // the display is powered off, while preserving vsync_event_en_ to restore
-    // callbacks when the display is powered back on.
+    // Clear the VSyncWorker callback and disable timestamp tracking directly so
+    // VSync events stop firing while the display is powered off, while
+    // preserving vsync_event_en_ and staged_mode_config_id_ for when the
+    // display is powered back on.
     if (vsync_worker_) {
       vsync_worker_->SetTimestampCallback(std::nullopt);
+      vsync_worker_->SetVsyncTimestampTracking(false);
     }
     const bool has_kernel_crtc = HasPhysicalConnector() &&
                                  GetPipe()
@@ -1046,6 +1063,7 @@ void HwcDisplay::Deinit() {
     ExecuteAtomicCommit(a_args);
 
     validated_composition_.reset();
+    ClearStagedModeConfig();
     staged_power_mode_.reset();
     flatcon_.reset();
     hdcpcon_.reset();
@@ -1264,7 +1282,7 @@ bool HwcDisplay::Init() {
       return false;
     }
     active_config_id_ = configs_.preferred_config_id;
-    staged_mode_config_id_.reset();
+    ClearStagedModeConfig();
     link_recovery_modeset_required_ = false;
   }
 
@@ -1928,6 +1946,10 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
 
   if (!a_args) {
     ALOGE("Failed to create AtomicCommitArgs for frame composition.");
+    if (staged_mode_config_id_ &&
+        GetConfig(*staged_mode_config_id_) == nullptr) {
+      ClearStagedModeConfig();
+    }
     last_presented_composition_.Reset();
     return CommitStatus::InternalFailure();
   }
@@ -1937,6 +1959,14 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
   if (!result.has_value()) {
     ALOGE("Failed to commit the frame composition with err=%d",
           status_or_result.GetStatus().error_code);
+    if (active_config_id_ != 0 && a_args->display_mode &&
+        staged_mode_config_id_ &&
+        a_args->display_config_id == *staged_mode_config_id_) {
+      ClearStagedModeConfig();
+      if (hwc_) {
+        hwc_->SendRefreshEventToClient(handle_);
+      }
+    }
     last_presented_composition_.Reset();
     return status_or_result.GetStatus();
   }
@@ -1958,7 +1988,7 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.
     uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
-    vsync_worker_->SetVsyncTimestampTracking(false);
+    ClearStagedModeConfig();
     uint32_t last_vsync_ts = vsync_worker_->GetLastVsyncTimestamp();
     if (last_vsync_ts != 0) {
       hwc_->SendVsyncPeriodTimingChangedEventToClient(handle_,
@@ -1972,7 +2002,6 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
     // Update the active_config_id and update the vsync period for the
     // VsyncWorker.
     active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
-    staged_mode_config_id_.reset();
     if (!a_args.seamless) {
       link_recovery_modeset_required_ = false;
     }
