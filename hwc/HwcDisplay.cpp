@@ -1343,7 +1343,7 @@ bool HwcDisplay::Init() {
     if (boot_state == BootAnimationState::kActive) {
       SetBootAnimationState(BootAnimationState::kInactive);
       if (hwc_ != nullptr) {
-        hwc_->StopEarlyBootAnimation();
+        hwc_->AbortEarlyBootAnimation();
       }
     }
   }

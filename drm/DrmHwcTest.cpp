@@ -175,6 +175,7 @@ struct DrmHwcTest : public ::testing::Test {
 
   void ResetResManDevices() {
     hwc.GetResMan().CancelDelayedEdidRecovery();
+    hwc.GetResMan().CancelDeferredHotplugSettle();
     hwc.GetResMan().DetachAllFrontendDisplays();
     hwc.GetResMan().drms_.clear();
   }
@@ -204,6 +205,20 @@ struct DrmHwcTest : public ::testing::Test {
       std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
     }
     hwc.GetResMan().CancelDelayedEdidRecovery();
+  }
+
+  void WaitDeferredHotplugSettle() {
+    constexpr int kPollSleepMs = 10;
+    while (true) {
+      {
+        std::scoped_lock lock(hwc.GetResMan().deferred_settle_mutex_);
+        if (!hwc.GetResMan().deferred_settle_pending_) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
+    }
+    hwc.GetResMan().CancelDeferredHotplugSettle();
   }
 
   void InitResManForTest() {
@@ -1909,6 +1924,249 @@ TEST_F(DrmHwcTest, DrmConnectorInitPopulatesInitialModesWithoutSecondProbe) {
       << "DrmConnector::Init() discarded modes already fetched by "
          "CreateInstance(), forcing a redundant startup drmModeGetConnector() "
          "probe";
+}
+
+namespace {
+
+std::string MakeHotplugUeventPacket() {
+  constexpr size_t kCardHeaderLen = 26;
+  constexpr size_t kDevtypeLen = 18;
+  constexpr size_t kHotplugLen = 10;
+  return std::string("change@/devices/drm/card0\0", kCardHeaderLen) +
+         std::string("DEVTYPE=drm_minor\0", kDevtypeLen) +
+         std::string("HOTPLUG=1\0", kHotplugLen);
+}
+
+struct DeferredHotplugTestEnv {
+  TemporaryFile tf;
+  ScopedTestProperty device_prop{"vendor.hwc.drm.device",
+                                 "/nonexistent_drm_device"};
+  ScopedTestProperty enable_prop{"vendor.hwc.drm.bootanim.enable", "1"};
+  ScopedTestProperty completed_prop{"vendor.hwc.bootanim.completed", "0"};
+  ScopedTestProperty hold_prop{"vendor.hwc.drm.early_boot_hold_ms", "250"};
+  ScopedTestProperty path_prop;
+  FakeDrmDevice* shared_dev_ptr = nullptr;
+  FakeDrmConnector* ext_conn = nullptr;
+  UniqueFd write_fd = MakeUniqueFd(-1);
+
+  explicit DeferredHotplugTestEnv(DrmHwcTest& fixture)
+      : path_prop("ro.vendor.hwc.bootanim.path", tf.path) {
+    DrmHwcTest::WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+    auto shared_dev = std::make_unique<FakeDrmDevice>(&fixture.hwc.GetResMan());
+    shared_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+    auto* internal_conn = shared_dev->AddPipelineResources(
+        /*is_external=*/false);
+    ext_conn = shared_dev->AddPipelineResources(/*is_external=*/true);
+    ext_conn->SetConnected(false);
+    shared_dev->SetResourceConnectorIds(
+        {internal_conn->GetId(), ext_conn->GetId()});
+    shared_dev_ptr = shared_dev.get();
+    fixture.AddDeviceToResMan(std::move(shared_dev));
+    fixture.InitResManForTest();
+
+    int fds[2] = {-1, -1};
+    EXPECT_EQ(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0, fds), 0);
+    auto uevent = UEvent::CreateInstanceWithFd(MakeUniqueFd(fds[0]));
+    write_fd = MakeUniqueFd(fds[1]);
+    fixture.StartUEventListenerForTest(std::move(uevent));
+  }
+};
+
+}  // namespace
+
+TEST_F(DrmHwcTest, EarlyBootAnimationDefersExternalHotplugWhileRunning) {
+  constexpr int kStartSettleMs = 30;
+  constexpr int kMidAnimCheckMs = 80;
+  DeferredHotplugTestEnv env(*this);
+  const std::string hotplug_uevent = MakeHotplugUeventPacket();
+
+  hwc.StartEarlyBootAnimation();
+  std::this_thread::sleep_for(std::chrono::milliseconds(kStartSettleMs));
+
+  env.ext_conn->ResetUpdateModesCallCount();
+  env.ext_conn->SetConnected(true);
+  env.ext_conn->SetModes({CreateFakeDrmMode()});
+  ASSERT_EQ(write(*env.write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(kMidAnimCheckMs));
+  EXPECT_EQ(GetAttachedPipelineCount(env.ext_conn), 0U);
+  EXPECT_EQ(env.ext_conn->GetUpdateModesCallCount(), 0U);
+
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, EarlyBootAnimationFlushesDeferredHotplugOnStop) {
+  constexpr int kStartSettleMs = 30;
+  DeferredHotplugTestEnv env(*this);
+  const std::string hotplug_uevent = MakeHotplugUeventPacket();
+
+  hwc.StartEarlyBootAnimation();
+  std::this_thread::sleep_for(std::chrono::milliseconds(kStartSettleMs));
+
+  env.ext_conn->SetConnected(true);
+  env.ext_conn->SetModes({CreateFakeDrmMode()});
+  ASSERT_EQ(write(*env.write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  EXPECT_EQ(GetAttachedPipelineCount(env.ext_conn), 1U);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, StopEarlyBootAnimationFlushesDeferredHotplug) {
+  constexpr int kStartSettleMs = 30;
+  constexpr int kUeventDeferSettleMs = 30;
+  DeferredHotplugTestEnv env(*this);
+  const std::string hotplug_uevent = MakeHotplugUeventPacket();
+
+  hwc.StartEarlyBootAnimation();
+  std::this_thread::sleep_for(std::chrono::milliseconds(kStartSettleMs));
+
+  env.ext_conn->SetConnected(true);
+  env.ext_conn->SetModes({CreateFakeDrmMode()});
+  ASSERT_EQ(write(*env.write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kUeventDeferSettleMs));
+
+  hwc.StopEarlyBootAnimation();
+
+  EXPECT_FALSE(hwc.IsEarlyBootAnimationActive());
+  EXPECT_EQ(GetAttachedPipelineCount(env.ext_conn), 1U);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, FlushDeferredHotplugSchedulesSettleReprobeWhenUnsettled) {
+  constexpr int kStartSettleMs = 30;
+  constexpr int kUeventDeferSettleMs = 30;
+  DeferredHotplugTestEnv env(*this);
+  const std::string hotplug_uevent = MakeHotplugUeventPacket();
+
+  hwc.StartEarlyBootAnimation();
+  std::this_thread::sleep_for(std::chrono::milliseconds(kStartSettleMs));
+
+  env.ext_conn->ResetUpdateModesCallCount();
+  env.ext_conn->SetConnected(true);
+  env.ext_conn->SetModes({});
+  env.ext_conn->SetUpdateModesHook([ext = env.ext_conn]() {
+    if (ext->GetUpdateModesCallCount() >= 2U) {
+      ext->SetModes({CreateFakeDrmMode()});
+    }
+  });
+  ASSERT_EQ(write(*env.write_fd, hotplug_uevent.data(), hotplug_uevent.size()),
+            static_cast<ssize_t>(hotplug_uevent.size()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kUeventDeferSettleMs));
+
+  hwc.StopEarlyBootAnimation();
+  WaitDeferredHotplugSettle();
+
+  EXPECT_EQ(env.ext_conn->GetUpdateModesCallCount(), 2U);
+  EXPECT_EQ(GetAttachedPipelineCount(env.ext_conn), 1U);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+namespace {
+
+void ConfigureNvtDelayedEdid(FakeDrmConnector* conn) {
+  constexpr size_t kEdidSize = 128;
+  constexpr size_t kEdidHeaderSize = 8;
+  constexpr size_t kEdidMfgByte0Index = 8;
+  constexpr size_t kEdidMfgByte1Index = 9;
+  constexpr size_t kEdidVersionIndex = 18;
+  constexpr size_t kEdidRevisionIndex = 19;
+  constexpr size_t kEdidChecksumIndex = 127;
+  constexpr uint8_t kNvtMfgByte0 = 0x3A;
+  constexpr uint8_t kNvtMfgByte1 = 0xD4;
+  constexpr uint8_t kEdidVersion1 = 1;
+  constexpr uint8_t kEdidRevision3 = 3;
+  std::vector<uint8_t> nvt_edid(kEdidSize, 0);
+  constexpr uint8_t kEdidHeader[kEdidHeaderSize] = {0x00, 0xFF, 0xFF, 0xFF,
+                                                    0xFF, 0xFF, 0xFF, 0x00};
+  std::memcpy(nvt_edid.data(), kEdidHeader, sizeof(kEdidHeader));
+  nvt_edid[kEdidMfgByte0Index] = kNvtMfgByte0;
+  nvt_edid[kEdidMfgByte1Index] = kNvtMfgByte1;
+  nvt_edid[kEdidVersionIndex] = kEdidVersion1;
+  nvt_edid[kEdidRevisionIndex] = kEdidRevision3;
+  uint8_t sum = 0;
+  for (size_t i = 0; i < kEdidChecksumIndex; ++i) {
+    sum = static_cast<uint8_t>(sum + nvt_edid[i]);
+  }
+  nvt_edid[kEdidChecksumIndex] = static_cast<uint8_t>(0U - sum);
+  conn->SetEdidBlobData(std::move(nvt_edid));
+}
+
+}  // namespace
+
+TEST_F(DrmHwcTest, EarlyBootAnimationDefersDelayedEdidRecoveryUntilStopped) {
+  constexpr int kRecoveryExpireWaitMs = 50;
+  const ScopedTestProperty recovery_delay("vendor.hwc.delayed_edid_recovery_ms",
+                                          "10");
+  DeferredHotplugTestEnv env(*this);
+  ConfigureNvtDelayedEdid(env.ext_conn);
+  env.ext_conn->SetConnected(true);
+  RunUpdateFrontendDisplays();
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  hwc.StartEarlyBootAnimation();
+  TriggerDelayedEdidRecovery();
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRecoveryExpireWaitMs));
+
+  EXPECT_EQ(GetAttachedPipelineCount(env.ext_conn), 1U);
+  EXPECT_TRUE(hwc.hotplug_events.empty());
+
+  hwc.StopEarlyBootAnimation();
+  WaitDelayedEdidRecovery();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0].second, DrmHwc::DisplayStatus::kDisconnected);
+  EXPECT_EQ(hwc.hotplug_events[1].second, DrmHwc::DisplayStatus::kConnected);
+
+  env.shared_dev_ptr->GetFakeAtomicCommitSink()->ClearHistory();
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       StartEarlyBootAnimationReinitializesAfterPreviousAnimationStopped) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  const ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  const ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  const ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  const ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  Properties::SetEarlyBootAnimationCompleted(false);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_TRUE(hwc.InitEarlyBootAnimation(hwc.GetDisplay(kPrimaryDisplay)));
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  EXPECT_GE(sink->GetCommitHistory().size(), 2U);
+  sink->ClearHistory();
 }
 
 }  // namespace android::drm_hwcomposer

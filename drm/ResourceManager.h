@@ -53,6 +53,9 @@ class PipelineToFrontendBindingInterface {
   virtual void NotifyHdcpTermination(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void FlushHotplugEvents() = 0;
+  [[nodiscard]] virtual bool IsEarlyBootAnimationActive() const {
+    return false;
+  }
 };
 
 class ResourceManager {
@@ -109,6 +112,7 @@ class ResourceManager {
   auto GetWritebackConnectorsCount() -> uint32_t;
   auto GetInternalDisplayNames() -> const std::set<std::string>&;
   std::optional<std::string> DumpBackends();
+  void FlushDeferredHotplug();
 
   static auto GetTimeMonotonicNs() -> int64_t;
 
@@ -136,6 +140,8 @@ class ResourceManager {
   void DetachAllFrontendDisplays();
   void MaybeScheduleDelayedEdidRecovery();
   void CancelDelayedEdidRecovery();
+  void ScheduleDeferredHotplugSettle(const UEventHotplugEvent &event);
+  void CancelDeferredHotplugSettle();
 
   std::vector<std::unique_ptr<DrmDevice>> drms_;
   std::set<std::string> displays_;
@@ -158,6 +164,11 @@ class ResourceManager {
 
   std::map<DrmConnector *, std::shared_ptr<DrmDisplayPipeline>>
       attached_pipelines_;
+  struct DeferredHotplugEvent {
+    std::set<uint32_t> connector_ids;
+    bool refresh_all = false;
+  };
+  std::optional<DeferredHotplugEvent> deferred_bootanim_hotplug_;
 
   PipelineToFrontendBindingInterface *const frontend_interface_;
 
@@ -166,6 +177,14 @@ class ResourceManager {
   std::mutex edid_recovery_mutex_;
   std::condition_variable edid_recovery_cv_;
   bool edid_recovery_pending_{};
+
+  // Deferred-hotplug settle reprobe thread state
+  std::mutex deferred_settle_lifecycle_mutex_;
+  std::thread deferred_settle_thread_;
+  std::mutex deferred_settle_mutex_;
+  std::condition_variable deferred_settle_cv_;
+  bool deferred_settle_cancelled_{};
+  bool deferred_settle_pending_{};
 
   bool initialized_{};
 };
