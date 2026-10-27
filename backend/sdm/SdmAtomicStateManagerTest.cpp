@@ -16,6 +16,7 @@
 
 #include "backend/sdm/SdmAtomicStateManager.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -77,6 +78,10 @@ constexpr uint16_t kTestVBlank = 45;
 constexpr uint32_t kTestKhzDivisor = 1000;
 constexpr float kTestBrightnessNits = 250.0F;
 constexpr float kTestBrightnessNitsAlt = 600.0F;
+constexpr float kMatrixScaleA = 0.85F;
+constexpr size_t kMatrixIndexB = 5;
+constexpr float kMatrixScaleB = 0.65F;
+constexpr float kMatrixScaleRetry = 0.75F;
 
 class MockSdmLifeCycleIntf : public sdm::SDMDisplayLifeCycleIntf {
  public:
@@ -541,6 +546,124 @@ TEST_F(SdmAtomicStateManagerTest,
       .WillOnce(Return(sdm::kErrorNone));
 
   EXPECT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitCachesColorModeAndColorMatrixAcrossCommits) {
+  InitManagerWithNativeColorMode();
+
+  auto matrix_a = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix_a)[0] = kMatrixScaleA;
+  const std::vector<float> expected_matrix_a(matrix_a->begin(),
+                                             matrix_a->end());
+
+  // Commit 1: initial color_mode and color_matrix are forwarded to SDM.
+  EXPECT_CALL(settings_intf,
+              SetColorModeWithRenderIntent(kTestSdmDisplayId,
+                                           static_cast<int32_t>(
+                                               ColorMode::kDisplayP3),
+                                           0))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix_a))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  AtomicCommitArgs commit1{};
+  commit1.color_mode = ColorMode::kDisplayP3;
+  commit1.color_matrix = matrix_a;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit1).has_value());
+
+  // Intermediate steady-state pageflip with unset color args must preserve
+  // cached color state without invoking SDM.
+  EXPECT_CALL(settings_intf, SetColorModeWithRenderIntent(_, _, _)).Times(0);
+  EXPECT_CALL(settings_intf, SetColorTransform(_, _)).Times(0);
+
+  AtomicCommitArgs empty_commit{};
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(empty_commit).has_value());
+
+  // Commit 2: identical color_mode and a distinct shared_ptr with identical
+  // matrix contents must be skipped via value-comparison caching (b/555745603).
+  auto matrix_a_copy = std::make_shared<HalColorTransformMatrix>(*matrix_a);
+  AtomicCommitArgs commit2{};
+  commit2.color_mode = ColorMode::kDisplayP3;
+  commit2.color_matrix = matrix_a_copy;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit2).has_value());
+
+  // Commit 3: changed color_mode and changed color_matrix are forwarded to SDM.
+  auto matrix_b = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix_b)[kMatrixIndexB] = kMatrixScaleB;
+  const std::vector<float> expected_matrix_b(matrix_b->begin(),
+                                             matrix_b->end());
+
+  EXPECT_CALL(settings_intf, SetColorModeWithRenderIntent(kTestSdmDisplayId,
+                                                          static_cast<int32_t>(
+                                                              ColorMode::kSrgb),
+                                                          0))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix_b))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  AtomicCommitArgs commit3{};
+  commit3.color_mode = ColorMode::kSrgb;
+  commit3.color_matrix = matrix_b;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit3).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       FailedSetColorTransformDoesNotUpdateCachedValue) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData client_layer{};
+  client_layer.bi = BufferInfo{};
+  client_layer.bi->fds_shared = SnapAllocHandle::Create(nullptr);
+  plan->plan.emplace_back(std::move(client_layer), nullptr, 0);
+  plan->client_z_order = 0;
+
+  auto matrix = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix)[0] = kMatrixScaleRetry;
+  const std::vector<float> expected_matrix(matrix->begin(), matrix->end());
+
+  AtomicCommitArgs args{};
+  args.color_matrix = matrix;
+  args.composition = plan;
+
+  // First commit: SetColorTransform fails, aborting the commit before present.
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNotSupported));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(_, _)).Times(0);
+
+  EXPECT_FALSE(manager->ExecuteAtomicCommit(args).has_value());
+
+  // Second commit with the same args: cached last_color_matrix_ was not
+  // updated, so SetColorTransform is retried. When it succeeds, PresentDisplay
+  // proceeds.
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf,
+              SetClientTarget(kTestSdmDisplayId, nullptr, _, _, _, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
 }
 }  // namespace
 }  // namespace android::drm_hwcomposer
