@@ -298,8 +298,17 @@ void ResourceManager::Init() {
       for (auto &drm : drms_) {
         auto stale_connectors = drm->RefreshConnectors();
         DetachStalePipelines(stale_connectors);
+        // Connectors created in DrmDevice::Init() or RefreshConnectors()
+        // already populated modes_ from their initial drmModeGetConnector()
+        // call in DrmConnector::Init(); only re-probe connectors whose mode
+        // list is still empty.
+        for (const auto &conn : drm->GetConnectors()) {
+          if (conn->GetModes().empty()) {
+            conn->UpdateModesAndProperties();
+          }
+        }
       }
-      UpdateFrontendDisplays();
+      UpdateFrontendDisplays(/*update_modes=*/false);
       MaybeScheduleDelayedEdidRecovery();
     }
     frontend_interface_->FlushHotplugEvents();

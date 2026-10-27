@@ -1881,4 +1881,34 @@ TEST_F(DrmHwcTest,
   sink->ClearHistory();
 }
 
+TEST_F(DrmHwcTest, DrmConnectorInitPopulatesInitialModesWithoutSecondProbe) {
+  constexpr uint32_t kInitModesConnId = 320;
+  fake_device->RegisterFakeObjectProperty(kInitModesConnId, "DPMS",
+                                          kFakeDpmsPropId, DRM_MODE_PROP_ENUM,
+                                          DRM_MODE_DPMS_ON);
+  fake_device->RegisterFakeObjectProperty(kInitModesConnId, "CRTC_ID",
+                                          kFakeConnectorCrtcPropId,
+                                          DRM_MODE_PROP_OBJECT, 0);
+  fake_device
+      ->SetFakeRawConnectorForGetConnector(kInitModesConnId,
+                                           /*encoder_id=*/kFirstEncoderId,
+                                           DRM_MODE_CONNECTOR_eDP,
+                                           {CreateFakeDrmMode().GetRawMode()});
+  size_t get_connector_calls = 0;
+  fake_device->SetGetConnectorHook([&](uint32_t conn_id) {
+    if (conn_id == kInitModesConnId) {
+      ++get_connector_calls;
+    }
+  });
+
+  auto init_conn = DrmConnector::CreateInstance(*fake_device, kInitModesConnId,
+                                                0);
+  ASSERT_NE(init_conn, nullptr);
+  EXPECT_EQ(get_connector_calls, 1U);
+  EXPECT_EQ(init_conn->GetModes().size(), 1U)
+      << "DrmConnector::Init() discarded modes already fetched by "
+         "CreateInstance(), forcing a redundant startup drmModeGetConnector() "
+         "probe";
+}
+
 }  // namespace android::drm_hwcomposer

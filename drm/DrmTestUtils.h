@@ -353,16 +353,25 @@ class FakeDrmConnector : public DrmConnector {
     prop_hook_ = std::move(hook);
   }
 
-  static DrmModeConnectorUnique MakeFakeRawConnector(uint32_t connector_id,
-                                                     uint32_t encoder_id,
-                                                     uint32_t connector_type) {
+  static DrmModeConnectorUnique MakeFakeRawConnector(
+      uint32_t connector_id, uint32_t encoder_id, uint32_t connector_type,
+      const std::vector<drmModeModeInfo>& raw_modes = {}) {
     auto* raw = new drmModeConnector{};
     raw->connector_id = connector_id;
     raw->encoder_id = encoder_id;
     raw->connector_type = connector_type;
     raw->connector_type_id = 1;
     raw->connection = DRM_MODE_CONNECTED;
-    return {raw, [](drmModeConnector* it) { delete it; }};
+    if (!raw_modes.empty()) {
+      raw->count_modes = static_cast<int>(raw_modes.size());
+      raw->modes = new drmModeModeInfo[raw_modes.size()];
+      std::memcpy(raw->modes, raw_modes.data(),
+                  raw_modes.size() * sizeof(drmModeModeInfo));
+    }
+    return {raw, [](drmModeConnector* it) {
+              delete[] it->modes;
+              delete it;
+            }};
   }
 
   void InitRawConnector(uint32_t connector_type) {
@@ -912,8 +921,10 @@ class FakeDrmDevice : public DrmDevice {
     auto raw_it = fake_raw_connectors_.find(connector_id);
     if (raw_it != fake_raw_connectors_.end()) {
       return FakeDrmConnector::MakeFakeRawConnector(connector_id,
-                                                    raw_it->second.first,
-                                                    raw_it->second.second);
+                                                    raw_it->second.encoder_id,
+                                                    raw_it->second
+                                                        .connector_type,
+                                                    raw_it->second.modes);
     }
     return DrmDevice::GetConnector(connector_id);
   }
@@ -927,10 +938,20 @@ class FakeDrmDevice : public DrmDevice {
     }
   }
 
-  void SetFakeRawConnectorForGetConnector(uint32_t connector_id,
-                                          uint32_t encoder_id,
-                                          uint32_t connector_type) {
-    fake_raw_connectors_[connector_id] = {encoder_id, connector_type};
+  struct FakeRawConnectorSpec {
+    uint32_t encoder_id = 0;
+    uint32_t connector_type = DRM_MODE_CONNECTOR_DisplayPort;
+    std::vector<drmModeModeInfo> modes;
+  };
+
+  void SetFakeRawConnectorForGetConnector(
+      uint32_t connector_id, uint32_t encoder_id, uint32_t connector_type,
+      std::vector<drmModeModeInfo> modes = {}) {
+    fake_raw_connectors_[connector_id] = FakeRawConnectorSpec{
+        .encoder_id = encoder_id,
+        .connector_type = connector_type,
+        .modes = std::move(modes),
+    };
   }
 
   void SetGetObjectPropertiesFailureErrno(uint32_t obj_id,
@@ -1092,7 +1113,7 @@ class FakeDrmDevice : public DrmDevice {
   FakeDrmFbImporter* fake_importer_ = nullptr;
   std::map<std::pair<uint32_t, std::string>, FakePropertyDef> fake_properties_;
   std::map<uint32_t, int> get_connector_failure_errno_;
-  std::map<uint32_t, std::pair<uint32_t, uint32_t>> fake_raw_connectors_;
+  std::map<uint32_t, FakeRawConnectorSpec> fake_raw_connectors_;
   std::map<uint32_t, int> get_object_properties_failure_errno_;
   std::function<void(uint32_t)> get_connector_hook_;
   std::function<void()> get_resources_hook_;
