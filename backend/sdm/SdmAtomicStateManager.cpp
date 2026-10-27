@@ -211,34 +211,38 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
   if (args.display_mode) {
     auto sdm_config_idx = GetSdmConfigId(*args.display_mode);
     if (sdm_config_idx.has_value()) {
-      ALOGV("Setting active SDM config %u for mode %s", *sdm_config_idx,
-            args.display_mode->GetName().c_str());
-      sdm::DisplayError display_error = sdm::kErrorNone;
-      // TODO (b/544508262): Use SetActiveConfig for both seamless and
-      // non-seamless changes.
-      if (args.seamless && IsSeamlessConfigChange(*args.display_mode)) {
-        ALOGV("Executing seamless mode change using SetActiveConfigIndex");
-        display_error = draw_cycle_intf_->SetActiveConfigIndex(sdm_display_id_,
-                                                               *sdm_config_idx);
-        if (display_error != sdm::kErrorNone) {
-          ALOGE("SetActiveConfigIndex failed: %s",
-                ErrorToString(display_error).c_str());
-          return std::nullopt;
+      if (!IsActive() || !active_sdm_config_id_.has_value() ||
+          *active_sdm_config_id_ != *sdm_config_idx) {
+        ALOGV("Setting active SDM config %u for mode %s", *sdm_config_idx,
+              args.display_mode->GetName().c_str());
+        sdm::DisplayError display_error = sdm::kErrorNone;
+        // TODO (b/544508262): Use SetActiveConfig for both seamless and
+        // non-seamless changes.
+        if (args.seamless && IsSeamlessConfigChange(*args.display_mode)) {
+          ALOGV("Executing seamless mode change using SetActiveConfigIndex");
+          display_error = draw_cycle_intf_
+                              ->SetActiveConfigIndex(sdm_display_id_,
+                                                     *sdm_config_idx);
+          if (display_error != sdm::kErrorNone) {
+            ALOGE("SetActiveConfigIndex failed: %s",
+                  ErrorToString(display_error).c_str());
+            return std::nullopt;
+          }
+        } else {
+          ALOGV("Executing non-seamless mode change using SetActiveConfig");
+          display_error = settings_intf_->SetActiveConfig(sdm_display_id_,
+                                                          *sdm_config_idx);
+          if (display_error != sdm::kErrorNone) {
+            ALOGE("SetActiveConfig failed: %s",
+                  ErrorToString(display_error).c_str());
+            return std::nullopt;
+          }
         }
-      } else {
-        ALOGV("Executing non-seamless mode change using SetActiveConfig");
-        display_error = settings_intf_->SetActiveConfig(sdm_display_id_,
-                                                        *sdm_config_idx);
-        if (display_error != sdm::kErrorNone) {
-          ALOGE("SetActiveConfig failed: %s",
-                ErrorToString(display_error).c_str());
-          return std::nullopt;
-        }
+        active_sdm_config_id_ = sdm_config_idx;
+        last_color_mode_ = std::nullopt;
+        last_color_matrix_ = nullptr;
+        last_brightness_nits_ = std::nullopt;
       }
-      active_sdm_config_id_ = sdm_config_idx;
-      last_color_mode_ = std::nullopt;
-      last_color_matrix_ = nullptr;
-      last_brightness_nits_ = std::nullopt;
     } else {
       ALOGE("Failed to find SDM config for DRM mode %s (vsync %d ns)",
             args.display_mode->GetName().c_str(),

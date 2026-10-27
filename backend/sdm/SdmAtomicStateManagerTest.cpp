@@ -60,10 +60,18 @@ using ::testing::SetArgPointee;
 
 constexpr uint64_t kTestSdmDisplayId = 52;
 constexpr uint32_t kTestSdmConfigId = 1;
+constexpr uint32_t kTestAltFpsSdmConfigId = 2;
+constexpr uint32_t kTestAltResSdmConfigId = 3;
 constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
+constexpr uint16_t kTestAltWidth = 2560;
+constexpr uint16_t kTestAltHeight = 1440;
 constexpr uint32_t kTestFps = 60;
+constexpr uint32_t kTestAltFps = 120;
 constexpr uint32_t kTestVsyncPeriodNs = 16666666;
+constexpr uint32_t kTestAltVsyncPeriodNs = 8333333;
+constexpr int kTestConfigGroupDefault = 0;
+constexpr int kTestConfigGroupAltRes = 1;
 constexpr uint16_t kTestHBlank = 160;
 constexpr uint16_t kTestVBlank = 45;
 constexpr uint32_t kTestKhzDivisor = 1000;
@@ -176,6 +184,23 @@ struct SdmAtomicStateManagerTest : public ::testing::Test {
     cfg.fps = kTestFps;
     cfg.vsync_period_ns = kTestVsyncPeriodNs;
     configs[kTestSdmConfigId] = cfg;
+
+    sdm::DisplayConfigVariableInfo alt_fps_cfg = cfg;
+    alt_fps_cfg.fps = kTestAltFps;
+    alt_fps_cfg.vsync_period_ns = kTestAltVsyncPeriodNs;
+    configs[kTestAltFpsSdmConfigId] = alt_fps_cfg;
+
+    sdm::DisplayConfigVariableInfo alt_res_cfg = cfg;
+    alt_res_cfg.x_pixels = kTestAltWidth;
+    alt_res_cfg.y_pixels = kTestAltHeight;
+    configs[kTestAltResSdmConfigId] = alt_res_cfg;
+
+    ON_CALL(settings_intf, GetDisplayConfigGroup(kTestSdmDisplayId, _))
+        .WillByDefault([](uint64_t,
+                          const sdm::DisplayConfigVariableInfo& config_info) {
+          return config_info.x_pixels == kTestWidth ? kTestConfigGroupDefault
+                                                    : kTestConfigGroupAltRes;
+        });
 
     ON_CALL(settings_intf, GetAllDisplayAttributes(kTestSdmDisplayId, _))
         .WillByDefault(
@@ -432,5 +457,90 @@ TEST_F(SdmAtomicStateManagerTest,
   ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
 }
 
+TEST_F(SdmAtomicStateManagerTest,
+       SeamlessRefreshRateSwitchOnActiveDisplayCallsSetActiveConfigIndex) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  AtomicCommitArgs mrr_args{};
+  mrr_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight, kTestAltFps);
+  mrr_args.seamless = true;
+
+  EXPECT_CALL(settings_intf, SetActiveConfig(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf,
+              SetActiveConfigIndex(kTestSdmDisplayId, kTestAltFpsSdmConfigId))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(mrr_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ResolutionChangeOnActiveDisplayCallsSetActiveConfig) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.display_mode = MakeTestDrmMode(kTestAltWidth, kTestAltHeight,
+                                              kTestFps);
+  modeset_args.seamless = false;
+
+  EXPECT_CALL(draw_cycle_intf, SetActiveConfigIndex(_, _)).Times(0);
+  EXPECT_CALL(settings_intf,
+              SetActiveConfig(kTestSdmDisplayId, kTestAltResSdmConfigId))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(modeset_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       RedundantDisplayModeOnActiveDisplaySkipsSetActiveConfig) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+  ASSERT_TRUE(manager->IsActive());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight, kTestFps);
+  frame_args.composition = plan;
+
+  EXPECT_CALL(settings_intf, SetActiveConfig(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, SetActiveConfigIndex(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
 }  // namespace
 }  // namespace android::drm_hwcomposer
