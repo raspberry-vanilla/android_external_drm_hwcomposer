@@ -26,10 +26,12 @@ DEPS_FOR_BUILD=(
   clang
   clang-19
   git
+  hwdata
   lld
   llvm
   make
   meson
+  ninja-build
   pkg-config
   rsync
   zip
@@ -65,6 +67,14 @@ ln -sf /usr/bin/clang-format-19 /usr/bin/clang-format
 
 curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
 chmod a+x /usr/local/bin/repo
+
+# Install libdisplay-info
+rm -rf /tmp/libdisplay-info
+git clone --depth 1 --branch 0.2.0 https://gitlab.freedesktop.org/emersion/libdisplay-info.git /tmp/libdisplay-info
+meson setup /tmp/libdisplay-info/build /tmp/libdisplay-info --prefix=/usr --libdir=lib/x86_64-linux-gnu
+ninja -C /tmp/libdisplay-info/build install
+ldconfig
+rm -rf /tmp/libdisplay-info
 fdo_log_section_end install_packages
 
 fdo_log_section_start_collapsed repo_init "repo_init"

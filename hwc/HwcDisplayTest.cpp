@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include <aidl/android/hardware/graphics/common/Hdr.h>  // IWYU pragma: keep
 #include <android-base/file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
@@ -285,6 +286,148 @@ class SpyAtomicStateManager : public DrmAtomicStateManager {
   int64_t fence_use_count_at_commit_ = 0;
   std::vector<Step> steps_;
 };
+
+#if HAS_LIBDISPLAY_INFO
+constexpr size_t kEdidSize = 128;
+constexpr size_t kEdidHeaderByteCount = 6;
+constexpr size_t kEdidManufacturerIdOffset = 8;
+constexpr size_t kEdidProductCodeOffset = 10;
+constexpr size_t kEdidWeekOfManufactureOffset = 16;
+constexpr size_t kEdidYearOfManufactureOffset = 17;
+constexpr size_t kEdidVersionOffset = 18;
+constexpr size_t kEdidRevisionOffset = 19;
+constexpr size_t kEdidVideoInputDefOffset = 20;
+constexpr size_t kEdidScreenSizeOffset = 0x15;
+constexpr size_t kEdidScreenHeightCmOffset = 22;
+constexpr size_t kEdidDisplayGammaOffset = 23;
+constexpr size_t kEdidFeatureSupportOffset = 24;
+constexpr size_t kEdidChromaticityOffset = 25;
+constexpr size_t kEdidFirstDtdOffset = 0x36;
+constexpr size_t kDtdWidthMmOffset = 12;
+constexpr size_t kDtdHeightMmOffset = 13;
+constexpr size_t kDtdHighMmOffset = 14;
+constexpr size_t kDtdFlagsOffset = 17;
+constexpr size_t kEdidChecksumOffset = 127;
+constexpr size_t kEdidExtensionCountOffset = 126;
+constexpr uint8_t kCtaExtensionTag = 0x02;
+constexpr uint8_t kCtaExtensionRevision = 0x03;
+constexpr size_t kCtaDtdOffsetByte = 2;
+constexpr size_t kCtaFirstDtdOffset = 4;
+constexpr uint8_t kDummyDescriptorTag = 0x10;
+constexpr uint8_t kDigitalVideoInputDef = 0x80;
+constexpr uint8_t kDefaultGammaByte = 120;
+constexpr uint8_t kDefaultFeatureByte = 0x02;
+
+std::vector<uint8_t> MakeEdidWithBounds(uint16_t horiz_mm, uint16_t vert_mm,
+                                        uint8_t width_cm, uint8_t height_cm) {
+  std::vector<uint8_t> edid(kEdidSize, 0);
+  for (size_t i = 1; i <= kEdidHeaderByteCount; ++i) {
+    edid[i] = 0xFF;
+  }
+  edid[kEdidManufacturerIdOffset] = 0x1E;
+  edid[kEdidManufacturerIdOffset + 1] = 0x6D;
+  edid[kEdidProductCodeOffset] = 0x01;
+  edid[kEdidProductCodeOffset + 1] = 0x00;
+  edid[kEdidWeekOfManufactureOffset] = 1;
+  edid[kEdidYearOfManufactureOffset] = 34;
+  edid[kEdidVersionOffset] = 1;
+  edid[kEdidRevisionOffset] = 4;
+  edid[kEdidVideoInputDefOffset] = kDigitalVideoInputDef;
+  edid[kEdidScreenSizeOffset] = width_cm;
+  edid[kEdidScreenHeightCmOffset] = height_cm;
+  edid[kEdidDisplayGammaOffset] = kDefaultGammaByte;
+  edid[kEdidFeatureSupportOffset] = kDefaultFeatureByte;
+  const uint8_t kSrgbChromaticity[10] = {0xEE, 0x91, 0xA3, 0x54, 0x4C,
+                                         0x99, 0x26, 0x0F, 0x50, 0x54};
+  std::memcpy(&edid[kEdidChromaticityOffset], kSrgbChromaticity,
+              sizeof(kSrgbChromaticity));
+
+  // DTD 0 at byte 54: 1920x1080 @ 60Hz (148.50 MHz pixel clock = 14850).
+  uint8_t* dtd = &edid[kEdidFirstDtdOffset];
+  dtd[0] = 0x02;
+  dtd[1] = 0x3A;
+  dtd[2] = 0x80;
+  dtd[3] = 0x18;
+  dtd[4] = 0x71;
+  dtd[5] = 0x38;
+  dtd[6] = 0x2D;
+  dtd[7] = 0x40;
+  dtd[8] = 0x58;
+  dtd[9] = 0x2C;
+  dtd[10] = 0x45;
+  dtd[11] = 0x00;
+  dtd[kDtdWidthMmOffset] = static_cast<uint8_t>(horiz_mm & 0xFFU);
+  dtd[kDtdHeightMmOffset] = static_cast<uint8_t>(vert_mm & 0xFFU);
+  dtd[kDtdHighMmOffset] = static_cast<uint8_t>(
+      (((horiz_mm >> 8U) & 0x0FU) << 4U) | ((vert_mm >> 8U) & 0x0FU));
+  dtd[15] = 0x00;
+  dtd[16] = 0x00;
+  dtd[kDtdFlagsOffset] = 0x1E;
+
+  // Descriptors 1-3: Dummy descriptors (0x00 0x00 0x00 0x10 0x00).
+  for (size_t desc_offset : {72U, 90U, 108U}) {
+    edid[desc_offset + 3] = kDummyDescriptorTag;
+  }
+
+  uint8_t sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    sum = static_cast<uint8_t>(sum + edid[i]);
+  }
+  edid[kEdidChecksumOffset] = static_cast<uint8_t>(0U - sum);
+  return edid;
+}
+std::vector<uint8_t> MakeEdidWithCtaExtensionBounds(
+    uint16_t base_horiz_mm, uint16_t base_vert_mm, uint8_t width_cm,
+    uint8_t height_cm, uint16_t cta_horiz_mm, uint16_t cta_vert_mm) {
+  std::vector<uint8_t> edid = MakeEdidWithBounds(base_horiz_mm, base_vert_mm,
+                                                 width_cm, height_cm);
+  // Mark 1 extension block in the base EDID and recompute base checksum.
+  edid[kEdidExtensionCountOffset] = 1;
+  uint8_t base_sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    base_sum = static_cast<uint8_t>(base_sum + edid[i]);
+  }
+  edid[kEdidChecksumOffset] = static_cast<uint8_t>(0U - base_sum);
+
+  // Append a 128-byte CTA-861 (tag 0x02, revision 3) extension block whose DTD
+  // starts at offset 4.
+  std::vector<uint8_t> cta(kEdidSize, 0);
+  cta[0] = kCtaExtensionTag;
+  cta[1] = kCtaExtensionRevision;
+  cta[kCtaDtdOffsetByte] = static_cast<uint8_t>(kCtaFirstDtdOffset);
+  cta[3] = 0x00;
+
+  uint8_t* dtd = &cta[kCtaFirstDtdOffset];
+  dtd[0] = 0x02;
+  dtd[1] = 0x3A;
+  dtd[2] = 0x80;
+  dtd[3] = 0x18;
+  dtd[4] = 0x71;
+  dtd[5] = 0x38;
+  dtd[6] = 0x2D;
+  dtd[7] = 0x40;
+  dtd[8] = 0x58;
+  dtd[9] = 0x2C;
+  dtd[10] = 0x45;
+  dtd[11] = 0x00;
+  dtd[kDtdWidthMmOffset] = static_cast<uint8_t>(cta_horiz_mm & 0xFFU);
+  dtd[kDtdHeightMmOffset] = static_cast<uint8_t>(cta_vert_mm & 0xFFU);
+  dtd[kDtdHighMmOffset] = static_cast<uint8_t>(
+      (((cta_horiz_mm >> 8U) & 0x0FU) << 4U) | ((cta_vert_mm >> 8U) & 0x0FU));
+  dtd[15] = 0x00;
+  dtd[16] = 0x00;
+  dtd[kDtdFlagsOffset] = 0x1E;
+
+  uint8_t cta_sum = 0;
+  for (size_t i = 0; i < kEdidChecksumOffset; ++i) {
+    cta_sum = static_cast<uint8_t>(cta_sum + cta[i]);
+  }
+  cta[kEdidChecksumOffset] = static_cast<uint8_t>(0U - cta_sum);
+
+  edid.insert(edid.end(), cta.begin(), cta.end());
+  return edid;
+}
+#endif
 
 }  // namespace
 
@@ -2890,5 +3033,240 @@ TEST_F(HwcDisplayTest,
   EXPECT_EQ(sink->GetCommitHistory().back().front().color_mode,
             std::optional<ColorMode>(ColorMode::kNative));
 }
+
+TEST_F(HwcDisplayTest, NullEdidWrapperIsHandledGracefullyAcrossDisplayQueries) {
+  auto* ext_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetColorspacePropertySupported(true);
+  ext_conn->SetEdidBlobData({});
+  std::shared_ptr<DrmDisplayPipeline>
+      ext_pipeline = fake_device->GetBackend().CreatePipeline(*ext_conn);
+  ASSERT_NE(ext_pipeline, nullptr);
+
+  HwcDisplay ext_display(kPrimaryDisplay + 1, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(ext_display.SetPipeline(ext_pipeline));
+  EXPECT_EQ(ext_display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kFakeConnectorMmWidth), -1));
+  EXPECT_EQ(ext_display.GetColorModes(),
+            std::vector<ColorMode>{ColorMode::kNative});
+  EXPECT_FLOAT_EQ(ext_display.GetMaxLuminance(), 500.0F);
+
+  // Also exercise an HDR-capable internal pipeline with forced_color_mode_ set
+  // and a null EdidWrapper so InitWcgSupported(), InitHdrSupported(),
+  // SetOutputType(OutputType::kSystem), SetHdrOutputMetadata(), and
+  // GetHdrCapabilities() all reach their GetEdid() null guards.
+  ScopedTestProperty non_existent_dev("vendor.hwc.drm.device",
+                                      "/nonexistent_drm_device");
+  ScopedTestProperty
+      enable_color_pipeline("vendor.hwc.drm.enable_color_pipeline", "1");
+  ScopedTestProperty persistent_hdr("vendor.hwc.drm.persistent_hdr", "1");
+  ScopedTestProperty force_color_mode("vendor.hwc.drm.force_color_mode", "9");
+  ScopedTestProperty bootanim_exit("service.bootanim.exit", "1");
+  hwc.GetResMan().Init();
+
+  const auto resources = fake_device->AddPipelineResourcesTyped(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  auto* int_conn = resources.connector;
+  ASSERT_NE(int_conn, nullptr);
+  int_conn->SetColorspacePropertySupported(true);
+  int_conn->SetHdrOutputMetadataPropertySupported(true);
+  int_conn->SetEdidBlobData({});
+
+  auto* fake_crtc = resources.crtc;
+  ASSERT_NE(fake_crtc, nullptr);
+  fake_crtc->SetCtmPropertySupported(true);
+  fake_crtc->SetGammaLutPropertiesSupported(true);
+
+  auto* fake_plane = resources.primary_plane;
+  ASSERT_NE(fake_plane, nullptr);
+  fake_plane->SetHasColorPipeline(true);
+
+  std::shared_ptr<DrmDisplayPipeline>
+      int_pipeline = fake_device->GetBackend().CreatePipeline(*int_conn);
+  ASSERT_NE(int_pipeline, nullptr);
+
+  HwcDisplay int_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(int_display.SetPipeline(int_pipeline));
+
+  std::vector<ui::Hdr> hdr_types{ui::Hdr::HLG};
+  constexpr float kUnsetLuminance = -1.0F;
+  float max_lum = kUnsetLuminance;
+  float max_avg_lum = kUnsetLuminance;
+  float min_lum = kUnsetLuminance;
+  int_display.GetHdrCapabilities(&hdr_types, &max_lum, &max_avg_lum, &min_lum);
+  EXPECT_EQ(hdr_types, std::vector<ui::Hdr>{ui::Hdr::HDR10});
+  EXPECT_FLOAT_EQ(max_lum, kUnsetLuminance);
+  EXPECT_FLOAT_EQ(max_avg_lum, kUnsetLuminance);
+  EXPECT_FLOAT_EQ(min_lum, kUnsetLuminance);
+
+  hwc.GetResMan().DeInit();
+}
+
+#if HAS_LIBDISPLAY_INFO
+TEST_F(HwcDisplayTest,
+       DeinitResetsEdidWrapperWhenSwitchingToConnectorWithoutEdid) {
+  constexpr uint16_t kEdidHorizMm = 600;
+  constexpr uint16_t kEdidVertMm = 340;
+  constexpr uint8_t kEdidWidthCm = 60;
+  constexpr uint8_t kEdidHeightCm = 34;
+
+  auto* conn_with_edid = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(conn_with_edid, nullptr);
+  conn_with_edid->SetEdidBlobData(MakeEdidWithBounds(kEdidHorizMm, kEdidVertMm,
+                                                     kEdidWidthCm,
+                                                     kEdidHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline_with_edid = fake_device->GetBackend().CreatePipeline(
+          *conn_with_edid);
+  ASSERT_NE(pipeline_with_edid, nullptr);
+
+  auto* conn_without_edid = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(conn_without_edid, nullptr);
+  conn_without_edid->SetEdidBlobData({});
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline_without_edid = fake_device->GetBackend().CreatePipeline(
+          *conn_without_edid);
+  ASSERT_NE(pipeline_without_edid, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline_with_edid));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kEdidHorizMm}, int32_t{kEdidVertMm}));
+
+  ASSERT_TRUE(display.SetPipeline(pipeline_without_edid));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kFakeConnectorMmWidth), -1));
+}
+
+TEST_F(HwcDisplayTest, GetDisplayBoundsMmReturnsDtdDimensionsWhenPresent) {
+  constexpr uint16_t kDtdHorizMm = 600;
+  constexpr uint16_t kDtdVertMm = 340;
+  constexpr uint8_t kScreenWidthCm = 60;
+  constexpr uint8_t kScreenHeightCm = 34;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(kDtdHorizMm, kDtdVertMm,
+                                                kScreenWidthCm,
+                                                kScreenHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kDtdHorizMm}, int32_t{kDtdVertMm}));
+}
+
+TEST_F(HwcDisplayTest,
+       GetDisplayBoundsMmFallsBackToCtaExtensionDtdWhenBaseDtdSizeIsZero) {
+  constexpr uint16_t kCtaHorizMm = 700;
+  constexpr uint16_t kCtaVertMm = 390;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(
+      MakeEdidWithCtaExtensionBounds(/*base_horiz_mm=*/0, /*base_vert_mm=*/0,
+                                     /*width_cm=*/0, /*height_cm=*/0,
+                                     kCtaHorizMm, kCtaVertMm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(int32_t{kCtaHorizMm}, int32_t{kCtaVertMm}));
+}
+
+TEST_F(HwcDisplayTest,
+       GetDisplayBoundsMmFallsBackToScreenSizeWidthWhenDtdSizeIsZero) {
+  constexpr uint8_t kScreenWidthCm = 52;
+  constexpr uint8_t kScreenHeightCm = 29;
+  constexpr int32_t kExpectedWidthMm = 520;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                kScreenWidthCm,
+                                                kScreenHeightCm));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(), std::make_pair(kExpectedWidthMm, -1));
+}
+
+TEST_F(
+    HwcDisplayTest,
+    GetDisplayBoundsMmReturnsZeroPairWhenDtdAndScreenSizeAndConnectorAreZero) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(0, 0);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                /*width_cm=*/0,
+                                                /*height_cm=*/0));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(), std::make_pair(0, 0));
+}
+
+TEST_F(
+    HwcDisplayTest,
+    GetDisplayBoundsMmFallsBackToConnectorMmWidthWhenEdidIsZeroButConnectorHasSize) {
+  constexpr uint32_t kConnectorWidthMm = 480;
+  constexpr uint32_t kConnectorHeightMm = 270;
+
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(fake_conn, nullptr);
+  fake_conn->SetMmSize(kConnectorWidthMm, kConnectorHeightMm);
+  fake_conn->SetEdidBlobData(MakeEdidWithBounds(/*horiz_mm=*/0, /*vert_mm=*/0,
+                                                /*width_cm=*/0,
+                                                /*height_cm=*/0));
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  EXPECT_EQ(display.GetDisplayBoundsMm(),
+            std::make_pair(static_cast<int32_t>(kConnectorWidthMm), -1));
+}
+#endif
 
 }  // namespace android::drm_hwcomposer

@@ -458,7 +458,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   DrmHwc *const hwc_;
 
-  EdidWrapperUnique edid_wrapper_ = std::make_unique<EdidWrapper>();
+  EdidWrapperUnique edid_wrapper_;
 
   int64_t staged_mode_change_time_{};
   std::optional<ConfigId> staged_mode_config_id_{};

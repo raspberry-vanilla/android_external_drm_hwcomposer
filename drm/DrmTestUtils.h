@@ -68,6 +68,10 @@ constexpr uint32_t kFakeConnectorCrtcPropId = 10;
 constexpr uint32_t kFakeCrtcActivePropId = 20;
 constexpr uint32_t kFakeCrtcModePropId = 21;
 constexpr uint32_t kFakeCrtcOutFencePropId = 22;
+constexpr uint32_t kFakeCrtcCtmPropId = 23;
+constexpr uint32_t kFakeCrtcGammaLutPropId = 24;
+constexpr uint32_t kFakeCrtcGammaLutSizePropId = 25;
+constexpr uint64_t kFakeGammaLutSize = 256;
 constexpr uint32_t kFakePlaneBaseId = 300;
 constexpr uint32_t kFakePlaneCrtcPropId = 30;
 constexpr uint32_t kFakePlaneFbPropId = 31;
@@ -88,6 +92,8 @@ constexpr uint32_t kFakeColorOpTypePropId = 44;
 constexpr uint32_t kFakeColorOpNextPropId = 45;
 constexpr uint32_t kFakeColorOpBypassPropId = 46;
 constexpr uint32_t kFakeColorOpDataPropId = 47;
+constexpr uint32_t kFakeColorspacePropId = 50;
+constexpr uint32_t kFakeHdrOutputMetadataPropId = 51;
 constexpr uint32_t kFakeAllCrtcsMask = 0xFFFFFFFFU;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
@@ -505,6 +511,11 @@ class FakeDrmConnector : public DrmConnector {
     return height_;
   }
 
+  void SetMmSize(uint32_t width, uint32_t height) {
+    width_ = width;
+    height_ = height;
+  }
+
   bool QueryContentProtectionEnabled() override {
     return content_protection_property_.GetId() != 0 &&
            content_protection_enabled_simulated_;
@@ -530,6 +541,22 @@ class FakeDrmConnector : public DrmConnector {
     }
   }
 
+  void SetColorspacePropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(colorspace_property_, connector_id_,
+                          kFakeColorspacePropId, "Colorspace",
+                          DRM_MODE_PROP_ENUM, 0);
+    }
+  }
+
+  void SetHdrOutputMetadataPropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(hdr_output_metadata_property_, connector_id_,
+                          kFakeHdrOutputMetadataPropId, "HDR_OUTPUT_METADATA",
+                          DRM_MODE_PROP_BLOB, 0);
+    }
+  }
+
   void SetModes(std::vector<DrmMode> modes) {
     modes_ = std::move(modes);
   }
@@ -540,8 +567,8 @@ class FakeDrmConnector : public DrmConnector {
   const uint32_t connector_id_;
   const uint32_t encoder_id_;
   const bool is_external_;
-  const uint32_t width_;
-  const uint32_t height_;
+  uint32_t width_;
+  uint32_t height_;
   PropHook prop_hook_;
   bool connected_ = true;
   std::optional<bool> pending_connected_;
@@ -609,6 +636,24 @@ class FakeDrmCrtc : public DrmCrtc {
 
   uint32_t GetId() const override {
     return id_;
+  }
+
+  void SetCtmPropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(ctm_property_, id_, kFakeCrtcCtmPropId, "CTM",
+                          DRM_MODE_PROP_BLOB, 0);
+    }
+  }
+
+  void SetGammaLutPropertiesSupported(bool supported,
+                                      uint64_t lut_size = kFakeGammaLutSize) {
+    if (supported) {
+      InitFakeDrmProperty(gamma_lut_property_, id_, kFakeCrtcGammaLutPropId,
+                          "GAMMA_LUT", DRM_MODE_PROP_BLOB, 0);
+      InitFakeDrmProperty(gamma_lut_size_property_, id_,
+                          kFakeCrtcGammaLutSizePropId, "GAMMA_LUT_SIZE",
+                          DRM_MODE_PROP_IMMUTABLE, lut_size);
+    }
   }
 
  private:
@@ -934,17 +979,21 @@ class FakeDrmDevice : public DrmDevice {
     planes_.emplace_back(std::move(plane));
   }
 
-  FakeDrmConnector* AddPipelineResources(bool is_external = false) {
-    return AddPipelineResourcesWithModes({CreateFakeDrmMode()}, is_external);
-  }
+  struct PipelineResources {
+    FakeDrmConnector* connector = nullptr;
+    FakeDrmCrtc* crtc = nullptr;
+    FakeDrmPlane* primary_plane = nullptr;
+  };
 
-  FakeDrmConnector* AddPipelineResourcesWithModes(std::vector<DrmMode> modes,
-                                                  bool is_external = false) {
+  PipelineResources AddPipelineResourcesTyped(std::vector<DrmMode> modes,
+                                              bool is_external = false) {
     auto encoder = std::make_unique<FakeDrmEncoder>(/*id=*/next_id_,
                                                     /*crtc_id=*/next_id_ + 1);
     encoder->InitRawEncoder(kFakeAllCrtcsMask);
     AddEncoder(std::move(encoder));
-    AddCrtc(std::make_unique<FakeDrmCrtc>(/*id=*/next_id_ + 1));
+    auto crtc = std::make_unique<FakeDrmCrtc>(/*id=*/next_id_ + 1);
+    auto* crtc_ptr = crtc.get();
+    AddCrtc(std::move(crtc));
     auto connector = std::make_unique<
         FakeDrmConnector>(this,
                           /*encoder_id=*/next_id_, is_external,
@@ -959,11 +1008,22 @@ class FakeDrmDevice : public DrmDevice {
     connector->SetModes(std::move(modes));
     auto* connector_ptr = connector.get();
     AddConnector(std::move(connector));
-    AddPlane(std::make_unique<FakeDrmPlane>(*this, DRM_PLANE_TYPE_PRIMARY,
-                                            /*is_valid=*/true,
-                                            kFakePlaneBaseId + next_id_));
+    auto plane = std::make_unique<FakeDrmPlane>(*this, DRM_PLANE_TYPE_PRIMARY,
+                                                /*is_valid=*/true,
+                                                kFakePlaneBaseId + next_id_);
+    auto* plane_ptr = plane.get();
+    AddPlane(std::move(plane));
     ++next_id_;
-    return connector_ptr;
+    return {connector_ptr, crtc_ptr, plane_ptr};
+  }
+
+  FakeDrmConnector* AddPipelineResources(bool is_external = false) {
+    return AddPipelineResourcesWithModes({CreateFakeDrmMode()}, is_external);
+  }
+
+  FakeDrmConnector* AddPipelineResourcesWithModes(std::vector<DrmMode> modes,
+                                                  bool is_external = false) {
+    return AddPipelineResourcesTyped(std::move(modes), is_external).connector;
   }
 
  protected:

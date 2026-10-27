@@ -300,8 +300,10 @@ bool HwcDisplay::OnLinkTrainingFailed() {
 
 auto HwcDisplay::GetMaxLuminance() const -> float {
   float hdr_luminance[3]{kDefaultMaxLuminance, kDefaultMaxLuminance, 0.F};
-  GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
-                             &hdr_luminance[2]);
+  if (GetEdid()) {
+    GetEdid()->GetHdrLuminance(&hdr_luminance[0], &hdr_luminance[1],
+                               &hdr_luminance[2]);
+  }
   return hdr_luminance[0] > 0.F ? hdr_luminance[0] : kDefaultMaxLuminance;
 }
 
@@ -331,7 +333,9 @@ void HwcDisplay::SetOutputType(OutputType hdr_output_type) {
     }
     case OutputType::kSystem: {
       std::vector<ui::Hdr> hdr_types;
-      GetEdid()->GetSupportedHdrTypes(hdr_types);
+      if (GetEdid()) {
+        GetEdid()->GetSupportedHdrTypes(hdr_types);
+      }
       if (hdr_types.empty() && !forced_color_mode_) {
         SetHdrOutputMetadata(kBt2020Gamut, TransferFunction::kSrgb);
         min_bpc_ = 6;
@@ -595,9 +599,17 @@ auto HwcDisplay::GetDisplayBoundsMm() const -> std::pair<int32_t, int32_t> {
     return {configs_.mm_width, -1};
   }
 
-  const auto bounds = GetEdid()->GetBoundsMm();
-  if (bounds.first > 0 || bounds.second > 0) {
-    return bounds;
+  if (GetEdid()) {
+    const auto bounds = GetEdid()->GetBoundsMm();
+    if (bounds.first > 0 || bounds.second > 0) {
+      return bounds;
+    }
+    if (bounds.first == 0 && bounds.second == 0) {
+      if (configs_.mm_width == 0) {
+        return bounds;
+      }
+      return {configs_.mm_width, -1};
+    }
   }
 
   ALOGE("Failed to get display bounds for d=%d\n", int(handle_));
@@ -1040,6 +1052,7 @@ void HwcDisplay::Deinit() {
     backlight_controller_.reset();
     last_presented_composition_.Reset();
   }
+  edid_wrapper_.reset();
   link_recovery_modeset_required_ = false;
   defer_modeset_until_power_on_ = false;
 
@@ -1095,7 +1108,9 @@ void HwcDisplay::InitWcgSupported() {
   bool crtc_ctm = GetPipe().crtc && GetPipe().crtc->Get() &&
                   GetPipe().crtc->Get()->GetCtmProperty();
   std::vector<ColorMode> color_modes;
-  GetEdid()->GetColorModes(color_modes);
+  if (GetEdid()) {
+    GetEdid()->GetColorModes(color_modes);
+  }
   // TODO check for WCG modes
   has_wcg_support_ = (use_color_pipeline_ || crtc_ctm) &&
                      (!color_modes.empty() ||
@@ -1137,7 +1152,9 @@ void HwcDisplay::InitHdrSupported() {
                     GetPipe().crtc->Get()->GetGammaLutProperty() &&
                     GetPipe().crtc->Get()->GetGammaLutSizeProperty();
   std::vector<ui::Hdr> hdr_types;
-  GetEdid()->GetSupportedHdrTypes(hdr_types);
+  if (GetEdid()) {
+    GetEdid()->GetSupportedHdrTypes(hdr_types);
+  }
 
   // TODO check for HDR types
   has_hdr_support_ = use_color_pipeline_ && crtc_gamma && has_wcg_support_ &&
@@ -1204,11 +1221,9 @@ bool HwcDisplay::Init() {
     }
 
 #if HAS_LIBDISPLAY_INFO
-    auto edid = LibdisplayEdidWrapper::Create(
+    edid_wrapper_ = LibdisplayEdidWrapper::Create(
         pipeline_->connector->Get()->GetEdidBlob());
-    if (edid) {
-      edid_wrapper_ = std::move(edid);
-    } else {
+    if (!edid_wrapper_) {
       ALOGW("Failed to create a LibdisplayInfo parser.");
     }
 #endif
@@ -1393,7 +1408,9 @@ auto HwcDisplay::GetColorModes() const -> std::vector<ColorMode> {
 
   // TODO: refactor to use set instead of vector
   std::vector<ColorMode> modes;
-  GetEdid()->GetColorModes(modes);
+  if (GetEdid()) {
+    GetEdid()->GetColorModes(modes);
+  }
 
   if (modes.empty()) {
     return {ColorMode::kNative};
@@ -1450,8 +1467,11 @@ void HwcDisplay::GetHdrCapabilities(std::vector<ui::Hdr> *types,
     }
   }
 
-  GetEdid()->GetHdrCapabilities(*types, max_luminance, max_average_luminance,
-                                min_luminance);
+  types->clear();
+  if (GetEdid()) {
+    GetEdid()->GetHdrCapabilities(*types, max_luminance, max_average_luminance,
+                                  min_luminance);
+  }
   // TODO: pick appropriate HDR type
   if (types->empty() && forced_color_mode_) {
     types->emplace_back(ui::Hdr::HDR10);
@@ -2133,8 +2153,10 @@ void HwcDisplay::SetHdrOutputMetadata(const android::ColorSpace &color_gamut,
   // cd/m2, where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2.
   std::vector<ui::Hdr> types;
   float hdr_luminance[3]{0.F, 0.F, 0.F};
-  GetEdid()->GetHdrCapabilities(types, &hdr_luminance[0], &hdr_luminance[1],
-                                &hdr_luminance[2]);
+  if (GetEdid()) {
+    GetEdid()->GetHdrCapabilities(types, &hdr_luminance[0], &hdr_luminance[1],
+                                  &hdr_luminance[2]);
+  }
   m->max_display_mastering_luminance = m->max_cll = static_cast<uint64_t>(
       hdr_luminance[0]);
   m->max_fall = static_cast<uint64_t>(hdr_luminance[1]);

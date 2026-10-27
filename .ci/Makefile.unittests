@@ -28,7 +28,7 @@ HOST_INCLUDES := \
 	-I$(HOST_AOSPLESS_DIR)/includes/bionic/libc/kernel/uapi
 
 HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Wno-missing-designated-field-initializers
-HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4 -D__INTRODUCED_IN\(x\)=
+HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4 -DHAS_LIBDISPLAY_INFO=1 -D__INTRODUCED_IN\(x\)=
 HOST_CXXFLAGS += $(HOST_INCLUDES)
 
 HOST_OUT_DIR := $(OUT_DIR)/host_unittests
@@ -116,6 +116,7 @@ UNITTEST_SRCS := \
 	utils/BacklightControllerTest.cpp \
 	utils/ColorUtil.cpp \
 	utils/ColorUtilTest.cpp \
+	utils/LibdisplayEdidWrapper.cpp \
 	utils/SlruCacheTest.cpp \
 	utils/SysfsBacklightController.cpp \
 	utils/SysfsBacklightControllerTest.cpp \
@@ -184,4 +185,4 @@ $(HOST_OUT_DIR)/gtest_main.o: /usr/src/googletest/googletest/src/gtest_main.cc
 $(HOST_OUT_DIR)/drm_hwcomposer_unittests: $(HOST_OBJS) $(HOST_EXT_OBJS) $(HOST_GTEST_OBJS)
 	@mkdir -p $(dir $@)
 	@echo "HOST_LD $@"
-	@$(CLANG) $^ -ldrm -llz4 -lpthread -o $@
+	@$(CLANG) $^ -ldisplay-info -ldrm -llz4 -lpthread -o $@
