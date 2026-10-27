@@ -596,10 +596,8 @@ bool ResourceManager::UpdateFrontendDisplays(
   auto ordered_connectors = GetOrderedConnectors();
   bool needs_settle_reprobe = false;
 
-  // Pass 1: Update modes and properties on all connectors (when requested) and
-  // detach any disconnected connectors first so their shared CRTCs, encoders,
-  // and planes are released before Pass 2 allocates pipelines for newly
-  // connected ones.
+  // Pass 1: Update modes and properties on all connectors (when requested)
+  // first.
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
       continue;
@@ -608,12 +606,19 @@ bool ResourceManager::UpdateFrontendDisplays(
         (conn->UpdateModesAndProperties() != 0 || conn->IsDeleted())) {
       needs_settle_reprobe = true;
     }
-    if (!conn->IsConnected()) {
-      DetachConnector(conn);
+  }
+
+  // Pass 2: Process disconnections first so their shared CRTCs, encoders, and
+  // planes are released before allocating new pipelines, and so an active tiled
+  // connector that is unplugged can fail over in-place to a remaining connected
+  // sibling tile connector.
+  for (auto *conn : ordered_connectors) {
+    if (conn != nullptr && !conn->IsConnected()) {
+      ProcessHotplugForConnector(conn, false);
     }
   }
 
-  // Pass 2: Attach pipelines for newly connected connectors using the
+  // Pass 3: Attach pipelines for newly connected connectors using the
   // connector state already probed in Pass 1 (or off-lock).
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
@@ -702,7 +707,7 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
         }
       }
     } else {
-      DetachConnector(conn);
+      DetachConnector(conn, update_modes);
     }
   } else if (connected && check_status_props) {
     auto attached_it = attached_pipelines_.find(conn);
@@ -735,16 +740,62 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
   }
 }
 
-void ResourceManager::DetachConnector(DrmConnector *conn) {
+void ResourceManager::DetachConnector(DrmConnector *conn, bool update_modes) {
   auto it = attached_pipelines_.find(conn);
   if (it == attached_pipelines_.end()) {
     return;
   }
 
   ALOGI("Detaching connector %s", conn->GetName().c_str());
-  frontend_interface_->UnbindDisplay(it->second);
-  attached_pipelines_.erase(it);
-  attached_tile_groups_.erase(conn);
+
+  bool failed_over = false;
+  auto tile_it = attached_tile_groups_.find(conn);
+  if (tile_it != attached_tile_groups_.end()) {
+    const TileGroupKey detached_key = tile_it->second;
+    for (auto *candidate : GetOrderedConnectors()) {
+      if (candidate == conn || attached_pipelines_.count(candidate) != 0) {
+        continue;
+      }
+      if (update_modes) {
+        candidate->UpdateModesAndProperties();
+      }
+      if (!candidate->IsConnected() || candidate->GetModes().empty()) {
+        continue;
+      }
+      auto candidate_key = GetConnectorTileGroupKey(candidate);
+      if (!candidate_key.has_value() || detached_key != *candidate_key) {
+        continue;
+      }
+
+      ALOGI(
+          "Failing over tiled display from detached connector %s (id=%u) "
+          "to connected sibling connector %s (id=%u)",
+          conn->GetName().c_str(), conn->GetId(), candidate->GetName().c_str(),
+          candidate->GetId());
+
+      std::shared_ptr<DrmDisplayPipeline>
+          new_pipeline = candidate->GetDev().GetBackend().CreatePipeline(
+              *candidate);
+      ALOGE_IF(new_pipeline == nullptr,
+               "Failed to create failover pipeline for connector %s",
+               candidate->GetName().c_str());
+      if (new_pipeline &&
+          frontend_interface_->ReplaceDisplay(it->second, new_pipeline)) {
+        attached_pipelines_.erase(it);
+        attached_tile_groups_.erase(tile_it);
+        attached_pipelines_[candidate] = std::move(new_pipeline);
+        attached_tile_groups_[candidate] = *candidate_key;
+        failed_over = true;
+        break;
+      }
+    }
+  }
+
+  if (!failed_over) {
+    frontend_interface_->UnbindDisplay(it->second);
+    attached_pipelines_.erase(it);
+    attached_tile_groups_.erase(conn);
+  }
 }
 
 void ResourceManager::DetachStalePipelines(
@@ -752,7 +803,7 @@ void ResourceManager::DetachStalePipelines(
   for (const auto &conn : stale_connectors) {
     auto it = attached_pipelines_.find(conn.get());
     if (it != attached_pipelines_.end()) {
-      ALOGI("Detaching stale connector %s (id=%u)",
+      ALOGI("Detaching pipeline for stale connector %s (id=%d)",
             conn->GetName().c_str(), conn->GetId());
       frontend_interface_->UnbindDisplay(it->second);
       attached_pipelines_.erase(it);

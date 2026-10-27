@@ -103,6 +103,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   // PipelineToFrontendBindingInterface
   bool BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
+  bool ReplaceDisplay(
+      std::shared_ptr<DrmDisplayPipeline> old_pipeline,
+      std::shared_ptr<DrmDisplayPipeline> new_pipeline) override;
   void FinalizeDisplayBinding() override;
   void FlushHotplugEvents() override;
   [[nodiscard]] bool IsEarlyBootAnimationActive() const override;

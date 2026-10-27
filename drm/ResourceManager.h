@@ -45,6 +45,9 @@ class PipelineToFrontendBindingInterface {
   virtual ~PipelineToFrontendBindingInterface() = default;
   virtual bool BindDisplay(std::shared_ptr<DrmDisplayPipeline>) = 0;
   virtual bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline>) = 0;
+  virtual bool ReplaceDisplay(
+      std::shared_ptr<DrmDisplayPipeline> old_pipeline,
+      std::shared_ptr<DrmDisplayPipeline> new_pipeline) = 0;
   virtual void FinalizeDisplayBinding() = 0;
   virtual void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
@@ -136,7 +139,7 @@ class ResourceManager {
                                   bool refresh_status_props = true,
                                   bool check_status_props = true,
                                   bool cp_was_updated = false);
-  void DetachConnector(DrmConnector *conn);
+  void DetachConnector(DrmConnector *conn, bool update_modes = true);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
