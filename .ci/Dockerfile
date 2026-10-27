@@ -1,4 +1,4 @@
-FROM registry.freedesktop.org/drm-hwcomposer/drm-hwcomposer/ubuntu/x86_64_aospless:20261026--aec7a6ce7bb38902c70641526f6611e27141784a
+FROM registry.freedesktop.org/drm-hwcomposer/drm-hwcomposer/ubuntu/x86_64_aospless:20261027--aec7a6ce7bb38902c70641526f6611e27141784a
 
 ENV DEBIAN_FRONTEND=noninteractive
 
