@@ -29,6 +29,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -188,6 +189,17 @@ HwcLayer::LayerProperties CreateFullScreenFhdLayerProperties(
   props.blend_mode = BufferBlendMode::kNone;
   props.composition_type = CompositionType::kDevice;
   return props;
+}
+
+void StageSingleDeviceLayer(HwcDisplay& display, ILayerId layer_id = 1) {
+  ASSERT_TRUE(display.CreateLayer(layer_id));
+  HwcLayer* layer = display.get_layer(layer_id);
+  ASSERT_NE(layer, nullptr);
+  HwcLayer::LayerProperties props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId));
+  props.blend_mode = BufferBlendMode::kPreMult;
+  props.z_order = 0;
+  layer->SetLayerProperties(props);
 }
 
 class FakeDisplayCapabilities : public BackendDisplayCapabilities {
@@ -747,6 +759,178 @@ TEST_F(HwcDisplayTest, QueueSeamlessConfigUpdatesRequestedAndNextConfig) {
   EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
   ASSERT_NE(display.GetNextConfig(), nullptr);
   EXPECT_EQ(display.GetNextConfig()->id, next_id);
+}
+
+// Pins the HwcDisplay contract for a same-group (seamless) config change whose
+// frame commit is rejected by the kernel:
+//  - QueueConfig() stages the config and enables VSync timestamp tracking, and
+//    CreateFrameUpdateCommit() folds the staged config into the next frame
+//    commit as a seamless display_mode.
+//  - If the kernel rejects that commit, the config was never applied. The HAL
+//    must then (a) keep presenting at the still-active config instead of
+//    re-sending the rejected mode with every later frame, (b) stop reporting
+//    the rejected config from GetLastRequestedConfig(), which backs hwc3
+//    getActiveConfig(), (c) disable VSync timestamp tracking once the staged
+//    mode is cleared, and (d) request a client refresh so SurfaceFlinger
+//    re-presents if it would otherwise go idle.
+TEST_F(HwcDisplayTest, RejectedStagedModeCommitDoesNotPoisonLaterFrames) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  ASSERT_EQ(configs[0].group_id, configs[1].group_id);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId next_id = (configs[0].id == initial_id) ? configs[1].id
+                                                         : configs[0].id;
+  ASSERT_NE(display.GetConfig(next_id), nullptr);
+
+  StageSingleDeviceLayer(display);
+
+  // Reject every commit that carries a display mode (the seamless fold-in of
+  // the staged config as well as any full-modeset retry of it), like a kernel
+  // that no longer accepts this mode change. Commits without a mode succeed.
+  using ExecuteResults = std::vector<
+      std::pair<AtomicStateManager*, AtomicCommitResult>>;
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetExecuteCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+             args) -> CommitStatusOr<ExecuteResults> {
+        ExecuteResults results;
+        for (const auto& [manager, commit_args] : args) {
+          if (commit_args.display_mode.has_value()) {
+            return CommitStatusOr<ExecuteResults>(
+                CommitStatus::Failure(-EINVAL));
+          }
+          results.emplace_back(manager, AtomicCommitResult{});
+        }
+        return CommitStatusOr<ExecuteResults>(results);
+      });
+
+  // desired_time 0 puts staged_mode_change_time_ in the past, so the staged
+  // config is folded into the very next frame commit.
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(next_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+
+  // Frame 1 carries the staged mode and is rejected.
+  hwc.ResetRefreshCount();
+  sink->ClearHistory();
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().front().empty());
+  const auto rejected_args = sink->GetCommitHistory().front().front();
+  ASSERT_TRUE(rejected_args.display_mode.has_value());
+  if (!rejected_args.display_mode.has_value()) {
+    return;
+  }
+  EXPECT_TRUE(rejected_args.seamless);
+  EXPECT_TRUE(*rejected_args.display_mode ==
+              display.GetConfig(next_id)->mode.GetRawMode());
+  EXPECT_EQ(hwc.GetRefreshCount(), 1);
+
+  // (b) & (c) The rejected config was never applied: the active config is
+  // unchanged, the HAL must no longer report the rejected config as
+  // requested/active, and VSync timestamp tracking must be disabled.
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, initial_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_id);
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+
+  // (a) The following frames must be presented at the still-active config
+  // without re-sending the rejected mode.
+  for (int frame = 2; frame <= 3; ++frame) {
+    SCOPED_TRACE("frame " + std::to_string(frame));
+    sink->ClearHistory();
+    (void)display.ValidateStagedComposition();
+    display.AcceptValidatedComposition();
+    EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                 release_fences));
+    ASSERT_FALSE(sink->GetCommitHistory().empty());
+    for (const auto& commit : sink->GetCommitHistory()) {
+      ASSERT_FALSE(commit.empty());
+      EXPECT_FALSE(commit.front().display_mode.has_value());
+    }
+  }
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, initial_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_id);
+}
+
+TEST_F(HwcDisplayTest,
+       FailedFrameCommitBeforeStagedConfigDuePreservesStagedConfig) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+
+  const auto configs = display.GetDisplayConfigs();
+  ASSERT_EQ(configs.size(), 2U);
+  ASSERT_EQ(configs[0].group_id, configs[1].group_id);
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId next_id = (configs[0].id == initial_id) ? configs[1].id
+                                                         : configs[0].id;
+
+  StageSingleDeviceLayer(display);
+
+  // Queue a seamless config far in the future so it is not due on the next
+  // frame commit.
+  constexpr int64_t kFutureOffsetNs = 10'000'000'000LL;
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(next_id,
+                                ResourceManager::GetTimeMonotonicNs() +
+                                    kFutureOffsetNs,
+                                &timing),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+
+  // Make a plane-only frame commit fail before the staged config is due.
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  sink->SetNextExecuteStatus(CommitStatus::Failure(-EINVAL));
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  ASSERT_FALSE(sink->GetCommitHistory().front().empty());
+  EXPECT_FALSE(sink->GetCommitHistory().front().front().display_mode);
+
+  // Because the failed commit did not carry the not-yet-due staged mode,
+  // the staged config and VSync timestamp tracking must remain intact.
+  ASSERT_NE(display.GetCurrentConfig(), nullptr);
+  EXPECT_EQ(display.GetCurrentConfig()->id, initial_id);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, next_id);
+  EXPECT_TRUE(display.IsVsyncTimestampTrackingEnabled());
 }
 
 TEST_F(HwcDisplayTest, StartHdcpRepeatedNotifications) {

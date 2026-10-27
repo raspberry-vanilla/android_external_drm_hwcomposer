@@ -242,6 +242,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   // Enable or disable vsync callbacks.
   void SetVsyncCallbacksEnabled(bool enabled);
+  bool IsVsyncTimestampTrackingEnabled() const;
 
   bool GetDisplayEnabled() const;
 
@@ -419,6 +420,7 @@ class HwcDisplay : public ICompositorDisplay {
   void WaitForPresentTime(int64_t present_time, uint32_t vsync_period_ns);
 
   uint32_t GetCurrentVsyncPeriodNs() const;
+  void ClearStagedModeConfig();
 
   bool CanReuseLayerForModeset(uint32_t width, uint32_t height) const;
   std::optional<LayerData> FindFullScreenDeviceLayerForModeset(

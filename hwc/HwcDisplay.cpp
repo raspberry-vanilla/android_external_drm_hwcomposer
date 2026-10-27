@@ -836,6 +836,19 @@ void HwcDisplay::SetVsyncCallbacksEnabled(bool enabled) {
   vsync_worker_->SetTimestampCallback(std::move(callback));
 }
 
+bool HwcDisplay::IsVsyncTimestampTrackingEnabled() const {
+  return vsync_worker_ != nullptr &&
+         vsync_worker_->IsVsyncTimestampTrackingEnabled();
+}
+
+void HwcDisplay::ClearStagedModeConfig() {
+  staged_mode_config_id_.reset();
+  staged_mode_change_time_ = 0;
+  if (vsync_worker_) {
+    vsync_worker_->SetVsyncTimestampTracking(false);
+  }
+}
+
 bool HwcDisplay::IsDozeSupported() const {
   if (IsInHeadlessMode()) {
     return false;
@@ -1925,6 +1938,10 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
 
   if (!a_args) {
     ALOGE("Failed to create AtomicCommitArgs for frame composition.");
+    if (staged_mode_config_id_ &&
+        GetConfig(*staged_mode_config_id_) == nullptr) {
+      ClearStagedModeConfig();
+    }
     last_presented_composition_.Reset();
     return CommitStatus::InternalFailure();
   }
@@ -1934,6 +1951,14 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
   if (!result.has_value()) {
     ALOGE("Failed to commit the frame composition with err=%d",
           status_or_result.GetStatus().error_code);
+    if (active_config_id_ != 0 && a_args->display_mode &&
+        staged_mode_config_id_ &&
+        a_args->display_config_id == *staged_mode_config_id_) {
+      ClearStagedModeConfig();
+      if (hwc_) {
+        hwc_->SendRefreshEventToClient(handle_);
+      }
+    }
     last_presented_composition_.Reset();
     return status_or_result.GetStatus();
   }
@@ -1955,7 +1980,7 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
   if (a_args.display_mode) {
     // Get the vsync period before updating active_config_id.
     uint32_t prev_vperiod_ns = GetCurrentVsyncPeriodNs();
-    vsync_worker_->SetVsyncTimestampTracking(false);
+    ClearStagedModeConfig();
     uint32_t last_vsync_ts = vsync_worker_->GetLastVsyncTimestamp();
     if (last_vsync_ts != 0) {
       hwc_->SendVsyncPeriodTimingChangedEventToClient(handle_,
@@ -1969,7 +1994,6 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args,
     // Update the active_config_id and update the vsync period for the
     // VsyncWorker.
     active_config_id_ = a_args.display_config_id.value_or(active_config_id_);
-    staged_mode_config_id_.reset();
     if (!a_args.seamless) {
       link_recovery_modeset_required_ = false;
     }

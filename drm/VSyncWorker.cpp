@@ -122,6 +122,11 @@ void VSyncWorker::SetVsyncTimestampTracking(bool enabled) {
   UpdateVSyncControl();
 }
 
+bool VSyncWorker::IsVsyncTimestampTrackingEnabled() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return enable_vsync_timestamps_;
+}
+
 uint32_t VSyncWorker::GetLastVsyncTimestamp() {
   const std::lock_guard<std::mutex> lock(mutex_);
   return last_timestamp_is_fresh_ ? last_timestamp_.value_or(0) : 0;
