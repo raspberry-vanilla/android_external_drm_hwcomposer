@@ -114,6 +114,9 @@ class ResourceManager {
 
  private:
   friend struct DrmHwcTest;
+  friend struct HwcDisplayTest;
+
+  void ReloadProperties();
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
   void StartUEventListener();

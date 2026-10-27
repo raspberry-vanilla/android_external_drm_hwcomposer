@@ -153,6 +153,16 @@ ResourceManager::ResourceManager(
 
 ResourceManager::~ResourceManager() = default;
 
+void ResourceManager::ReloadProperties() {
+  scale_with_gpu_ = Properties::ScaleWithGpu();
+  ctm_handling_ = Properties::GetCtmHandling();
+  color_pipeline_enabled_ = Properties::UseColorPipeline();
+  force_ctm_handles_offset_ = Properties::ForceCtmHandlesOffset();
+  force_color_mode_ = Properties::ForceColorMode();
+  persistent_hdr_enabled_ = Properties::PersistentHdrEnabled();
+  external_hdr_enabled_ = Properties::ExternalHdrEnabled();
+}
+
 void ResourceManager::Init() {
   if (initialized_) {
     ALOGE("Already initialized");

@@ -1270,8 +1270,21 @@ bool HwcDisplay::Init() {
   }
   SetBootAnimationState(boot_state);
 
-  static constexpr ColorMode kDefaultColorMode = ColorMode::kSrgb;
-  SetColorMode(kDefaultColorMode, ui::RenderIntent::COLORIMETRIC);
+  // Some backend displays (such as SDR external monitors on Qualcomm SDM) only
+  // advertise ColorMode::kNative in GetColorModeOverrides() and reject kSrgb.
+  ColorMode default_color_mode = ColorMode::kSrgb;
+  if (!IsInHeadlessMode() && GetPipe().capabilities != nullptr) {
+    if (auto overrides = GetPipe().capabilities->GetColorModeOverrides();
+        overrides && !overrides->empty() &&
+        std::find(overrides->begin(), overrides->end(), ColorMode::kSrgb) ==
+            overrides->end()) {
+      default_color_mode = std::find(overrides->begin(), overrides->end(),
+                                     ColorMode::kNative) != overrides->end()
+                               ? ColorMode::kNative
+                               : overrides->front();
+    }
+  }
+  SetColorMode(default_color_mode, ui::RenderIntent::COLORIMETRIC);
 
   if (GetDisplayType() == DisplayType::kExternal) {
     // Defer the initial blocking KMS modeset on external displays until the
@@ -2313,21 +2326,29 @@ std::pair<uint32_t, uint32_t> HwcDisplay::GetSize() const {
 }
 
 auto HwcDisplay::SetBrightness(float brightness) -> bool {
-  if (brightness >= 0.0F && GetPipe().connector->Get()->IsInternal()) {
-    brightness_ = ColorUtil::ScaleBrightnessIfNeeded(brightness);
-    if (HasBacklight()) {
-      return backlight_controller_->SetBrightness(
-          std::optional<float>(brightness_));
+  if (std::isnan(brightness) || brightness > kMaxBrightness ||
+      (brightness < kMinBrightness && !FloatEquals(brightness, -1.0F))) {
+    return false;
+  }
+
+  if (brightness >= kMinBrightness &&
+      GetPipe().connector->Get()->IsInternal()) {
+    const float scaled_brightness = ColorUtil::ScaleBrightnessIfNeeded(
+        brightness);
+    if (HasBacklight() &&
+        !backlight_controller_->SetBrightness(scaled_brightness)) {
+      return false;
     }
+    brightness_ = scaled_brightness;
     return true;
   }
 
-  // Negative values indicate turning the backlight off per HAL API.
+  // -1.0F indicates turning the backlight off per HAL API.
   // Set to 0 so downstream color and gamma pipelines scale to 0 (black).
-  brightness_ = 0.0F;
-  if (HasBacklight()) {
-    return backlight_controller_->SetBrightness(std::nullopt);
+  if (HasBacklight() && !backlight_controller_->SetBrightness(std::nullopt)) {
+    return false;
   }
+  brightness_ = 0.0F;
   return true;
 }
 

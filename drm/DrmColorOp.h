@@ -46,6 +46,8 @@ enum class ColorOpType : int32_t {
 };
 
 class DrmColorOp : public PipelineBindable<DrmColorOp> {
+  friend class FakeDrmColorOp;
+
  public:
   static auto CreateInstance(DrmDevice &dev, uint64_t color_op_id,
                              uint32_t index) -> std::unique_ptr<DrmColorOp>;

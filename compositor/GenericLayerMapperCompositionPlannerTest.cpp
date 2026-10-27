@@ -37,6 +37,8 @@
 #include "drm/DrmPlane.h"
 #include "drm/DrmTestUtils.h"
 #include "hwc/HwcLayer.h"
+#include "utils/ColorUtil.h"
+#include "utils/TestUtils.h"
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
@@ -564,9 +566,10 @@ TEST(GenericLayerMapperCompositionPlannerTest,
 
 TEST(GenericLayerMapperCompositionPlannerTest,
      SingleLayerAndCursorCtmWithOffsetFallback) {
-  if (!Properties::BugfixCursorCtmOffset()) {
-    return;
-  }
+  ScopedTestProperty
+      bugfix_cursor_ctm_offset("vendor.hwc.drm.bugfix_cursor_ctm_offset",
+                               "true");
+  ASSERT_TRUE(Properties::BugfixCursorCtmOffset());
 
   GenericLayerMapperCompositionPlanner planner;
   MockCompositorDisplay mock_display;
@@ -587,7 +590,7 @@ TEST(GenericLayerMapperCompositionPlannerTest,
                                                      CompositionType::kCursor);
 
   EXPECT_CALL(mock_display, GetOrderLayersByZPos())
-      .WillOnce(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
+      .WillRepeatedly(Return(std::vector<const HwcLayer*>{&layer1, &cursor}));
 
   EXPECT_CALL(mock_display, GetLastPresentedComposition())
       .WillRepeatedly(ReturnRefOfCopy(PresentedCompositionCache()));
@@ -606,20 +609,27 @@ TEST(GenericLayerMapperCompositionPlannerTest,
   EXPECT_CALL(mock_display, GetNumAvailablePlanes()).WillRepeatedly(Return(4));
   EXPECT_CALL(mock_display, GetCursorPlane())
       .WillRepeatedly(Return(cursor_plane->BindPipeline(nullptr)));
-  // CTM with offset should fall back to client composition
-  EXPECT_CALL(mock_display, GetColorTransformMatrix())
-      .WillRepeatedly(Return(kOffsetCtm));
-
   EXPECT_CALL(mock_display, TestComposition(_))
       .WillRepeatedly(Return(CommitStatus::Success()));
 
-  auto [composition, _] = planner.ValidateDisplay(&mock_display);
+  // CTM with offset in any translation channel (indices 12, 13, 14) should fall
+  // back to client composition.
+  for (uint32_t idx : {12U, 13U, 14U}) {
+    HalColorTransformMatrix offset_ctm = *kOffsetCtm;
+    offset_ctm[12] = 0.0F;
+    offset_ctm[idx] = 1.0F;
+    ASSERT_TRUE(ColorUtil::HasOffset(offset_ctm));
+    EXPECT_CALL(mock_display, GetColorTransformMatrix())
+        .WillRepeatedly(
+            Return(std::make_shared<HalColorTransformMatrix>(offset_ctm)));
 
-  EXPECT_EQ(composition.composition_types,
-            (CompositionPlanner::
-                 CompositionTypeMap{{&layer1, CompositionType::kClient},
-                                    {&cursor, CompositionType::kClient}}));
-  EXPECT_FALSE(composition.cursor_plane_validated);
+    auto [composition, _] = planner.ValidateDisplay(&mock_display);
+    EXPECT_EQ(composition.composition_types,
+              (CompositionPlanner::
+                   CompositionTypeMap{{&layer1, CompositionType::kClient},
+                                      {&cursor, CompositionType::kClient}}));
+    EXPECT_FALSE(composition.cursor_plane_validated);
+  }
 }
 
 TEST(GenericLayerMapperCompositionPlannerTest,

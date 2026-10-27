@@ -25,6 +25,7 @@
 #endif
 #include <memory>
 
+#include "backend/sdm/SnapAllocHandle.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "bufferinfo/GrallocBufferHandle.h"
@@ -93,5 +94,27 @@ std::shared_ptr<GrallocBufferHandle> GrallocBufferHandle::Create(
 // Stub for GrallocBufferHandle::~GrallocBufferHandle
 // Do not release the handle, since it wasn't imported.
 GrallocBufferHandle::~GrallocBufferHandle() = default;
+
+std::shared_ptr<SnapAllocHandle> SnapAllocHandle::Create(
+    buffer_handle_t handle) {
+  return std::shared_ptr<SnapAllocHandle>(new SnapAllocHandle(handle, nullptr));
+}
+
+bool SnapAllocHandle::Init(sdm::DebugCallbackIntf* /*debug_callback*/) {
+  return true;
+}
+
+SnapAllocHandle::SnapAllocHandle(
+    buffer_handle_t buffer_handle,
+    vendor::qti::hardware::display::snapalloc::SnapHandle* snap_handle)
+    : GrallocBufferHandle(buffer_handle), snap_handle_(snap_handle) {
+}
+
+vendor::qti::hardware::display::snapalloc::SnapHandle*
+SnapAllocHandle::GetSnapHandle() const {
+  return snap_handle_;
+}
+
+SnapAllocHandle::~SnapAllocHandle() = default;
 
 }  // namespace android::drm_hwcomposer
