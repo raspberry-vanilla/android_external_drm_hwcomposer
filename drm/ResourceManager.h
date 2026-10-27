@@ -27,6 +27,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace android::drm_hwcomposer {
@@ -135,6 +136,7 @@ class ResourceManager {
                                   bool refresh_status_props = true,
                                   bool check_status_props = true,
                                   bool cp_was_updated = false);
+  void DetachConnector(DrmConnector *conn);
   void DetachStalePipelines(
       const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors);
   void DetachAllFrontendDisplays();
@@ -162,8 +164,15 @@ class ResourceManager {
   std::mutex hotplug_mutex_;
   std::mutex main_lock_;
 
+  using TileGroupKey = std::pair<const DrmDevice *, int>;
+  static auto GetConnectorTileGroupKey(DrmConnector *conn)
+      -> std::optional<TileGroupKey>;
+  auto FindAttachedSiblingTileConnector(DrmConnector *conn) const
+      -> DrmConnector *;
+
   std::map<DrmConnector *, std::shared_ptr<DrmDisplayPipeline>>
       attached_pipelines_;
+  std::map<DrmConnector *, TileGroupKey> attached_tile_groups_;
   struct DeferredHotplugEvent {
     std::set<uint32_t> connector_ids;
     bool refresh_all = false;
