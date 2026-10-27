@@ -2559,10 +2559,21 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
 }
 
 std::string HwcDisplay::Dump() const {
-  if (pipeline_ && pipeline_->atomic_state_manager) {
-    return pipeline_->atomic_state_manager->DumpState();
+  std::stringstream ss;
+  if (pipeline_ && pipeline_->connector && pipeline_->connector->Get()) {
+    if (auto tile_info = pipeline_->connector->Get()->GetTileInfo()) {
+      ss << "Tile Info: group_id=" << tile_info->group_id
+         << " single_monitor=" << tile_info->tile_is_single_monitor
+         << " grid=" << tile_info->num_h_tile << "x" << tile_info->num_v_tile
+         << " loc=(" << tile_info->tile_h_loc << "," << tile_info->tile_v_loc
+         << ") tile_size=" << tile_info->tile_h_size << "x"
+         << tile_info->tile_v_size << "\n";
+    }
   }
-  return {};
+  if (pipeline_ && pipeline_->atomic_state_manager) {
+    ss << pipeline_->atomic_state_manager->DumpState();
+  }
+  return ss.str();
 }
 
 }  // namespace android::drm_hwcomposer

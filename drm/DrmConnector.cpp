@@ -266,6 +266,56 @@ auto DrmConnector::GetEdidBlob() -> DrmModePropertyBlobUnique {
   return MakeDrmModePropertyBlobUnique(*drm_->GetFd(), *blob_id);
 }
 
+auto DrmConnector::GetTileBlobData() -> std::optional<std::vector<char>> {
+  DrmProperty tile_property;
+  if (!GetOptionalConnectorProperty("TILE", &tile_property) ||
+      !tile_property.IsBlob() || tile_property.GetValue().value_or(0) == 0) {
+    return std::nullopt;
+  }
+
+  std::vector<char> tile_data;
+  if (!tile_property.GetBlobData(tile_data) || tile_data.empty()) {
+    return std::nullopt;
+  }
+
+  return tile_data;
+}
+
+auto DrmConnector::GetTileInfo() -> std::optional<DrmTileInfo> {
+  auto tile_data = GetTileBlobData();
+  if (!tile_data) {
+    return std::nullopt;
+  }
+
+  std::string raw_tile(tile_data->data(), tile_data->size());
+  while (!raw_tile.empty() && raw_tile.back() == '\0') {
+    raw_tile.pop_back();
+  }
+
+  std::istringstream ss(raw_tile);
+  DrmTileInfo info{};
+  int single_monitor = 0;
+  char c1 = 0;
+  char c2 = 0;
+  char c3 = 0;
+  char c4 = 0;
+  char c5 = 0;
+  char c6 = 0;
+  char c7 = 0;
+  if (!(ss >> info.group_id >> c1 >> single_monitor >> c2 >> info.num_h_tile >>
+        c3 >> info.num_v_tile >> c4 >> info.tile_h_loc >> c5 >>
+        info.tile_v_loc >> c6 >> info.tile_h_size >> c7 >> info.tile_v_size) ||
+      c1 != ':' || c2 != ':' || c3 != ':' || c4 != ':' || c5 != ':' ||
+      c6 != ':' || c7 != ':') {
+    ALOGW("Connector %s (id=%u): Failed to parse TILE blob '%s'",
+          GetName().c_str(), GetId(), raw_tile.c_str());
+    return std::nullopt;
+  }
+
+  info.tile_is_single_monitor = (single_monitor != 0);
+  return info;
+}
+
 bool DrmConnector::SupportsEncoder(DrmEncoder &enc) const {
   for (int i = 0; i < connector_->count_encoders; i++) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)

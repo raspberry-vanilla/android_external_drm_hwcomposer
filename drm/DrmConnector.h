@@ -40,6 +40,17 @@ class DrmMode;
 enum class DrmColorspace;
 enum class PanelOrientation;
 
+struct DrmTileInfo {
+  int group_id = 0;
+  bool tile_is_single_monitor = false;
+  int num_h_tile = 0;
+  int num_v_tile = 0;
+  int tile_h_loc = 0;
+  int tile_v_loc = 0;
+  int tile_h_size = 0;
+  int tile_v_size = 0;
+};
+
 class DrmConnector : public PipelineBindable<DrmConnector> {
   friend class FakeDrmConnector;
 
@@ -54,6 +65,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   int UpdateEdidProperty();
   virtual auto GetEdidBlob() -> DrmModePropertyBlobUnique;
+
+  auto GetTileInfo() -> std::optional<DrmTileInfo>;
 
   auto GetDev() const -> DrmDevice & {
     return *drm_;
@@ -239,6 +252,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
                                     DrmProperty *property) -> bool {
     return GetConnectorProperty(prop_name, property, /*is_optional=*/true);
   }
+
+  auto GetTileBlobData() -> std::optional<std::vector<char>>;
 
   const uint32_t index_in_res_array_;
   bool deleted_ = false;
