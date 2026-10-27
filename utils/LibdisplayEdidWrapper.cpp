@@ -19,7 +19,24 @@ extern "C" {
 #include <libdisplay-info/edid.h>
 #include <libdisplay-info/info.h>
 }
+#ifdef ANDROID
 #include <ui/GraphicTypes.h>
+#else
+// <ui/GraphicTypes.h> and <android/hardware/graphics/common/1.1/types.h> pull
+// in <hidl/HidlInternal.h>, which fails a static_assert on sizeof(std::string)
+// when compiled against host GNU libstdc++ in drm_hwcomposer_unittests.
+namespace aidl::android::hardware::graphics::common {
+enum class Hdr : int32_t {
+  INVALID = 0,
+  DOLBY_VISION = 1,
+  HDR10 = 2,
+  HLG = 3,
+  HDR10_PLUS = 4,
+  DOLBY_VISION_4K30 = 5,
+  HLG_PLUS = 6,
+};
+}  // namespace aidl::android::hardware::graphics::common
+#endif
 
 #include <cstdint>
 #include <memory>
