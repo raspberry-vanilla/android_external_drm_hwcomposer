@@ -1842,4 +1842,43 @@ TEST_F(DrmHwcTest, OffLockHotplugProbeDoesNotOverwriteFresherMainLockReprobe) {
   DeInitResManForTest();
 }
 
+TEST_F(DrmHwcTest,
+       EarlyBootAnimationCommitsPureSeamlessPageflipWithoutPowerMode) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd, /*num_frames=*/2);
+
+  const ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  const ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  const ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "0");
+  const ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  hwc.StartEarlyBootAnimation();
+  hwc.WaitForCompletionAndStopEarlyBootAnimation();
+
+  const auto& history = sink->GetCommitHistory();
+  ASSERT_GE(history.size(), 2U);
+  for (size_t i = 0; i < history.size(); ++i) {
+    ASSERT_FALSE(history[i].empty());
+    const auto& frame_args = history[i].front();
+    EXPECT_TRUE(frame_args.seamless) << "Frame " << i << " was not seamless";
+    EXPECT_FALSE(frame_args.display_mode.has_value())
+        << "Frame " << i << " unexpectedly carried display_mode";
+    EXPECT_FALSE(frame_args.power_mode.has_value())
+        << "Frame " << i
+        << " carried redundant power_mode, triggering spurious config-result "
+           "telemetry and blocking nonblock flag evaluation";
+  }
+
+  sink->ClearHistory();
+}
+
 }  // namespace android::drm_hwcomposer

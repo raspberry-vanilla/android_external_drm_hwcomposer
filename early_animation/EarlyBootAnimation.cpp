@@ -797,7 +797,11 @@ bool EarlyBootAnimation::PresentFrame(int back_idx,
                         ->CreateModesetCommit(current_config,
                                               buffers_[back_idx]
                                                   .hwc_layer->GetLayerData());
+  // CreateModesetCommit() populates both display_mode and power_mode = kOn for
+  // initial modesets. Clear both so per-frame animation updates execute as
+  // pure seamless plane pageflips rather than power-mode transitions.
   commit_args.display_mode.reset();
+  commit_args.power_mode.reset();
   commit_args.seamless = true;
   commit_args.blocking = true;
 
