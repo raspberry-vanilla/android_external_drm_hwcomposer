@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -73,6 +74,17 @@ class DrmAtomicStateManager : public AtomicStateManager {
 
     /* To avoid setting the inactive state twice, which will fail the commit */
     bool crtc_active_state{};
+
+    /* Last committed connector property values to skip redundant staging */
+    std::optional<uint64_t> colorspace;
+    std::optional<uint64_t> content_type;
+    std::optional<uint64_t> min_bpc;
+
+    void ResetConnectorProperties() {
+      colorspace.reset();
+      content_type.reset();
+      min_bpc.reset();
+    }
   };
 
   // State for a pending atomic request. Includes the pending kms objects and
@@ -145,15 +157,15 @@ class DrmAtomicStateManager : public AtomicStateManager {
   bool SetCtmIfNeeded(const AtomicCommitArgs &args, DrmAtomicRequest &request);
   bool SetGammaIfNeeded(const AtomicCommitArgs &args,
                         DrmAtomicRequest &request);
-  bool SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
+  bool SetColorSpaceIfNeeded(const AtomicCommitArgs &args, bool full_modeset,
                              DrmAtomicRequest &request);
-  bool SetContentTypeIfNeeded(const AtomicCommitArgs &args,
+  bool SetContentTypeIfNeeded(const AtomicCommitArgs &args, bool full_modeset,
                               DrmAtomicRequest &request);
   bool SetContentProtectionIfNeeded(const AtomicCommitArgs &args,
                                     DrmAtomicRequest &request);
   bool SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
                               DrmAtomicRequest &request);
-  bool SetMinBpcIfNeeded(const AtomicCommitArgs &args,
+  bool SetMinBpcIfNeeded(const AtomicCommitArgs &args, bool full_modeset,
                          DrmAtomicRequest &request);
   bool SetCompositionIfNeeded(const AtomicCommitArgs &args,
                               DrmAtomicRequest &request);

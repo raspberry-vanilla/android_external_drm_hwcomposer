@@ -153,6 +153,17 @@ class TestDrmDevice : public FakeDrmDevice {
     };
   }
 
+  void RegisterFakeRangeProperty(uint32_t obj_id, const std::string& prop_name,
+                                 uint32_t prop_id, uint64_t value,
+                                 uint64_t min_val, uint64_t max_val) {
+    fake_range_properties_[{obj_id, prop_name}] = FakeRangePropertyDef{
+        .prop_id = prop_id,
+        .value = value,
+        .min_val = min_val,
+        .max_val = max_val,
+    };
+  }
+
   int GetProperty(uint32_t obj_id, uint32_t obj_type, const char* prop_name,
                   DrmProperty* property) const override {
     auto it = fake_enum_properties_.find({obj_id, std::string(prop_name)});
@@ -170,6 +181,20 @@ class TestDrmDevice : public FakeDrmDevice {
       raw_prop.count_enums = static_cast<int>(raw_enums.size());
       raw_prop.enums = raw_enums.data();
       property->Init(nullptr, obj_id, &raw_prop, it->second.value);
+      return 0;
+    }
+    auto range_it = fake_range_properties_.find(
+        {obj_id, std::string(prop_name)});
+    if (range_it != fake_range_properties_.end()) {
+      drmModePropertyRes raw_prop{};
+      raw_prop.prop_id = range_it->second.prop_id;
+      raw_prop.flags = DRM_MODE_PROP_RANGE;
+      std::strncpy(raw_prop.name, prop_name, DRM_PROP_NAME_LEN - 1);
+      std::vector<uint64_t> raw_values = {range_it->second.min_val,
+                                          range_it->second.max_val};
+      raw_prop.count_values = static_cast<int>(raw_values.size());
+      raw_prop.values = raw_values.data();
+      property->Init(nullptr, obj_id, &raw_prop, range_it->second.value);
       return 0;
     }
     return FakeDrmDevice::GetProperty(obj_id, obj_type, prop_name, property);
@@ -198,8 +223,17 @@ class TestDrmDevice : public FakeDrmDevice {
     std::vector<std::pair<uint64_t, std::string>> enums;
   };
 
+  struct FakeRangePropertyDef {
+    uint32_t prop_id{};
+    uint64_t value{};
+    uint64_t min_val{};
+    uint64_t max_val{};
+  };
+
   std::map<std::pair<uint32_t, std::string>, FakeEnumPropertyDef>
       fake_enum_properties_;
+  std::map<std::pair<uint32_t, std::string>, FakeRangePropertyDef>
+      fake_range_properties_;
   std::map<uint32_t, uint32_t> fake_raw_connector_types_;
 };
 
@@ -1231,6 +1265,243 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req2)->property_set.get(),
                                       plane2->GetId(), kPlane2CrtcPropId),
             pipeline2->crtc->Get()->GetId());
+}
+
+namespace {
+
+constexpr uint32_t kTestColorspacePropId = 52;
+constexpr uint32_t kTestContentTypePropId = 53;
+constexpr uint32_t kTestHdrMetadataPropId = 54;
+constexpr uint32_t kTestMinBpcPropId = 55;
+constexpr uint64_t kDefaultColorspaceVal = 0;
+constexpr uint64_t kBt2020RgbColorspaceVal = 9;
+constexpr uint64_t kMinBpcRangeMin = 6;
+constexpr uint64_t kMinBpcRangeMax = 16;
+constexpr int32_t kTestMinBpc8 = 8;
+constexpr int32_t kTestMinBpc10 = 10;
+
+void ActivateWithConnectorProps(DrmAtomicStateManagerTest& fixture) {
+  auto* fake_conn = fixture.fake_connector;
+  ASSERT_NE(fake_conn, nullptr);
+  const uint32_t conn_id = fake_conn->GetId();
+
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id, "DPMS",
+                                                  kFakeDpmsPropId,
+                                                  DRM_MODE_PROP_ENUM,
+                                                  DRM_MODE_DPMS_ON);
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id, "CRTC_ID",
+                                                  kFakeConnectorCrtcPropId,
+                                                  DRM_MODE_PROP_OBJECT, 0);
+  fixture.fake_device
+      ->RegisterFakeEnumProperty(conn_id, "Colorspace", kTestColorspacePropId,
+                                 kDefaultColorspaceVal,
+                                 {{kDefaultColorspaceVal, "Default"},
+                                  {kBt2020RgbColorspaceVal, "BT2020_RGB"}});
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id, "content type",
+                                                  kTestContentTypePropId,
+                                                  DRM_MODE_PROP_ENUM, 0);
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id, "Content Protection",
+                                                  kFakeContentProtectionPropId,
+                                                  DRM_MODE_PROP_ENUM, 0);
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id, "HDCP Content Type",
+                                                  kFakeHdcpContentTypePropId,
+                                                  DRM_MODE_PROP_ENUM, 0);
+  fixture.fake_device->RegisterFakeObjectProperty(conn_id,
+                                                  "HDR_OUTPUT_METADATA",
+                                                  kTestHdrMetadataPropId,
+                                                  DRM_MODE_PROP_BLOB, 0);
+  fixture.fake_device->RegisterFakeRangeProperty(conn_id, "min bpc",
+                                                 kTestMinBpcPropId,
+                                                 kTestMinBpc8, kMinBpcRangeMin,
+                                                 kMinBpcRangeMax);
+  ASSERT_TRUE(fake_conn->CallBaseInit());
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.colorspace = HwcColorspace::kBt709;
+  modeset_args.content_type = ContentType::kGraphics;
+  modeset_args.min_bpc = kTestMinBpc8;
+  modeset_args.composition = fixture.CreateSinglePlanePlan(kTestFbId1);
+  auto modeset_req = fixture.state_manager->GetAtomicModeReqForArgs(
+      modeset_args);
+  ASSERT_NE(modeset_req, nullptr);
+  fixture.state_manager->FinishPendingRequest(modeset_args,
+                                              std::move(modeset_req));
+  ASSERT_TRUE(fixture.state_manager->IsActive());
+}
+
+}  // namespace
+
+TEST_F(DrmAtomicStateManagerTest, PageflipSkipsUnchangedConnectorProperties) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+  const uint32_t primary_plane_id = pipeline->primary_plane->Get()->GetId();
+
+  AtomicCommitArgs flip_args{};
+  flip_args.colorspace = HwcColorspace::kBt709;
+  flip_args.content_type = ContentType::kGraphics;
+  flip_args.min_bpc = kTestMinBpc8;
+  flip_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto flip_req = state_manager->GetAtomicModeReqForArgs(flip_args);
+  ASSERT_NE(flip_req, nullptr);
+  auto* prop_set = AsDrmRequest(flip_req)->property_set.get();
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, primary_plane_id,
+                                      kFakePlaneFbPropId),
+            kTestFbId2);
+  EXPECT_FALSE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kTestColorspacePropId)
+          .has_value());
+  EXPECT_FALSE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kTestContentTypePropId)
+          .has_value());
+  EXPECT_FALSE(GetAtomicReqPropertyValue(prop_set, conn_id, kTestMinBpcPropId)
+                   .has_value());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       SeamlessCommitSkipsUnchangedConnectorProperties) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+
+  AtomicCommitArgs seamless_args{};
+  seamless_args.seamless = true;
+  seamless_args.colorspace = HwcColorspace::kBt709;
+  seamless_args.content_type = ContentType::kGraphics;
+  seamless_args.content_protection = ContentProtection::kDesired;
+  seamless_args.hdcp_content_type = HdcpContentType::kType0;
+  seamless_args.min_bpc = kTestMinBpc8;
+  seamless_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto seamless_req = state_manager->GetAtomicModeReqForArgs(seamless_args);
+  ASSERT_NE(seamless_req, nullptr);
+  auto* prop_set = AsDrmRequest(seamless_req)->property_set.get();
+
+  EXPECT_FALSE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kTestColorspacePropId)
+          .has_value());
+  EXPECT_FALSE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kTestContentTypePropId)
+          .has_value());
+  EXPECT_TRUE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kFakeContentProtectionPropId)
+          .has_value());
+  EXPECT_TRUE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kFakeHdcpContentTypePropId)
+          .has_value());
+  EXPECT_FALSE(GetAtomicReqPropertyValue(prop_set, conn_id, kTestMinBpcPropId)
+                   .has_value());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       SeamlessCommitStagesChangedConnectorProperties) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+
+  AtomicCommitArgs seamless_args{};
+  seamless_args.seamless = true;
+  seamless_args.colorspace = HwcColorspace::kBt2020;
+  seamless_args.content_type = ContentType::kCinema;
+  seamless_args.min_bpc = kTestMinBpc10;
+  seamless_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto seamless_req = state_manager->GetAtomicModeReqForArgs(seamless_args);
+  ASSERT_NE(seamless_req, nullptr);
+  auto* prop_set = AsDrmRequest(seamless_req)->property_set.get();
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestColorspacePropId),
+            kBt2020RgbColorspaceVal);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kTestContentTypePropId),
+            static_cast<uint64_t>(ContentType::kCinema));
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestMinBpcPropId),
+            static_cast<uint64_t>(kTestMinBpc10));
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       FullModesetRestagesUnchangedConnectorProperties) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.colorspace = HwcColorspace::kBt709;
+  modeset_args.content_type = ContentType::kGraphics;
+  modeset_args.min_bpc = kTestMinBpc8;
+  modeset_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto modeset_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(modeset_req, nullptr);
+  auto* prop_set = AsDrmRequest(modeset_req)->property_set.get();
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestColorspacePropId),
+            kDefaultColorspaceVal);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kTestContentTypePropId),
+            static_cast<uint64_t>(ContentType::kGraphics));
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestMinBpcPropId),
+            static_cast<uint64_t>(kTestMinBpc8));
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       TeardownResetsCommittedConnectorPropertiesForSubsequentCommit) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.teardown = true;
+  auto teardown_req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(teardown_req, nullptr);
+  state_manager->FinishPendingRequest(teardown_args, std::move(teardown_req));
+
+  AtomicCommitArgs reactivate_args{};
+  reactivate_args.power_mode = PowerMode::kOn;
+  reactivate_args.colorspace = HwcColorspace::kBt709;
+  reactivate_args.content_type = ContentType::kGraphics;
+  reactivate_args.min_bpc = kTestMinBpc8;
+  reactivate_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto reactivate_req = state_manager->GetAtomicModeReqForArgs(reactivate_args);
+  ASSERT_NE(reactivate_req, nullptr);
+  auto* prop_set = AsDrmRequest(reactivate_req)->property_set.get();
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestColorspacePropId),
+            kDefaultColorspaceVal);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kTestContentTypePropId),
+            static_cast<uint64_t>(ContentType::kGraphics));
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id, kTestMinBpcPropId),
+            static_cast<uint64_t>(kTestMinBpc8));
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       SeamlessCommitPreservesHdrOutputMetadataProperty) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+  const uint32_t primary_plane_id = pipeline->primary_plane->Get()->GetId();
+
+  AtomicCommitArgs seamless_args{};
+  seamless_args.seamless = true;
+  seamless_args.hdr_metadata = std::make_shared<hdr_output_metadata>();
+  seamless_args.composition = CreateSinglePlanePlan(kTestFbId2);
+
+  auto seamless_req = state_manager->GetAtomicModeReqForArgs(seamless_args);
+  ASSERT_NE(seamless_req, nullptr);
+  auto* prop_set = AsDrmRequest(seamless_req)->property_set.get();
+
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, primary_plane_id,
+                                      kFakePlaneFbPropId),
+            kTestFbId2);
+  EXPECT_TRUE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kTestHdrMetadataPropId)
+          .has_value());
 }
 
 }  // namespace android::drm_hwcomposer
