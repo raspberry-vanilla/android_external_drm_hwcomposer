@@ -52,8 +52,10 @@
 #include "bufferinfo/BufferInfoGetter.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
+#include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmDevice.h"
+#include "drm/DrmDisplayPipeline.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
@@ -378,6 +380,10 @@ void EarlyBootAnimation::Stop() {
       thread_.join();
     }
 
+    // Wait for any in-flight non-blocking pageflip to latch at vblank before
+    // destroying the dumb buffers and DRM framebuffers in FreeBuffers().
+    WaitForLastFrame();
+
     fd_.reset();
     FreeBuffers();
     if (display_ != nullptr &&
@@ -441,25 +447,25 @@ void EarlyBootAnimation::Loop(UniqueFd fd) {
 
     if (frame_count >= header_.num_frames) {
       ALOGD("EarlyBootAnimation: Reached end of frames, stopping animation");
-      SetAnimationState(AnimationState::kCompleted);
       break;
     }
 
+    const bool wait_for_recycle = frame_count >= buffers_.size();
     if (compressed_) {
       if (!ReadCompressedFrame(*fd, frame_count, compressed_buf) ||
           !DecompressAndWriteFrame(compressed_buf, frame_sizes_[frame_count],
-                                   back_idx, bytes_per_pixel, frame_buf)) {
+                                   back_idx, bytes_per_pixel, frame_buf,
+                                   wait_for_recycle)) {
         ALOGE("EarlyBootAnimation: Failed reading compressed frame %u",
               frame_count);
-        SetAnimationState(AnimationState::kCompleted);
         break;
       }
     } else {
       if (!ReadFrame(*fd, frame_size, frame_buf) ||
-          !WriteFrameToDmaBuf(frame_buf, back_idx, bytes_per_pixel)) {
+          !WriteFrameToDmaBuf(frame_buf, back_idx, bytes_per_pixel,
+                              wait_for_recycle)) {
         ALOGE("EarlyBootAnimation: Failed to write raw frame %u to dma buffer",
               frame_count);
-        SetAnimationState(AnimationState::kCompleted);
         break;
       }
     }
@@ -468,7 +474,6 @@ void EarlyBootAnimation::Loop(UniqueFd fd) {
       ALOGE(
           "EarlyBootAnimation: Failed to present frame %u, stopping animation",
           frame_count);
-      SetAnimationState(AnimationState::kCompleted);
       break;
     }
 
@@ -505,6 +510,12 @@ void EarlyBootAnimation::Loop(UniqueFd fd) {
       cv_.wait_until(lock, frame_start + frame_duration_,
                      [this] { return state_ != AnimationState::kRunning; });
     }
+  }
+
+  // Wait for the final non-blocking pageflip to latch at vblank before
+  // signaling kCompleted so WaitForCompletion() callers observe a settled CRTC.
+  if (frame_count > 0) {
+    WaitForLastFrame();
   }
 
   if (state_ == AnimationState::kRunning) {
@@ -636,7 +647,7 @@ bool EarlyBootAnimation::ReadCompressedFrame(
 bool EarlyBootAnimation::DecompressAndWriteFrame(
     const std::vector<uint8_t>& compressed_buf, uint32_t compressed_size,
     int back_idx, uint32_t bytes_per_pixel,
-    std::vector<uint8_t>& out_decompressed_buf) {
+    std::vector<uint8_t>& out_decompressed_buf, bool wait_for_recycle) {
   const int decompressed_bytes = LZ4_decompress_safe(
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
       reinterpret_cast<const char*>(compressed_buf.data()),
@@ -654,7 +665,8 @@ bool EarlyBootAnimation::DecompressAndWriteFrame(
     return false;
   }
 
-  if (!WriteFrameToDmaBuf(out_decompressed_buf, back_idx, bytes_per_pixel)) {
+  if (!WriteFrameToDmaBuf(out_decompressed_buf, back_idx, bytes_per_pixel,
+                          wait_for_recycle)) {
     ALOGE(
         "EarlyBootAnimation: Failed to write decompressed frame to DMA buffer");
     return false;
@@ -668,7 +680,7 @@ bool EarlyBootAnimation::DecompressAndWriteFrame(
     const std::vector<uint8_t>& /*compressed_buf*/,
     uint32_t /*compressed_size*/, int /*back_idx*/,
     uint32_t /*bytes_per_pixel*/,
-    std::vector<uint8_t>& /*out_decompressed_buf*/) {
+    std::vector<uint8_t>& /*out_decompressed_buf*/, bool /*wait_for_recycle*/) {
   ALOGE("EarlyBootAnimation: LZ4 support disabled at build time");
   return false;
 }
@@ -676,7 +688,7 @@ bool EarlyBootAnimation::DecompressAndWriteFrame(
 
 bool EarlyBootAnimation::WriteFrameToDmaBuf(
     const std::vector<uint8_t>& frame_buf, int back_idx,
-    uint32_t bytes_per_pixel) {
+    uint32_t bytes_per_pixel, bool wait_for_recycle) {
   if (back_idx < 0 || static_cast<size_t>(back_idx) >= buffers_.size()) {
     ALOGE("EarlyBootAnimation: Invalid back buffer index %d", back_idx);
     return false;
@@ -718,6 +730,13 @@ bool EarlyBootAnimation::WriteFrameToDmaBuf(
   if (prime_fd < 0) {
     ALOGE("EarlyBootAnimation: Invalid prime_fd");
     return false;
+  }
+
+  // Only wait before CPU writes when recycling a buffer that was previously
+  // scanned out (frames >= buffers_.size()); idle initial buffers can be
+  // populated while the prior frame's non-blocking flip is still in flight.
+  if (wait_for_recycle) {
+    WaitForLastFrame();
   }
 
   struct dma_buf_sync sync_args{};
@@ -797,14 +816,25 @@ bool EarlyBootAnimation::PresentFrame(int back_idx,
                         ->CreateModesetCommit(current_config,
                                               buffers_[back_idx]
                                                   .hwc_layer->GetLayerData());
+  // CreateModesetCommit() populates both display_mode and power_mode = kOn for
+  // initial modesets. Clear both so per-frame animation updates execute as
+  // pure seamless plane pageflips rather than power-mode transitions.
   commit_args.display_mode.reset();
+  commit_args.power_mode.reset();
   commit_args.seamless = true;
-  commit_args.blocking = true;
+  commit_args.blocking = false;
 
   if (!commit_args.composition) {
     ALOGE("EarlyBootAnimation: Failed to create composition plan for frame %u",
           frame_count);
     return false;
+  }
+
+  // Initial secondary buffers skipped waiting before memcpy so CPU preparation
+  // could overlap with scanout; wait here before submitting the next
+  // DRM_MODE_ATOMIC_NONBLOCK commit to avoid -EBUSY on the active CRTC.
+  if (frame_count > 0 && frame_count < buffers_.size()) {
+    WaitForLastFrame();
   }
 
   auto result = display_->ExecuteAtomicCommit(commit_args);
@@ -814,6 +844,13 @@ bool EarlyBootAnimation::PresentFrame(int back_idx,
     return false;
   }
   return true;
+}
+
+void EarlyBootAnimation::WaitForLastFrame() const {
+  if (display_ != nullptr && !display_->IsInHeadlessMode() &&
+      display_->GetPipe().atomic_state_manager != nullptr) {
+    display_->GetPipe().atomic_state_manager->WaitLastFrame();
+  }
 }
 
 bool EarlyBootAnimation::AllocateBuffers(

@@ -17,6 +17,7 @@
 #include "DrmHwc.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
@@ -473,7 +474,8 @@ DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() 
 
 bool DrmHwc::InitEarlyBootAnimation(HwcDisplay *display) {
   if (!Properties::EarlyBootAnimationEnabled() ||
-      Properties::EarlyBootAnimationCompleted()) {
+      Properties::EarlyBootAnimationCompleted() ||
+      IsEarlyBootAnimationActive()) {
     return false;
   }
   if (display == nullptr || display->GetHandle() != kPrimaryDisplay ||
@@ -481,9 +483,8 @@ bool DrmHwc::InitEarlyBootAnimation(HwcDisplay *display) {
       display->GetPipe().connector->Get()->IsExternal()) {
     return false;
   }
-  if (!boot_animation_) {
-    boot_animation_ = EarlyBootAnimation::CreateInstance(display);
-  }
+  boot_animation_ = EarlyBootAnimation::CreateInstance(display);
+  boot_animation_display_ = boot_animation_ ? display : nullptr;
   if (!boot_animation_) {
     ALOGW(
         "EarlyBootAnimation: Failed to initialize boot animation on primary "
@@ -494,13 +495,22 @@ bool DrmHwc::InitEarlyBootAnimation(HwcDisplay *display) {
   return true;
 }
 
+void DrmHwc::AbortEarlyBootAnimation() {
+  boot_animation_display_ = nullptr;
+  if (boot_animation_) {
+    boot_animation_->Stop();
+    boot_animation_.reset();
+  }
+}
+
 void DrmHwc::StartEarlyBootAnimation() {
   if (!Properties::EarlyBootAnimationEnabled() ||
-      Properties::EarlyBootAnimationCompleted()) {
+      Properties::EarlyBootAnimationCompleted() ||
+      IsEarlyBootAnimationActive()) {
     return;
   }
-  if (!boot_animation_) {
-    auto *primary_display = GetDisplay(kPrimaryDisplay);
+  auto *primary_display = GetDisplay(kPrimaryDisplay);
+  if (!boot_animation_ || boot_animation_display_ != primary_display) {
     if (!InitEarlyBootAnimation(primary_display)) {
       ALOGW(
           "EarlyBootAnimation: Failed to initialize boot animation on primary "
@@ -509,22 +519,37 @@ void DrmHwc::StartEarlyBootAnimation() {
       return;
     }
   }
+  // Clear boot_animation_display_ once Start() is invoked so a subsequent
+  // InitEarlyBootAnimation() after StopEarlyBootAnimation() creates a fresh
+  // instance rather than reusing a stopped one. Track active playback via an
+  // atomic flag rather than reading boot_animation_ from UEventListener without
+  // GetMainLock().
+  boot_animation_display_ = nullptr;
+  early_boot_animation_active_.store(true, std::memory_order_release);
   if (!boot_animation_->Start()) {
-    boot_animation_.reset();
+    StopEarlyBootAnimation();
   }
 }
 
 void DrmHwc::WaitForCompletionAndStopEarlyBootAnimation() {
   if (boot_animation_) {
     boot_animation_->WaitForCompletion();
-    boot_animation_->Stop();
   }
+  StopEarlyBootAnimation();
 }
 
 void DrmHwc::StopEarlyBootAnimation() {
+  boot_animation_display_ = nullptr;
   if (boot_animation_) {
     boot_animation_->Stop();
   }
+  if (early_boot_animation_active_.exchange(false, std::memory_order_acq_rel)) {
+    resource_manager_.FlushDeferredHotplug();
+  }
+}
+
+bool DrmHwc::IsEarlyBootAnimationActive() const {
+  return early_boot_animation_active_.load(std::memory_order_acquire);
 }
 
 }  // namespace android::drm_hwcomposer

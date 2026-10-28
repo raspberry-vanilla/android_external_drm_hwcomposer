@@ -243,6 +243,8 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
   }
   if (!active && args.teardown) {
     // Full teardown unbinds the connector from the CRTC and clears its mode.
+    // Reset tracked connector properties so the next activation re-stages them.
+    request.new_frame_state.ResetConnectorProperties();
     // Skip setting CRTC_ID on a dynamic MST connector that has already been
     // unregistered from the kernel so the atomic commit does not fail with
     // -ENOENT and abort CRTC/plane teardown.
@@ -476,29 +478,47 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
 }
 
 bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
+                                                  bool full_modeset,
                                                   DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() || !args.colorspace ||
-      !connector->GetColorspaceProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || args.teardown ||
+      !args.colorspace || !connector->GetColorspaceProperty()) {
     return true;
   }
 
   DrmColorspace drm_colorspace = ColorUtil::ToDrmColorspace(*args.colorspace);
-  return connector->GetColorspaceProperty()
-      .AtomicSet(*request.property_set,
-                 connector->GetColorspacePropertyValue(drm_colorspace));
+  const uint64_t prop_val = connector->GetColorspacePropertyValue(
+      drm_colorspace);
+  if (!full_modeset && request.new_frame_state.colorspace == prop_val) {
+    return true;
+  }
+  if (!connector->GetColorspaceProperty().AtomicSet(*request.property_set,
+                                                    prop_val)) {
+    return false;
+  }
+  request.new_frame_state.colorspace = prop_val;
+  return true;
 }
 
 bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
+                                                   bool full_modeset,
                                                    DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() || !args.content_type ||
-      !connector->GetContentTypeProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || args.teardown ||
+      !args.content_type || !connector->GetContentTypeProperty()) {
     return true;
   }
-  return connector->GetContentTypeProperty().AtomicSet(*request.property_set,
-                                                       static_cast<uint64_t>(
-                                                           *args.content_type));
+
+  const auto prop_val = static_cast<uint64_t>(*args.content_type);
+  if (!full_modeset && request.new_frame_state.content_type == prop_val) {
+    return true;
+  }
+  if (!connector->GetContentTypeProperty().AtomicSet(*request.property_set,
+                                                     prop_val)) {
+    return false;
+  }
+  request.new_frame_state.content_type = prop_val;
+  return true;
 }
 
 bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
@@ -551,10 +571,11 @@ bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
 }
 
 bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
+                                              bool full_modeset,
                                               DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() || !args.min_bpc ||
-      !connector->GetMinBpcProperty()) {
+  if (connector == nullptr || connector->IsDeleted() || args.teardown ||
+      !args.min_bpc || !connector->GetMinBpcProperty()) {
     return true;
   }
 
@@ -575,8 +596,16 @@ bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
   int32_t min_bpc_val = std::max(args.min_bpc.value(),
                                  static_cast<int32_t>(range_min));
   min_bpc_val = std::min(min_bpc_val, static_cast<int32_t>(range_max));
-  return connector->GetMinBpcProperty().AtomicSet(*request.property_set,
-                                                  min_bpc_val);
+  const auto prop_val = static_cast<uint64_t>(min_bpc_val);
+  if (!full_modeset && request.new_frame_state.min_bpc == prop_val) {
+    return true;
+  }
+  if (!connector->GetMinBpcProperty().AtomicSet(*request.property_set,
+                                                prop_val)) {
+    return false;
+  }
+  request.new_frame_state.min_bpc = prop_val;
+  return true;
 }
 
 bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
@@ -795,12 +824,18 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  if (!SetColorSpaceIfNeeded(args, *atomic_request)) {
+  // Adding any connector property to the atomic request allocates a new
+  // drm_connector_state in the kernel and forces
+  // drm_atomic_helper_check_modeset() to acquire the device-wide
+  // mode_config.connection_mutex, serializing pageflips behind concurrent
+  // hotplug EDID probes. Each helper skips AtomicSet unless full_modeset is
+  // true or the requested value differs from committed_frame_state_.
+  if (!SetColorSpaceIfNeeded(args, full_modeset, *atomic_request)) {
     ALOGE("Failed to set color space");
     return nullptr;
   }
 
-  if (!SetContentTypeIfNeeded(args, *atomic_request)) {
+  if (!SetContentTypeIfNeeded(args, full_modeset, *atomic_request)) {
     ALOGE("Failed to set content type");
     return nullptr;
   }
@@ -815,10 +850,11 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
     return nullptr;
   }
 
-  if (!SetMinBpcIfNeeded(args, *atomic_request)) {
+  if (!SetMinBpcIfNeeded(args, full_modeset, *atomic_request)) {
     ALOGE("Failed to set min BPC");
     return nullptr;
   }
+
   if (!SetCompositionIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set composition");
     return nullptr;

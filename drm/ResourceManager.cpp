@@ -151,7 +151,10 @@ ResourceManager::ResourceManager(
     : frontend_interface_(p2f_bind_interface) {
 }
 
-ResourceManager::~ResourceManager() = default;
+ResourceManager::~ResourceManager() {
+  CancelDelayedEdidRecovery();
+  CancelDeferredHotplugSettle();
+}
 
 void ResourceManager::ReloadProperties() {
   scale_with_gpu_ = Properties::ScaleWithGpu();
@@ -298,8 +301,17 @@ void ResourceManager::Init() {
       for (auto &drm : drms_) {
         auto stale_connectors = drm->RefreshConnectors();
         DetachStalePipelines(stale_connectors);
+        // Connectors created in DrmDevice::Init() or RefreshConnectors()
+        // already populated modes_ from their initial drmModeGetConnector()
+        // call in DrmConnector::Init(); only re-probe connectors whose mode
+        // list is still empty.
+        for (const auto &conn : drm->GetConnectors()) {
+          if (conn->GetModes().empty()) {
+            conn->UpdateModesAndProperties();
+          }
+        }
       }
-      UpdateFrontendDisplays();
+      UpdateFrontendDisplays(/*update_modes=*/false);
       MaybeScheduleDelayedEdidRecovery();
     }
     frontend_interface_->FlushHotplugEvents();
@@ -319,8 +331,13 @@ void ResourceManager::DeInit() {
   }
 
   CancelDelayedEdidRecovery();
+  CancelDeferredHotplugSettle();
 
   uevent_listener_.reset();
+  {
+    std::scoped_lock hotplug_lock(hotplug_mutex_);
+    deferred_bootanim_hotplug_.reset();
+  }
 
   DetachAllFrontendDisplays();
   drms_.clear();
@@ -378,6 +395,34 @@ bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
   bool needs_settle_reprobe = false;
   {
     std::scoped_lock hotplug_lock(hotplug_mutex_);
+    // Coalesce hotplug uevents while EarlyBootAnimation is running so external
+    // or MST connector discovery and initial modesets do not contend with
+    // primary panel animation pageflips; the accumulated connector set is
+    // replayed once the animation stops.
+    UEventHotplugEvent effective_event = event;
+    if (frontend_interface_->IsEarlyBootAnimationActive()) {
+      if (!deferred_bootanim_hotplug_.has_value()) {
+        deferred_bootanim_hotplug_ = DeferredHotplugEvent{
+            .connector_ids = event.connector_ids,
+            .refresh_all = event.refresh_all,
+        };
+      } else {
+        deferred_bootanim_hotplug_->refresh_all = deferred_bootanim_hotplug_
+                                                      ->refresh_all ||
+                                                  event.refresh_all;
+        deferred_bootanim_hotplug_->connector_ids
+            .insert(event.connector_ids.begin(), event.connector_ids.end());
+      }
+      return false;
+    }
+    if (deferred_bootanim_hotplug_.has_value()) {
+      effective_event.refresh_all = effective_event.refresh_all ||
+                                    deferred_bootanim_hotplug_->refresh_all;
+      effective_event.connector_ids
+          .insert(deferred_bootanim_hotplug_->connector_ids.begin(),
+                  deferred_bootanim_hotplug_->connector_ids.end());
+      deferred_bootanim_hotplug_.reset();
+    }
 
     // Phase 1: Snapshot known connector IDs and select target connectors under
     // GetMainLock() without performing any blocking DRM ioctls.
@@ -395,9 +440,10 @@ bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
                                     (conn->IsConnected() &&
                                      attached_pipelines_.count(conn.get()) ==
                                          0);
-          const bool should_probe = event.refresh_all || is_unsettled ||
-                                    event.connector_ids.count(conn->GetId()) !=
-                                        0;
+          const bool should_probe = effective_event.refresh_all ||
+                                    is_unsettled ||
+                                    effective_event.connector_ids.count(
+                                        conn->GetId()) != 0;
           if (should_probe) {
             plan.connectors_to_probe.push_back(ConnectorProbeTarget{
                 .conn = conn.get(),
@@ -482,6 +528,39 @@ bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
   }
   frontend_interface_->FlushHotplugEvents();
   return needs_settle_reprobe;
+}
+
+void ResourceManager::FlushDeferredHotplug() {
+  std::optional<DeferredHotplugEvent> deferred;
+  {
+    // Extract the coalesced event and release hotplug_mutex_ before calling
+    // HandleUEventHotplug(), which acquires hotplug_mutex_ internally.
+    std::scoped_lock hotplug_lock(hotplug_mutex_);
+    if (frontend_interface_->IsEarlyBootAnimationActive()) {
+      return;
+    }
+    if (deferred_bootanim_hotplug_.has_value()) {
+      deferred = std::move(deferred_bootanim_hotplug_);
+      deferred_bootanim_hotplug_.reset();
+    }
+  }
+  if (deferred.has_value()) {
+    UEventHotplugEvent event{};
+    event.connector_ids = std::move(deferred->connector_ids);
+    event.refresh_all = deferred->refresh_all;
+    // HandleUEventHotplug() suppressed UEventListener's 200ms settle window
+    // when deferring during EarlyBootAnimation; schedule a settle follow-up if
+    // the replayed probe still observes unsettled connectors.
+    if (HandleUEventHotplug(event)) {
+      ScheduleDeferredHotplugSettle(event);
+    }
+  }
+  {
+    std::scoped_lock recovery_lock(edid_recovery_mutex_);
+    if (edid_recovery_pending_) {
+      edid_recovery_cv_.notify_all();
+    }
+  }
 }
 
 bool ResourceManager::UpdateFrontendDisplays(
@@ -743,13 +822,23 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
 
   edid_recovery_pending_ = true;
   edid_recovery_thread_ = std::thread([this, delay_ms] {
-    // Wait for the scaler to complete its internal boot sequence.
-    // Use a condition variable so DeInit() can cancel this wait.
+    // Wait for the scaler to complete its internal boot sequence, and if
+    // EarlyBootAnimation is still running once the timer expires, defer the
+    // DP link teardown and reprobe until FlushDeferredHotplug() signals that
+    // the animation has stopped.
     {
       std::unique_lock lock(edid_recovery_mutex_);
       if (edid_recovery_cv_.wait_for(lock,
                                      std::chrono::milliseconds(delay_ms),
                                      [this] { return !edid_recovery_pending_; })) {
+        ALOGI("Delayed-EDID recovery cancelled");
+        return;
+      }
+      edid_recovery_cv_.wait(lock, [this] {
+        return !edid_recovery_pending_ ||
+               !frontend_interface_->IsEarlyBootAnimationActive();
+      });
+      if (!edid_recovery_pending_) {
         ALOGI("Delayed-EDID recovery cancelled");
         return;
       }
@@ -821,6 +910,57 @@ void ResourceManager::CancelDelayedEdidRecovery() {
   }
   if (edid_recovery_thread_.joinable()) {
     edid_recovery_thread_.join();
+  }
+}
+
+void ResourceManager::ScheduleDeferredHotplugSettle(
+    const UEventHotplugEvent &event) {
+  static constexpr int kDeferredSettleDelayMs = 200;
+  std::scoped_lock lifecycle_lock(deferred_settle_lifecycle_mutex_);
+  {
+    std::lock_guard lock(deferred_settle_mutex_);
+    deferred_settle_cancelled_ = true;
+  }
+  deferred_settle_cv_.notify_all();
+  if (deferred_settle_thread_.joinable()) {
+    deferred_settle_thread_.join();
+  }
+  {
+    std::lock_guard lock(deferred_settle_mutex_);
+    deferred_settle_cancelled_ = false;
+    deferred_settle_pending_ = true;
+  }
+  deferred_settle_thread_ = std::thread([this, event] {
+    {
+      std::unique_lock lock(deferred_settle_mutex_);
+      if (deferred_settle_cv_
+              .wait_for(lock, std::chrono::milliseconds(kDeferredSettleDelayMs),
+                        [this] { return deferred_settle_cancelled_; })) {
+        deferred_settle_pending_ = false;
+        return;
+      }
+    }
+    HandleUEventHotplug(event);
+    {
+      std::lock_guard lock(deferred_settle_mutex_);
+      deferred_settle_pending_ = false;
+    }
+  });
+}
+
+void ResourceManager::CancelDeferredHotplugSettle() {
+  std::scoped_lock lifecycle_lock(deferred_settle_lifecycle_mutex_);
+  {
+    std::lock_guard lock(deferred_settle_mutex_);
+    deferred_settle_cancelled_ = true;
+  }
+  deferred_settle_cv_.notify_all();
+  if (deferred_settle_thread_.joinable()) {
+    deferred_settle_thread_.join();
+  }
+  {
+    std::lock_guard lock(deferred_settle_mutex_);
+    deferred_settle_pending_ = false;
   }
 }
 

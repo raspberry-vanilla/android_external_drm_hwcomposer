@@ -227,6 +227,25 @@ auto DrmConnector::Init() -> bool {
 
   GetOptionalConnectorProperty("link-status", &link_status_property_);
 
+  // DrmConnector::CreateInstance() already fetched connector_ via
+  // drmModeGetConnector(). Seed modes_ from that initial mode list so
+  // ResourceManager::Init() does not have to issue a redundant
+  // drmModeGetConnector() EDID probe for every connected display at startup.
+  modes_.clear();
+  for (int i = 0; i < connector_->count_modes; ++i) {
+    drmModeModeInfo raw_mode = *std::next(connector_->modes, i);
+    bool exists = false;
+    for (const DrmMode &mode : modes_) {
+      if (mode == raw_mode) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      modes_.emplace_back(&raw_mode);
+    }
+  }
+
   return !IsDeleted();
 }
 

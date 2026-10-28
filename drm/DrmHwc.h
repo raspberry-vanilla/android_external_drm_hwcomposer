@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -104,6 +105,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   void FinalizeDisplayBinding() override;
   void FlushHotplugEvents() override;
+  [[nodiscard]] bool IsEarlyBootAnimationActive() const override;
 
   // Notify Display Link Status
   void NotifyDisplayLinkStatus(
@@ -120,7 +122,11 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   void LogRefreshRateChanges();
 
   bool InitEarlyBootAnimation(HwcDisplay *display);
+  void AbortEarlyBootAnimation();
   void StartEarlyBootAnimation();
+  // Stops active EarlyBootAnimation playback and flushes any hotplug events
+  // deferred during playback. Must not be called while holding GetMainLock() or
+  // hotplug_mutex_.
   void WaitForCompletionAndStopEarlyBootAnimation();
   void StopEarlyBootAnimation();
 
@@ -156,6 +162,8 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
 
   bool hdcp_on_hotplug_enabled_{};
   std::unique_ptr<EarlyBootAnimation> boot_animation_;
+  HwcDisplay *boot_animation_display_ = nullptr;
+  std::atomic<bool> early_boot_animation_active_{false};
 };
 
 }  // namespace android::drm_hwcomposer
