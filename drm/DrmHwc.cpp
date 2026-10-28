@@ -451,9 +451,12 @@ uint32_t DrmHwc::GetMaxVirtualDisplayCount() {
 }
 
 void DrmHwc::DeinitDisplays() {
-  for (auto &pair : Displays()) {
-    pair.second->SetPipeline(nullptr);
-  }
+  boot_animation_display_ = nullptr;
+  displays_.clear();
+  display_handles_.clear();
+  displays_for_removal_list_.clear();
+  last_display_handle_ = kPrimaryDisplay;
+  hotplug_event_queue_.RetrieveAndFlush();
 }
 
 void DrmHwc::LogRefreshRateChanges() {

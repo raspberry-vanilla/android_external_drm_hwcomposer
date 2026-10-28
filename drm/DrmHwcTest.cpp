@@ -267,6 +267,28 @@ struct DrmHwcTest : public ::testing::Test {
     return nullptr;
   }
 
+  void AddFakeWritebackPipelineResources() const {
+    constexpr uint32_t kWbEncoderId = 50;
+    constexpr uint32_t kWbCrtcId = 51;
+    constexpr uint32_t kWbConnId = 150;
+    constexpr uint32_t kWbPlaneId = 350;
+    auto wb_encoder = std::make_unique<FakeDrmEncoder>(kWbEncoderId, kWbCrtcId);
+    wb_encoder->InitRawEncoder(kFakeAllCrtcsMask);
+    fake_device->AddEncoder(std::move(wb_encoder));
+    fake_device->AddCrtc(std::make_unique<FakeDrmCrtc>(kWbCrtcId));
+    auto wb_conn = std::make_unique<FakeDrmConnector>(fake_device.get(),
+                                                      kWbEncoderId,
+                                                      /*is_external=*/true,
+                                                      kFakeConnectorMmWidth,
+                                                      kFakeConnectorMmHeight,
+                                                      kWbConnId);
+    wb_conn->InitRawConnector(DRM_MODE_CONNECTOR_WRITEBACK);
+    fake_device->AddWritebackConnector(std::move(wb_conn));
+    fake_device->AddPlane(
+        std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_PRIMARY,
+                                       /*is_valid=*/true, kWbPlaneId));
+  }
+
   std::unique_ptr<FakeDrmDevice> fake_device;
   RecordingDrmHwc hwc;
 };
@@ -3395,4 +3417,124 @@ TEST_F(DrmHwcTest,
   EXPECT_EQ(int_conn->GetCrtcIdProperty().GetValue(),
             uint64_t{fake_crtc->GetId()});
 }
+
+TEST_F(DrmHwcTest, DeinitDisplaysClearsDisplayMapOnTeardown) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_NE(external_pipe, nullptr);
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  ASSERT_EQ(hwc.Displays().size(), 2U);
+
+  hwc.DeinitDisplays();
+  EXPECT_TRUE(hwc.Displays().empty());
+  hwc.FlushHotplugEvents();
+  EXPECT_TRUE(hwc.hotplug_events.empty());
+}
+
+TEST_F(DrmHwcTest, ResourceManagerReinitRebindsAllConnectedDisplays) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(int_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  fake_device->SetResourceConnectorIds({int_conn->GetId(), ext_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  EXPECT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+
+  DeInitResManForTest();
+  EXPECT_TRUE(hwc.Displays().empty());
+
+  auto reinit_dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan());
+  reinit_dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto* reinit_int = reinit_dev->AddPipelineResources(/*is_external=*/false);
+  auto* reinit_ext = reinit_dev->AddPipelineResources(/*is_external=*/true);
+  reinit_dev->SetResourceConnectorIds(
+      {reinit_int->GetId(), reinit_ext->GetId()});
+  AddDeviceToResMan(std::move(reinit_dev));
+  InitResManForTest();
+
+  EXPECT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_NE(hwc.GetDisplay(1), nullptr);
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, DeInitTearsDownVirtualDisplayBeforeDestroyingDrmDevice) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  AddFakeWritebackPipelineResources();
+  fake_device->SetResourceConnectorIds({int_conn->GetId()});
+
+  size_t teardown_commits = 0;
+  fake_device->GetFakeAtomicCommitSink()->SetExecuteCommitHook(
+      [&teardown_commits](
+          const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              args) {
+        std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>> results;
+        for (const auto& [manager, commit_args] : args) {
+          if (commit_args.teardown) {
+            ++teardown_commits;
+          }
+          results.emplace_back(manager, AtomicCommitResult{});
+        }
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            results);
+      });
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  auto virt_handle = hwc.CreateVirtualDisplay(kFakeDefaultModeWidth,
+                                              kFakeDefaultModeHeight);
+  ASSERT_TRUE(virt_handle.has_value());
+  EXPECT_NE(hwc.GetDisplay(virt_handle.value_or(0)), nullptr);
+
+  DeInitResManForTest();
+  EXPECT_TRUE(hwc.Displays().empty());
+  EXPECT_EQ(teardown_commits, 2U);
+}
+
+TEST_F(DrmHwcTest, BackendHotplugDispatchedDuringInitBindsDisplay) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  class InlineInitHotplugBackend : public BackendHotplugTestBackend {
+   public:
+    InlineInitHotplugBackend(DrmDevice& drm, uint32_t conn_id)
+        : BackendHotplugTestBackend(drm), conn_id_(conn_id) {
+    }
+    void SetHotplugHandler(HotplugHandler handler) override {
+      BackendHotplugTestBackend::SetHotplugHandler(std::move(handler));
+      if (conn_id_ != 0) {
+        const uint32_t id = conn_id_;
+        conn_id_ = 0;
+        TriggerHotplug(id, /*connected=*/true);
+      }
+    }
+
+   private:
+    uint32_t conn_id_;
+  };
+
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  fake_device->SetResourceConnectorIds({int_conn->GetId()});
+  fake_device->SetBackend(
+      std::make_unique<InlineInitHotplugBackend>(*fake_device,
+                                                 int_conn->GetId()));
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  ASSERT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
+  EXPECT_FALSE(hwc.GetDisplay(kPrimaryDisplay)->IsInHeadlessMode());
+  DeInitResManForTest();
+}
+
 }  // namespace android::drm_hwcomposer

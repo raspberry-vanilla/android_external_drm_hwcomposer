@@ -289,6 +289,9 @@ void ResourceManager::Init() {
                                              bool connected) {
         {
           std::scoped_lock lock(hotplug_mutex_, GetMainLock());
+          if (deinitializing_ || drms_.empty()) {
+            return;
+          }
           auto stale_connectors = drm_ptr->RefreshConnectors();
           DetachStalePipelines(stale_connectors);
           DrmConnector *conn = nullptr;
@@ -351,15 +354,19 @@ void ResourceManager::Init() {
 }
 
 void ResourceManager::DeInit() {
-  if (!initialized_) {
-    ALOGE("Not initialized");
-    return;
+  {
+    std::scoped_lock lock(hotplug_mutex_, GetMainLock());
+    if (!initialized_) {
+      ALOGE("Not initialized");
+      return;
+    }
+    initialized_ = false;
+    deinitializing_ = true;
   }
 
   for (auto &drm : drms_) {
     drm->GetBackend().SetHotplugHandler(nullptr);
   }
-
   CancelDelayedEdidRecovery();
   CancelDeferredHotplugSettle();
 
@@ -369,10 +376,11 @@ void ResourceManager::DeInit() {
     deferred_bootanim_hotplug_.reset();
   }
 
+  std::scoped_lock teardown_lock(hotplug_mutex_, GetMainLock());
   DetachAllFrontendDisplays();
   drms_.clear();
-
-  initialized_ = false;
+  displays_.clear();
+  deinitializing_ = false;
 }
 
 const std::set<std::string>& ResourceManager::GetInternalDisplayNames() {
@@ -459,6 +467,9 @@ bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
     std::vector<DeviceProbePlan> plans;
     {
       std::scoped_lock main_lock(GetMainLock());
+      if (deinitializing_ || drms_.empty()) {
+        return false;
+      }
       plans.reserve(drms_.size());
       for (auto &drm : drms_) {
         DeviceProbePlan plan{};
@@ -512,6 +523,9 @@ bool ResourceManager::HandleUEventHotplug(const UEventHotplugEvent &event) {
     // pipelines, and bind newly connected pipelines under GetMainLock().
     {
       std::scoped_lock main_lock(GetMainLock());
+      if (deinitializing_ || drms_.empty()) {
+        return false;
+      }
       std::set<DrmConnector *> probed_connector_set;
       std::set<DrmConnector *> cp_updated_set;
       for (auto &res : results) {
@@ -566,7 +580,8 @@ void ResourceManager::FlushDeferredHotplug() {
     // Extract the coalesced event and release hotplug_mutex_ before calling
     // HandleUEventHotplug(), which acquires hotplug_mutex_ internally.
     std::scoped_lock hotplug_lock(hotplug_mutex_);
-    if (frontend_interface_->IsEarlyBootAnimationActive()) {
+    if (deinitializing_ || drms_.empty() ||
+        frontend_interface_->IsEarlyBootAnimationActive()) {
       return;
     }
     if (deferred_bootanim_hotplug_.has_value()) {
@@ -816,12 +831,9 @@ void ResourceManager::DetachStalePipelines(
 }
 
 void ResourceManager::DetachAllFrontendDisplays() {
-  for (auto &p : attached_pipelines_) {
-    frontend_interface_->UnbindDisplay(p.second);
-  }
   attached_pipelines_.clear();
   attached_tile_groups_.clear();
-  frontend_interface_->FinalizeDisplayBinding();
+  frontend_interface_->DeinitDisplays();
 }
 
 auto ResourceManager::GetOrderedConnectors() -> std::vector<DrmConnector *> {
@@ -945,6 +957,9 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
     }
 
     std::unique_lock lock(GetMainLock());
+    if (deinitializing_ || drms_.empty()) {
+      return;
+    }
 
     // Unbind all external DP connectors that match delayed-EDID quirk.
     // This disables the CRTC -> tears down the DP link from the source side,
@@ -978,6 +993,9 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
 
     {
       std::scoped_lock reprobe_lock(hotplug_mutex_, GetMainLock());
+      if (deinitializing_ || drms_.empty()) {
+        return;
+      }
 
       // Re-probe: kernel re-reads DPCD/EDID since link was torn down.
       // If scaler now serves real 4K EDID, display re-attaches at full res.

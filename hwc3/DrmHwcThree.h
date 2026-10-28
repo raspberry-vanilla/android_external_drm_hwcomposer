@@ -53,6 +53,7 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   void SetCallback(std::shared_ptr<IComposerCallback> callback);
 
   // DrmHwcInterface
+  void DeinitDisplays() override;
   [[nodiscard]] bool HasCallback() const override {
     return composer_callback_ != nullptr;
   }

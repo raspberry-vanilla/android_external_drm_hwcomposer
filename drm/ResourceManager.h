@@ -49,6 +49,9 @@ class PipelineToFrontendBindingInterface {
       std::shared_ptr<DrmDisplayPipeline> old_pipeline,
       std::shared_ptr<DrmDisplayPipeline> new_pipeline) = 0;
   virtual void FinalizeDisplayBinding() = 0;
+  // Destroys all frontend display objects and detaches their DRM pipelines
+  // before the underlying DrmDevice instances are cleared during teardown.
+  virtual void DeinitDisplays() = 0;
   virtual void NotifyDisplayLinkStatus(
       std::shared_ptr<DrmDisplayPipeline> pipeline) = 0;
   virtual void NotifyIncompatibleCable() = 0;
@@ -199,6 +202,7 @@ class ResourceManager {
   bool deferred_settle_pending_{};
 
   bool initialized_{};
+  bool deinitializing_{};
 };
 
 }  // namespace android::drm_hwcomposer

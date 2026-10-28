@@ -99,8 +99,6 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
     hotplug_event_queue_.Add(display_handle, display_status);
   }
 
-  void DeinitDisplays();
-
   // PipelineToFrontendBindingInterface
   bool BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
   bool UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
@@ -108,6 +106,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
       std::shared_ptr<DrmDisplayPipeline> old_pipeline,
       std::shared_ptr<DrmDisplayPipeline> new_pipeline) override;
   void FinalizeDisplayBinding() override;
+  void DeinitDisplays() override;
   void FlushHotplugEvents() override;
   [[nodiscard]] bool IsEarlyBootAnimationActive() const override;
 
@@ -175,7 +174,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
 
   bool hdcp_on_hotplug_enabled_{};
   std::unique_ptr<EarlyBootAnimation> boot_animation_;
-  HwcDisplay *boot_animation_display_ = nullptr;
+  std::atomic<HwcDisplay *> boot_animation_display_{nullptr};
   std::atomic<bool> early_boot_animation_active_{false};
 };
 

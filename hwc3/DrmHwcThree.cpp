@@ -45,9 +45,18 @@ auto DrmHwcThree::GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
 }
 
 DrmHwcThree::~DrmHwcThree() {
-  DeinitDisplays();
   /* Display deinit routine is handled by resource manager */
-  GetResMan().DeInit();
+  if (GetResMan().IsInitialized()) {
+    GetResMan().DeInit();
+  }
+  DrmHwcThree::DeinitDisplays();
+}
+
+void DrmHwcThree::DeinitDisplays() {
+  DrmHwc::DeinitDisplays();
+  const std::scoped_lock lock(display_state_lock_);
+  must_validate_.clear();
+  connected_displays_.clear();
 }
 
 void DrmHwcThree::SetCallback(std::shared_ptr<IComposerCallback> callback) {
