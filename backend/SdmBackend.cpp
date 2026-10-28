@@ -107,6 +107,8 @@ void SdmBackend::SetRefreshCallbackForConnector(uint32_t connector_id,
 void SdmBackend::SetHotplugHandler(HotplugHandler handler) {
   bool enable = (handler != nullptr);
   if (!enable && life_cycle_intf) {
+    // Unregister the SDM compositor callback before clearing hotplug_handler
+    // so SDM cannot enqueue stale events into pending_events_ during teardown.
     life_cycle_intf->RegisterCompositorCallback(callback_interface.get(),
                                                 false);
   }

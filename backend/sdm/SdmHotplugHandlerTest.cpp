@@ -16,9 +16,14 @@
 
 #include "backend/sdm/SdmHotplugHandler.h"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 
 #include <gmock/gmock.h>
@@ -221,6 +226,75 @@ TEST_F(SdmHotplugHandlerTest,
   ASSERT_TRUE(BindPrimaryPlane(&pipe));
   ASSERT_NE(pipe.primary_plane, nullptr);
   EXPECT_EQ(pipe.primary_plane->Get(), idle_plane_ptr);
+}
+
+TEST_F(SdmHotplugHandlerTest, SetNullHandlerCancelsPendingDelayedDispatch) {
+  constexpr auto kLongDelay = std::chrono::seconds(5);
+  constexpr auto kWaitTimeout = std::chrono::seconds(1);
+  SdmHotplugHandler hotplug_handler(kLongDelay);
+  std::atomic<int> callback_count{0};
+  hotplug_handler.SetHotplugHandler(
+      [&](uint32_t /*connector_id*/, bool /*connected*/) {
+        callback_count.fetch_add(1);
+      });
+
+  std::thread dispatch_thread([&]() {
+    hotplug_handler.HandleHotplugEvent(kTestConnectorId, /*connected=*/true);
+  });
+
+  ASSERT_TRUE(hotplug_handler.WaitForDispatchStartedForTesting(kWaitTimeout));
+  hotplug_handler.SetHotplugHandler(nullptr);
+  dispatch_thread.join();
+
+  EXPECT_EQ(callback_count.load(), 0);
+}
+
+TEST_F(SdmHotplugHandlerTest, SetNullHandlerWaitsForInFlightCallbackToFinish) {
+  SdmHotplugHandler hotplug_handler(std::chrono::milliseconds(0));
+  std::mutex cb_mutex;
+  std::condition_variable cb_cv;
+  bool callback_entered = false;
+  bool allow_callback_exit = false;
+  std::atomic<bool> callback_finished{false};
+
+  hotplug_handler.SetHotplugHandler(
+      [&](uint32_t /*connector_id*/, bool /*connected*/) {
+        std::unique_lock lock(cb_mutex);
+        callback_entered = true;
+        cb_cv.notify_all();
+        cb_cv.wait(lock, [&]() { return allow_callback_exit; });
+        callback_finished.store(true);
+      });
+
+  std::thread dispatch_thread([&]() {
+    hotplug_handler.HandleHotplugEvent(kTestConnectorId, /*connected=*/true);
+  });
+
+  {
+    std::unique_lock lock(cb_mutex);
+    cb_cv.wait(lock, [&]() { return callback_entered; });
+  }
+
+  std::atomic<bool> clear_returned{false};
+  std::thread clear_thread([&]() {
+    hotplug_handler.SetHotplugHandler(nullptr);
+    clear_returned.store(true);
+  });
+
+  constexpr int kShortSleepMs = 20;
+  std::this_thread::sleep_for(std::chrono::milliseconds(kShortSleepMs));
+  EXPECT_FALSE(clear_returned.load());
+
+  {
+    std::scoped_lock lock(cb_mutex);
+    allow_callback_exit = true;
+  }
+  cb_cv.notify_all();
+
+  clear_thread.join();
+  dispatch_thread.join();
+  EXPECT_TRUE(callback_finished.load());
+  EXPECT_TRUE(clear_returned.load());
 }
 
 }  // namespace android::drm_hwcomposer

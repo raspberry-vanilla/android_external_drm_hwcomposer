@@ -52,7 +52,9 @@ class Backend {
   }
 
   // Set the hotplug event handler for the backend. Note that a backend might
-  // call the passed function before SetHotplugHandler returns.
+  // call the passed function before SetHotplugHandler returns. When clearing
+  // the handler (handler == nullptr), implementations must wait for any
+  // in-flight callback invocation to complete before returning.
   virtual void SetHotplugHandler(HotplugHandler /*handler*/) {
   }
   // NOLINTEND(performance-unnecessary-value-param)
