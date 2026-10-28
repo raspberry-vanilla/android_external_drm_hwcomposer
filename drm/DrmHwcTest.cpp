@@ -3323,4 +3323,76 @@ TEST_F(DrmHwcTest,
   EXPECT_EQ(primary->GetLastRequestedConfig()->id, config_120);
 }
 
+TEST_F(DrmHwcTest, ResetConnectorsAndCrtcsClearsCrtcColorProperties) {
+  const ScopedTestProperty
+      skip_prop("vendor.hwc.drm.skip_internal_display_reset", "false");
+  ASSERT_NE(fake_device->AddPipelineResources(/*is_external=*/false), nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_crtc = static_cast<FakeDrmCrtc*>(
+      fake_device->GetCrtcs().front().get());
+  ASSERT_NE(fake_crtc, nullptr);
+  constexpr uint64_t kLutSize = 256;
+  fake_crtc->SetGammaLutProperties(kLutSize, kFakeBlobBaseId);
+  fake_crtc->SetDegammaLutProperty(kFakeBlobBaseId);
+  fake_crtc->SetCtmProperty(kFakeBlobBaseId);
+
+  fake_device->ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(fake_device->GetLastResetReqPropertyValue(fake_crtc->GetId(),
+                                                      kFakeCrtcGammaLutPropId),
+            0U);
+  EXPECT_EQ(fake_device
+                ->GetLastResetReqPropertyValue(fake_crtc->GetId(),
+                                               kFakeCrtcDegammaLutPropId),
+            0U);
+  EXPECT_EQ(fake_device->GetLastResetReqPropertyValue(fake_crtc->GetId(),
+                                                      kFakeCrtcCtmPropId),
+            0U);
+}
+
+TEST_F(DrmHwcTest,
+       ResetConnectorsAndCrtcsRefreshesDriverOverriddenContentProtection) {
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetContentProtectionPropertyValue(
+      DRM_MODE_CONTENT_PROTECTION_ENABLED);
+  fake_device->SetResetCommitHook([&]() {
+    fake_device
+        ->RegisterFakeObjectProperty(ext_conn->GetId(), "Content Protection",
+                                     kFakeContentProtectionPropId,
+                                     DRM_MODE_PROP_ENUM,
+                                     DRM_MODE_CONTENT_PROTECTION_DESIRED);
+  });
+
+  fake_device->ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(fake_device
+                ->GetLastResetReqPropertyValue(ext_conn->GetId(),
+                                               kFakeContentProtectionPropId),
+            uint64_t{DRM_MODE_CONTENT_PROTECTION_UNDESIRED});
+  EXPECT_EQ(ext_conn->GetContentProtectionProperty().GetValue(),
+            uint64_t{DRM_MODE_CONTENT_PROTECTION_DESIRED});
+}
+
+TEST_F(DrmHwcTest,
+       ResetConnectorsAndCrtcsSkipsInternalCrtcWhenPropertyEnabled) {
+  const ScopedTestProperty
+      skip_prop("vendor.hwc.drm.skip_internal_display_reset", "true");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  auto* fake_crtc = fake_device->GetCrtcs().front().get();
+  ASSERT_NE(fake_crtc, nullptr);
+  InitFakeDrmProperty(int_conn->GetCrtcIdProperty(), int_conn->GetId(),
+                      kFakeConnectorCrtcPropId, "CRTC_ID", DRM_MODE_PROP_OBJECT,
+                      fake_crtc->GetId());
+
+  fake_device->ResetConnectorsAndCrtcs();
+
+  EXPECT_FALSE(fake_device
+                   ->GetLastResetReqPropertyValue(fake_crtc->GetId(),
+                                                  kFakeCrtcActivePropId)
+                   .has_value());
+  EXPECT_EQ(int_conn->GetCrtcIdProperty().GetValue(),
+            uint64_t{fake_crtc->GetId()});
+}
 }  // namespace android::drm_hwcomposer

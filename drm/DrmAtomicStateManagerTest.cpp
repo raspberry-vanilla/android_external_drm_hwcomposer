@@ -51,6 +51,7 @@
 #include "drm/DrmTestUtils.h"
 #include "drm/DrmUnique.h"
 #include "hwc/HwcWriteback.h"
+#include "utils/TestUtils.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -1647,4 +1648,161 @@ TEST_F(DrmAtomicStateManagerTest, DisablePlaneResetsColorPipelineProperty) {
                                       kFakePlaneColorPipelinePropId),
             0U);
 }
+
+TEST_F(DrmAtomicStateManagerTest, TeardownDisablesOrphanedPlaneOnCrtc) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* primary_plane = static_cast<FakeDrmPlane*>(
+      pipeline->primary_plane->Get());
+  ASSERT_NE(primary_plane, nullptr);
+  primary_plane->SetCrtcIdPropertyValue(crtc_id);
+  primary_plane->SetFbIdPropertyValue(kTestFbId1);
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.teardown = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req)->property_set.get(),
+                                      primary_plane->GetId(),
+                                      kFakePlaneFbPropId),
+            0U);
+  state_manager->FinishPendingRequest(teardown_args, std::move(req));
+  EXPECT_EQ(primary_plane->GetCrtcProperty().GetValue(), 0U);
+  EXPECT_EQ(primary_plane->GetFbProperty().GetValue(), 0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest, TeardownClearsCrtcGammaLutProperties) {
+  const ScopedTestProperty enable_cp("vendor.hwc.drm.enable_color_pipeline",
+                                     "true");
+  state_manager = DrmAtomicStateManager::CreateInstance(pipeline.get());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_crtc = static_cast<FakeDrmCrtc*>(pipeline->crtc->Get());
+  ASSERT_NE(fake_crtc, nullptr);
+  constexpr uint64_t kLutSize = 256;
+  fake_crtc->SetGammaLutProperties(kLutSize, kFakeBlobBaseId);
+  fake_crtc->SetDegammaLutProperty(kFakeBlobBaseId);
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.teardown = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(req, nullptr);
+  auto* prop_set = AsDrmRequest(req)->property_set.get();
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, fake_crtc->GetId(),
+                                      kFakeCrtcGammaLutPropId),
+            0U);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, fake_crtc->GetId(),
+                                      kFakeCrtcDegammaLutPropId),
+            0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       TeardownClearsConnectorHdrOutputMetadataProperty) {
+  const ScopedTestProperty enable_cp("vendor.hwc.drm.enable_color_pipeline",
+                                     "true");
+  state_manager = DrmAtomicStateManager::CreateInstance(pipeline.get());
+  ASSERT_NE(fake_connector, nullptr);
+  fake_connector->SetHdrOutputMetadataPropertySupported(true);
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.teardown = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(req, nullptr);
+  auto* prop_set = AsDrmRequest(req)->property_set.get();
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, fake_connector->GetId(),
+                                      kFakeHdrOutputMetadataPropId),
+            0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest, FullModesetClearsResidualCrtcDegammaLut) {
+  const ScopedTestProperty enable_cp("vendor.hwc.drm.enable_color_pipeline",
+                                     "true");
+  state_manager = DrmAtomicStateManager::CreateInstance(pipeline.get());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_crtc = static_cast<FakeDrmCrtc*>(pipeline->crtc->Get());
+  ASSERT_NE(fake_crtc, nullptr);
+  constexpr uint64_t kLutSize = 256;
+  fake_crtc->SetGammaLutProperties(kLutSize, kFakeBlobBaseId);
+  fake_crtc->SetDegammaLutProperty(kFakeBlobBaseId);
+
+  AtomicCommitArgs args{};
+  args.power_mode = PowerMode::kOn;
+  args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight, kTestVRefresh);
+  args.transfer_func = TransferFunction::kSrgb;
+  args.composition = CreateSinglePlanePlan(kTestFbId1);
+
+  auto req = state_manager->GetAtomicModeReqForArgs(args);
+  ASSERT_NE(req, nullptr);
+  EXPECT_EQ(GetAtomicReqPropertyValue(AsDrmRequest(req)->property_set.get(),
+                                      fake_crtc->GetId(),
+                                      kFakeCrtcDegammaLutPropId),
+            0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       FullModesetUpdatesCachedConnectorCrtcProperty) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  AtomicCommitArgs args{};
+  args.blocking = true;
+  args.power_mode = PowerMode::kOn;
+  args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight, kTestVRefresh);
+  args.composition = CreateSinglePlanePlan(kTestFbId1);
+
+  auto req = state_manager->GetAtomicModeReqForArgs(args);
+  ASSERT_NE(req, nullptr);
+  state_manager->FinishPendingRequest(args, std::move(req));
+
+  EXPECT_EQ(fake_connector->GetCrtcIdProperty().GetValue(), crtc_id);
+}
+
+TEST_F(DrmAtomicStateManagerTest, FullModesetUpdatesCachedPlaneProperties) {
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  DrmPlane* primary_plane = pipeline->primary_plane->Get();
+  ASSERT_NE(primary_plane, nullptr);
+
+  AtomicCommitArgs args{};
+  args.blocking = true;
+  args.power_mode = PowerMode::kOn;
+  args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight, kTestVRefresh);
+  args.composition = CreateSinglePlanePlan(kTestFbId1);
+
+  auto req = state_manager->GetAtomicModeReqForArgs(args);
+  ASSERT_NE(req, nullptr);
+  state_manager->FinishPendingRequest(args, std::move(req));
+
+  EXPECT_EQ(primary_plane->GetCrtcProperty().GetValue(), crtc_id);
+  EXPECT_EQ(primary_plane->GetFbProperty().GetValue(), kTestFbId1);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DisplayPowerOffPreservesContentProtectionProperty) {
+  ActivateWithConnectorProps(*this);
+  const uint32_t conn_id = fake_connector->GetId();
+
+  AtomicCommitArgs power_off_args{};
+  power_off_args.blocking = true;
+  power_off_args.teardown = true;
+  power_off_args.power_mode = PowerMode::kOff;
+  power_off_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(power_off_args);
+  ASSERT_NE(req, nullptr);
+  auto* prop_set = AsDrmRequest(req)->property_set.get();
+  EXPECT_FALSE(
+      GetAtomicReqPropertyValue(prop_set, conn_id, kFakeContentProtectionPropId)
+          .has_value());
+}
+
 }  // namespace android::drm_hwcomposer

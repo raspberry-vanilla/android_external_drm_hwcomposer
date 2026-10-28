@@ -175,6 +175,9 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   auto &GetContentProtectionProperty() const {
     return content_protection_property_;
   }
+  auto &GetContentProtectionProperty() {
+    return content_protection_property_;
+  }
 
   auto &GetMinBpcProperty() const {
     return min_bpc_property_;

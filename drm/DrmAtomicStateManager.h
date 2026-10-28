@@ -29,6 +29,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -36,6 +37,7 @@
 #include "compositor/LayerData.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmDisplayPipeline.h"
+#include "drm/DrmProperty.h"
 #include "drm/DrmUnique.h"
 #include "utils/SlruCache.h"
 #include "utils/fd.h"
@@ -105,6 +107,11 @@ class DrmAtomicStateManager : public AtomicStateManager {
 
     KmsObjects used_kms_objects;
     KmsState new_frame_state;
+    std::vector<std::pair<DrmProperty *, uint64_t>> property_updates;
+
+    void RecordPropertyUpdate(DrmProperty &prop, uint64_t value) {
+      property_updates.emplace_back(&prop, value);
+    }
 
     // Make this struct non-copyable and non-movable to avoid dangling
     // references to struct member addresses.
