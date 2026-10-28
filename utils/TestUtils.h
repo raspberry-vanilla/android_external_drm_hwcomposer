@@ -16,39 +16,19 @@
 
 #pragma once
 
-#include <cstdlib>
-
-#ifdef ANDROID
-#include <cutils/properties.h>
-#endif
+#include <optional>
+#include <string>
 
 namespace android::drm_hwcomposer {
 
-// RAII helper to temporarily set a system property during a test and ensure it
-// is cleared upon scope exit. Under Android builds, system properties are
-// backed by libcutils (property_set), whereas standalone non-Android builds
-// read from environment variables (setenv/unsetenv).
+// RAII helper to temporarily set a system property during a test and restore
+// its previous value upon scope exit. Under Android builds, system properties
+// are backed by libcutils (property_get/property_set), whereas standalone
+// non-Android builds read from environment variables (getenv/setenv/unsetenv).
 class ScopedTestProperty {
  public:
-  ScopedTestProperty(const char *key, const char *value) : key_(key) {
-#ifdef ANDROID
-    property_set(key, value);
-#else
-    if (value != nullptr) {
-      setenv(key, value, 1);
-    } else {
-      unsetenv(key);
-    }
-#endif
-  }
-
-  ~ScopedTestProperty() {
-#ifdef ANDROID
-    property_set(key_, "");
-#else
-    unsetenv(key_);
-#endif
-  }
+  ScopedTestProperty(const char *key, const char *value);
+  ~ScopedTestProperty();
 
   ScopedTestProperty(const ScopedTestProperty &) = delete;
   auto operator=(const ScopedTestProperty &) -> ScopedTestProperty & = delete;
@@ -56,7 +36,8 @@ class ScopedTestProperty {
   auto operator=(ScopedTestProperty &&) -> ScopedTestProperty & = delete;
 
  private:
-  const char *key_;
+  std::string key_;
+  std::optional<std::string> prev_value_;
 };
 
 }  // namespace android::drm_hwcomposer

@@ -425,6 +425,8 @@ cc_test_host {
         "utils/SlruCacheTest.cpp",
         "utils/SysfsBacklightController.cpp",
         "utils/SysfsBacklightControllerTest.cpp",
+        "utils/TestUtils.cpp",
+        "utils/TestUtilsTest.cpp",
         "utils/fd.cpp",
         "utils/properties.cpp",
     ],
