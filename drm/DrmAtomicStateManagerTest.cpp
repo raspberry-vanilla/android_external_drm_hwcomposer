@@ -1632,4 +1632,19 @@ TEST_F(DrmAtomicStateManagerTest, PowerOffWithoutTeardownDisablesActivePlanes) {
             0ULL);
 }
 
+TEST_F(DrmAtomicStateManagerTest, DisablePlaneResetsColorPipelineProperty) {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* primary_plane = static_cast<FakeDrmPlane*>(
+      pipeline->primary_plane->Get());
+  ASSERT_NE(primary_plane, nullptr);
+  primary_plane->SetColorPipelinePropertySupported(/*supported=*/true,
+                                                   kFakeColorOpBaseId);
+
+  auto pset = MakeDrmModeAtomicReqUnique();
+  ASSERT_NE(pset, nullptr);
+  EXPECT_EQ(primary_plane->AtomicDisablePlane(*pset), 0);
+  EXPECT_EQ(GetAtomicReqPropertyValue(pset.get(), primary_plane->GetId(),
+                                      kFakePlaneColorPipelinePropId),
+            0U);
+}
 }  // namespace android::drm_hwcomposer

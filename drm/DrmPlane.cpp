@@ -531,8 +531,16 @@ auto DrmPlane::AtomicSetState(drmModeAtomicReq &pset, LayerData &layer,
   return 0;
 }
 
+auto DrmPlane::AtomicDisableColorPipeline(drmModeAtomicReq &pset) const -> int {
+  if (color_pipeline_property_ &&
+      !color_pipeline_property_.AtomicSet(pset, 0)) {
+    ALOGE("Failed to reset COLOR_PIPELINE to 0");
+    return -EINVAL;
+  }
+  return 0;
+}
+
 auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
-  // FIXME: to check whether needs to reset other properties as well.
   if (!crtc_property_.AtomicSet(pset, 0) || !fb_property_.AtomicSet(pset, 0) ||
       !crtc_x_property_.AtomicSet(pset, 0) ||
       !crtc_y_property_.AtomicSet(pset, 0) ||
@@ -545,7 +553,10 @@ auto DrmPlane::AtomicDisablePlane(drmModeAtomicReq &pset) -> int {
     return -EINVAL;
   }
 
-  return 0;
+  // Always reset COLOR_PIPELINE to 0 (bypass) when disabling a plane so a
+  // previously active colorop chain does not remain latched in hardware across
+  // plane reassignments or HWC service restarts.
+  return AtomicDisableColorPipeline(pset);
 }
 
 auto DrmPlane::AtomicSetColorPipeline(drmModeAtomicReq &pset,

@@ -125,6 +125,7 @@ class DrmPlane : public PipelineBindable<DrmPlane> {
   enum class Presence { kOptional, kMandatory };
 
   auto Init() -> int;
+  auto AtomicDisableColorPipeline(drmModeAtomicReq &pset) const -> int;
   auto GetPlaneProperty(const char *prop_name, DrmProperty &property,
                         Presence presence = Presence::kMandatory) -> bool;
 
