@@ -96,6 +96,7 @@ UNITTEST_SRCS := \
 	drm/DrmMode.cpp \
 	drm/DrmPlane.cpp \
 	drm/DrmProperty.cpp \
+	drm/DrmPropertyTest.cpp \
 	drm/ResourceManager.cpp \
 	drm/UEventListener.cpp \
 	drm/VSyncWorker.cpp \
