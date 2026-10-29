@@ -770,20 +770,35 @@ auto HwcDisplay::GetRawEdid() const -> std::vector<uint8_t> {
 }
 
 auto HwcDisplay::GetPort() const -> uint8_t {
-  if (IsInHeadlessMode()) {
+  // Virtual displays bind a writeback connector pipeline and are not headless,
+  // but must never report a hardware display port.
+  if (is_virtual_ || IsInHeadlessMode()) {
     return 0;
   }
 
   /*
   auto *connector = GetPipe().connector->Get();
 
-  constexpr uint8_t kDrmDeviceBitShift = 5U;
-  constexpr uint8_t kDrmDeviceBitMask = 0xE0;
-  constexpr uint8_t kConnectorBitMask = 0x1F;
-  const auto kDrmIdx = static_cast<uint8_t>(
-      connector->GetDev().GetIndexInDevArray());
-  const auto kConnectorIdx = static_cast<uint8_t>(
-      connector->GetIndexInResArray());
+  constexpr uint8_t kDrmDeviceBitShift = 6U;
+  constexpr uint8_t kDrmDeviceBitMask = 0xC0;
+  constexpr uint8_t kConnectorBitMask = 0x3F;
+  uint32_t drm_idx = connector->GetDev().GetIndexInDevArray();
+  if (drm_idx >= DrmDevice::kMaxKmsDevices) {
+    ALOGE("KMS device ordinal %u exceeds 2-bit limit (%u); clamping to %u.",
+          drm_idx, DrmDevice::kMaxKmsDevices, DrmDevice::kMaxKmsDevices - 1);
+    drm_idx = DrmDevice::kMaxKmsDevices - 1;
+  }
+  uint32_t connector_idx = connector->GetIndexInResArray();
+  if (connector_idx >= DrmDevice::kMaxPortsPerDevice) {
+    ALOGE(
+        "Connector port %u on device %u exceeds 6-bit limit (%u); clamping "
+        "to %u.",
+        connector_idx, drm_idx, DrmDevice::kMaxPortsPerDevice,
+        DrmDevice::kMaxPortsPerDevice - 1);
+    connector_idx = DrmDevice::kMaxPortsPerDevice - 1;
+  }
+  const auto kDrmIdx = static_cast<uint8_t>(drm_idx);
+  const auto kConnectorIdx = static_cast<uint8_t>(connector_idx);
   return (((kDrmIdx << kDrmDeviceBitShift) & kDrmDeviceBitMask) |
           (kConnectorIdx & kConnectorBitMask));
   */

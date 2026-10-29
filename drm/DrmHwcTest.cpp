@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <xf86drmMode.h>
 
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -241,6 +242,18 @@ struct DrmHwcTest : public ::testing::Test {
 
   void DeInitResManForTest() {
     hwc.GetResMan().DeInit();
+  }
+
+  static constexpr uint32_t kDefaultEdpConnId = 100;
+  static constexpr uint32_t kDefaultDpConnId = 101;
+
+  void InitStandardNativePorts(uint32_t edp_id = kDefaultEdpConnId,
+                               uint32_t dp_id = kDefaultDpConnId) const {
+    fake_device->AddTypedConnector(edp_id, DRM_MODE_CONNECTOR_eDP, 1,
+                                   /*is_external=*/false, 0);
+    fake_device->AddTypedConnector(dp_id, DRM_MODE_CONNECTOR_DisplayPort, 1,
+                                   /*is_external=*/true, 1);
+    fake_device->InitializeConnectorPorts();
   }
 
   std::unique_ptr<FakeDrmDevice> fake_device;
@@ -1535,8 +1548,7 @@ TEST_F(DrmHwcTest,
   fake_device->SetGetConnectorFailureErrno(kVanishedMstConnId, ENOENT);
   {
     ScopedErrorLogCapture capture;
-    auto conn = DrmConnector::CreateInstance(*fake_device, kVanishedMstConnId,
-                                             0);
+    auto conn = DrmConnector::CreateInstance(*fake_device, kVanishedMstConnId);
     const std::string errors = capture.StopAndGetErrors();
     EXPECT_EQ(conn, nullptr);
     EXPECT_EQ(errors.find("Failed to get connector"), std::string::npos)
@@ -1557,7 +1569,7 @@ TEST_F(DrmHwcTest,
   {
     ScopedErrorLogCapture capture;
     auto conn = DrmConnector::CreateInstance(*fake_device,
-                                             kMidInitVanishedMstConnId, 1);
+                                             kMidInitVanishedMstConnId);
     const std::string errors = capture.StopAndGetErrors();
     EXPECT_EQ(conn, nullptr);
     EXPECT_TRUE(errors.empty())
@@ -1578,7 +1590,7 @@ TEST_F(DrmHwcTest,
   {
     ScopedErrorLogCapture capture;
     auto conn = DrmConnector::CreateInstance(*fake_device,
-                                             kPostCrtcIdVanishedMstConnId, 1);
+                                             kPostCrtcIdVanishedMstConnId);
     const std::string errors = capture.StopAndGetErrors();
     EXPECT_EQ(conn, nullptr);
     EXPECT_TRUE(errors.empty())
@@ -1608,7 +1620,7 @@ TEST_F(DrmHwcTest,
   fake_device->SetGetConnectorFailureErrno(kFaultyConnId, EIO);
   {
     ScopedErrorLogCapture capture;
-    auto conn = DrmConnector::CreateInstance(*fake_device, kFaultyConnId, 2);
+    auto conn = DrmConnector::CreateInstance(*fake_device, kFaultyConnId);
     const std::string errors = capture.StopAndGetErrors();
     EXPECT_EQ(conn, nullptr);
     EXPECT_NE(errors.find("Failed to get connector"), std::string::npos)
@@ -1818,8 +1830,7 @@ TEST_F(DrmHwcTest, OffLockHotplugProbeDoesNotOverwriteFresherMainLockReprobe) {
   shared_dev
       ->SetFakeRawConnectorForGetConnector(kExtConnectorId, kExtEncoderId,
                                            DRM_MODE_CONNECTOR_DisplayPort);
-  auto real_conn = DrmConnector::CreateInstance(*shared_dev, kExtConnectorId,
-                                                /*index=*/0);
+  auto real_conn = DrmConnector::CreateInstance(*shared_dev, kExtConnectorId);
   ASSERT_NE(real_conn, nullptr);
   auto* real_conn_ptr = real_conn.get();
   shared_dev->AddConnector(std::move(real_conn));
@@ -1921,8 +1932,7 @@ TEST_F(DrmHwcTest, DrmConnectorInitPopulatesInitialModesWithoutSecondProbe) {
     }
   });
 
-  auto init_conn = DrmConnector::CreateInstance(*fake_device, kInitModesConnId,
-                                                0);
+  auto init_conn = DrmConnector::CreateInstance(*fake_device, kInitModesConnId);
   ASSERT_NE(init_conn, nullptr);
   EXPECT_EQ(get_connector_calls, 1U);
   EXPECT_EQ(init_conn->GetModes().size(), 1U)
@@ -2370,6 +2380,487 @@ TEST_F(DrmHwcTest,
 
   EXPECT_EQ(commits_at_final_wait, kNumTestFrames);
   sink->ClearHistory();
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsEmptyString) {
+  EXPECT_FALSE(DrmConnector::ParseMstPath("").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath(" ").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("           ").has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsNullOnlyBlobs) {
+  constexpr size_t kSingleNullLen = 1;
+  constexpr size_t kMultiNullLen = 3;
+
+  EXPECT_FALSE(
+      DrmConnector::ParseMstPath(std::string_view("\0", kSingleNullLen))
+          .has_value());
+  EXPECT_FALSE(
+      DrmConnector::ParseMstPath(std::string_view("\0\0\0", kMultiNullLen))
+          .has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsMalformedPrefix) {
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst6-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("MST:6-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("ms").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("6-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("path:6-2-1").has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsMalformedBranchDelimiters) {
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst::6-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:-6-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-2-1-").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6--2").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:---").has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsNonNumericPortTokens) {
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:c7").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-b-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-2a").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6- -2- -1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6 -2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-'2'-1").has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsEmbeddedNullByte) {
+  constexpr size_t kEmbeddedNullLen = 11;
+
+  EXPECT_FALSE(DrmConnector::ParseMstPath(
+                   std::string_view("mst:6-\0-2-1", kEmbeddedNullLen))
+                   .has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathRejectsOutOfRangePortNumbers) {
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:0-2-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-0-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-2-0").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:4294967296-1").has_value());
+  EXPECT_FALSE(DrmConnector::ParseMstPath("mst:6-4294967296").has_value());
+}
+
+TEST_F(DrmHwcTest, ParseMstPathParsesMultiHopTopology) {
+  constexpr uint32_t kBaseIdSix = 6;
+  constexpr uint32_t kBaseIdNinetyFive = 95;
+  constexpr uint32_t kPortOne = 1;
+  constexpr uint32_t kPortTwo = 2;
+  constexpr uint32_t kPortEight = 8;
+
+  const DrmConnector::MstPath expected_one_hop{
+      .base_connector_id = kBaseIdNinetyFive,
+      .ports = {kPortOne},
+  };
+  const DrmConnector::MstPath expected_two_hop{
+      .base_connector_id = kBaseIdSix,
+      .ports = {kPortTwo, kPortOne},
+  };
+  const DrmConnector::MstPath expected_three_hop{
+      .base_connector_id = kBaseIdNinetyFive,
+      .ports = {kPortOne, kPortEight, kPortTwo},
+  };
+
+  EXPECT_EQ(DrmConnector::ParseMstPath("mst:95-1"), expected_one_hop);
+  EXPECT_EQ(DrmConnector::ParseMstPath("mst:6-2-1"), expected_two_hop);
+  EXPECT_EQ(DrmConnector::ParseMstPath("mst:95-1-8-2"), expected_three_hop);
+}
+
+TEST_F(DrmHwcTest, ParseMstPathStripsTrailingNullBytes) {
+  constexpr uint32_t kBaseIdSix = 6;
+  constexpr uint32_t kPortOne = 1;
+  constexpr uint32_t kPortTwo = 2;
+  constexpr size_t kSingleTrailingNullLen = 10;
+  constexpr size_t kMultiTrailingNullLen = 11;
+
+  const DrmConnector::MstPath expected_two_hop{
+      .base_connector_id = kBaseIdSix,
+      .ports = {kPortTwo, kPortOne},
+  };
+
+  EXPECT_EQ(DrmConnector::ParseMstPath(
+                std::string_view("mst:6-2-1\0", kSingleTrailingNullLen)),
+            expected_two_hop);
+  EXPECT_EQ(DrmConnector::ParseMstPath(
+                std::string_view("mst:6-2-1\0\0", kMultiTrailingNullLen)),
+            expected_two_hop);
+
+  constexpr std::array<char, 9> kRawChars = {'m', 's', 't', ':', '6',
+                                             '-', '2', '-', '1'};
+  EXPECT_EQ(DrmConnector::ParseMstPath(
+                std::string_view(kRawChars.data(), kRawChars.size())),
+            expected_two_hop);
+}
+
+TEST_F(DrmHwcTest, GetPhysicalPortBaseIdExtractsRootConnectorId) {
+  constexpr uint32_t kBaseIdNinetyFive = 95;
+
+  FakeDrmConnector mst_conn(fake_device.get(), kBaseIdNinetyFive,
+                            /*is_external=*/true, kFakeConnectorMmWidth,
+                            kFakeConnectorMmHeight, kBaseIdNinetyFive, 0);
+  EXPECT_FALSE(mst_conn.GetPhysicalPortBaseId().has_value());
+  mst_conn.SetMstPath("mst:95-1-8");
+  EXPECT_EQ(mst_conn.GetPhysicalPortBaseId(), kBaseIdNinetyFive);
+}
+
+TEST_F(DrmHwcTest, IsMstRecognizesAttachedPathPropertyEvenWhenBlobValueIsZero) {
+  constexpr uint32_t kMstConnectorId = 361;
+
+  FakeDrmConnector mst_conn(fake_device.get(), kFirstEncoderId,
+                            /*is_external=*/true, kFakeConnectorMmWidth,
+                            kFakeConnectorMmHeight, kMstConnectorId, 0);
+  EXPECT_FALSE(mst_conn.IsMst());
+  mst_conn.SetMstPath("");
+  EXPECT_TRUE(mst_conn.IsMst());
+  EXPECT_FALSE(mst_conn.GetMstPath().has_value());
+}
+
+TEST_F(DrmHwcTest, InitializeConnectorPortsAssignsZeroToInternalPanel) {
+  constexpr uint32_t kDp1ConnId = 140;
+  constexpr uint32_t kEdp1ConnId = 150;
+
+  auto* dp1 = fake_device->AddTypedConnector(kDp1ConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort, 1,
+                                             /*is_external=*/true, 0);
+  auto* edp1 = fake_device->AddTypedConnector(kEdp1ConnId,
+                                              DRM_MODE_CONNECTOR_eDP, 1,
+                                              /*is_external=*/false, 1);
+
+  fake_device->InitializeConnectorPorts();
+
+  EXPECT_EQ(edp1->GetIndexInResArray(), 0U);
+  EXPECT_EQ(dp1->GetIndexInResArray(), 1U);
+}
+
+TEST_F(DrmHwcTest, InitializeConnectorPortsSortsExternalConnectorsCanonically) {
+  constexpr uint32_t kHdmi1ConnId = 120;
+  constexpr uint32_t kDp2ConnId = 130;
+  constexpr uint32_t kDp1ConnId = 140;
+  constexpr uint32_t kTypeIdOne = 1;
+  constexpr uint32_t kTypeIdTwo = 2;
+
+  auto* hdmi1 = fake_device->AddTypedConnector(kHdmi1ConnId,
+                                               DRM_MODE_CONNECTOR_HDMIA,
+                                               kTypeIdOne,
+                                               /*is_external=*/true, 0);
+  auto* dp2 = fake_device->AddTypedConnector(kDp2ConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort,
+                                             kTypeIdTwo,
+                                             /*is_external=*/true, 1);
+  auto* dp1 = fake_device->AddTypedConnector(kDp1ConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort,
+                                             kTypeIdOne,
+                                             /*is_external=*/true, 2);
+
+  fake_device->InitializeConnectorPorts();
+
+  EXPECT_EQ(dp1->GetIndexInResArray(), 0U);
+  EXPECT_EQ(dp2->GetIndexInResArray(), 1U);
+  EXPECT_EQ(hdmi1->GetIndexInResArray(), 2U);
+}
+
+TEST_F(DrmHwcTest, InitializeConnectorPortsExcludesWritebackConnectors) {
+  constexpr uint32_t kWritebackConnId = 110;
+  constexpr uint32_t kDp1ConnId = 140;
+  constexpr uint32_t kUntouchedWritebackIndex = 9;
+
+  auto* wb = fake_device->AddTypedConnector(kWritebackConnId,
+                                            DRM_MODE_CONNECTOR_WRITEBACK, 1,
+                                            /*is_external=*/false,
+                                            kUntouchedWritebackIndex);
+  auto* dp1 = fake_device->AddTypedConnector(kDp1ConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort, 1,
+                                             /*is_external=*/true, 1);
+
+  fake_device->InitializeConnectorPorts();
+
+  EXPECT_EQ(dp1->GetIndexInResArray(), 0U);
+  EXPECT_EQ(wb->GetIndexInResArray(), kUntouchedWritebackIndex);
+}
+
+TEST_F(DrmHwcTest, InitializeConnectorPortsReservesSlotsForIgnoredConnectors) {
+  constexpr uint32_t kEdpConnId = 200;
+  constexpr uint32_t kIgnoredDp1ConnId = 201;
+  constexpr uint32_t kActiveDp2ConnId = 202;
+  constexpr uint32_t kTypeIdOne = 1;
+  constexpr uint32_t kTypeIdTwo = 2;
+
+  auto* edp = fake_device->AddTypedConnector(kEdpConnId, DRM_MODE_CONNECTOR_eDP,
+                                             kTypeIdOne,
+                                             /*is_external=*/false, 0);
+  auto ignored_dp1 = std::make_unique<FakeDrmConnector>(fake_device.get(),
+                                                        kIgnoredDp1ConnId,
+                                                        /*is_external=*/true,
+                                                        kFakeConnectorMmWidth,
+                                                        kFakeConnectorMmHeight,
+                                                        kIgnoredDp1ConnId, 1);
+  ignored_dp1->InitRawConnector(DRM_MODE_CONNECTOR_DisplayPort, kTypeIdOne);
+  auto* ignored_dp1_ptr = ignored_dp1.get();
+  fake_device->AddIgnoredConnector(std::move(ignored_dp1));
+
+  auto* active_dp2 = fake_device
+                         ->AddTypedConnector(kActiveDp2ConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort,
+                                             kTypeIdTwo,
+                                             /*is_external=*/true, 2);
+
+  fake_device->InitializeConnectorPorts();
+
+  EXPECT_EQ(edp->GetIndexInResArray(), 0U);
+  EXPECT_EQ(ignored_dp1_ptr->GetIndexInResArray(), 1U);
+  EXPECT_EQ(active_dp2->GetIndexInResArray(), 2U);
+}
+
+TEST_F(DrmHwcTest,
+       InitializeConnectorPortsDropsConnectorsExceedingMaxPortsPerDevice) {
+  constexpr uint32_t kTotalOverflowConnectors = 66;
+  constexpr uint32_t kBaseConnectorId = 200;
+  constexpr uint32_t kMaxPortSlot = DrmDevice::kMaxPortsPerDevice - 1;
+
+  std::vector<FakeDrmConnector*> conns;
+  conns.reserve(kTotalOverflowConnectors);
+  for (uint32_t i = 0; i < kTotalOverflowConnectors; ++i) {
+    conns.push_back(
+        fake_device->AddTypedConnector(kBaseConnectorId + i,
+                                       DRM_MODE_CONNECTOR_DisplayPort, i + 1,
+                                       /*is_external=*/true, i));
+  }
+
+  fake_device->InitializeConnectorPorts();
+
+  ASSERT_EQ(fake_device->GetConnectors().size(), DrmDevice::kMaxPortsPerDevice);
+  EXPECT_EQ(conns[DrmDevice::kMaxPortsPerDevice - 1]->GetIndexInResArray(),
+            kMaxPortSlot);
+  EXPECT_EQ(fake_device->GetConnectors().back()->GetId(),
+            kBaseConnectorId + DrmDevice::kMaxPortsPerDevice - 1);
+}
+
+TEST_F(DrmHwcTest, RefreshConnectorsSortsNewMstBranchesByNormalizedPath) {
+  constexpr uint32_t kHdmi1ConnId = 110;
+  constexpr uint32_t kDp1RootConnId = 120;
+  constexpr uint32_t kEdp1ConnId = 130;
+  constexpr uint32_t kMstBranch1ConnId = 201;
+  constexpr uint32_t kMstBranch2ConnId = 202;
+  constexpr uint32_t kWritebackDynamicConnId = 205;
+  constexpr uint32_t kExpectedMstBranch1Port = 3;
+  constexpr uint32_t kExpectedMstBranch2Port = 4;
+
+  fake_device->AddTypedConnector(kHdmi1ConnId, DRM_MODE_CONNECTOR_HDMIA, 1,
+                                 /*is_external=*/true, 0);
+  fake_device->AddTypedConnector(kDp1RootConnId, DRM_MODE_CONNECTOR_DisplayPort,
+                                 1, /*is_external=*/true, 1);
+  fake_device->AddTypedConnector(kEdp1ConnId, DRM_MODE_CONNECTOR_eDP, 1,
+                                 /*is_external=*/false, 2);
+  fake_device->InitializeConnectorPorts();
+
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    if (conn.GetId() == kMstBranch1ConnId) {
+      constexpr size_t kNullTerminatedPathLen = 10;
+      conn.SetMstPath(std::string("mst:120-1\0", kNullTerminatedPathLen));
+    } else if (conn.GetId() == kMstBranch2ConnId) {
+      conn.SetMstPath("mst:120-2");
+    } else if (conn.GetId() == kWritebackDynamicConnId) {
+      conn.InitRawConnector(DRM_MODE_CONNECTOR_WRITEBACK, 1);
+    }
+  });
+
+  // Enumerate kMstBranch2ConnId ("mst:120-2") before kMstBranch1ConnId
+  // ("mst:120-1") to verify batch MST discovery sorts by normalized MstPath.
+  fake_device->SetResourceConnectorIds({kHdmi1ConnId, kDp1RootConnId,
+                                        kEdp1ConnId, kWritebackDynamicConnId,
+                                        kMstBranch2ConnId, kMstBranch1ConnId});
+  fake_device->RefreshConnectors();
+
+  ASSERT_EQ(fake_device->GetConnectors().size(), 5U);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetIndexInResArray(),
+            kExpectedMstBranch2Port);
+  EXPECT_EQ(fake_device->GetConnectors()[4]->GetIndexInResArray(),
+            kExpectedMstBranch1Port);
+}
+
+TEST_F(DrmHwcTest, RefreshConnectorsReusesStickyDynamicPortOnMstReplug) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kMstBranch1ConnId = 201;
+  constexpr uint32_t kMstBranch2ConnId = 202;
+  constexpr uint32_t kMstBranch1ReplugConnId = 203;
+  constexpr uint32_t kExpectedBranch1Port = 2;
+
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    if (conn.GetId() == kMstBranch1ConnId ||
+        conn.GetId() == kMstBranch1ReplugConnId) {
+      conn.SetMstPath("mst:101-1");
+    } else if (conn.GetId() == kMstBranch2ConnId) {
+      conn.SetMstPath("mst:101-2");
+    }
+  });
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstBranch1ConnId, kMstBranch2ConnId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetIndexInResArray(),
+            kExpectedBranch1Port);
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstBranch2ConnId});
+  fake_device->RefreshConnectors();
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstBranch2ConnId, kMstBranch1ReplugConnId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetId(), kMstBranch1ReplugConnId);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetIndexInResArray(),
+            kExpectedBranch1Port);
+}
+
+TEST_F(DrmHwcTest,
+       RefreshConnectorsReclaimsStickyPortWhenMstIdReplacedInSamePass) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kMstInitialConnId = 201;
+  constexpr uint32_t kMstReplacementConnId = 204;
+  constexpr uint32_t kExpectedBranch1Port = 2;
+
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    if (conn.GetId() == kMstInitialConnId ||
+        conn.GetId() == kMstReplacementConnId) {
+      conn.SetMstPath("mst:101-1");
+    }
+  });
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstInitialConnId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 3U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetIndexInResArray(),
+            kExpectedBranch1Port);
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstReplacementConnId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 3U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetId(), kMstReplacementConnId);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetIndexInResArray(),
+            kExpectedBranch1Port);
+}
+
+TEST_F(DrmHwcTest,
+       RefreshConnectorsAssignsDistinctPortsOnSimultaneousMstPathCollision) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kDupConnAId = 301;
+  constexpr uint32_t kDupConnBId = 302;
+  constexpr uint32_t kFirstDynamicPort = 2;
+  constexpr uint32_t kSecondDynamicPort = 3;
+
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    if (conn.GetId() == kDupConnAId || conn.GetId() == kDupConnBId) {
+      conn.SetMstPath("mst:101-1");
+    }
+  });
+
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kDupConnAId, kDupConnBId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetIndexInResArray(),
+            kFirstDynamicPort);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetIndexInResArray(),
+            kSecondDynamicPort);
+}
+
+TEST_F(DrmHwcTest,
+       RefreshConnectorsEvictsOldestInactiveStickyPortWhenPoolExhausted) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kFirstDynamicPort = 2;
+  constexpr uint32_t kSecondDynamicPort = 3;
+  constexpr uint32_t kDynamicPoolCount = DrmDevice::kMaxPortsPerDevice -
+                                         kFirstDynamicPort;
+  constexpr uint32_t kLruBaseConnId = 400;
+  constexpr uint32_t kRefreshFirstStickyConnId = 500;
+  constexpr uint32_t kOverflowNewPathConnId = 501;
+  constexpr uint32_t kVerifyPreservedStickyConnId = 502;
+
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    const uint32_t id = conn.GetId();
+    if (id >= kLruBaseConnId && id < kLruBaseConnId + kDynamicPoolCount) {
+      conn.SetMstPath("mst:101-" + std::to_string((id - kLruBaseConnId) + 1));
+    } else if (id == kRefreshFirstStickyConnId ||
+               id == kVerifyPreservedStickyConnId) {
+      conn.SetMstPath("mst:101-1");
+    } else if (id == kOverflowNewPathConnId) {
+      conn.SetMstPath("mst:101-99");
+    }
+  });
+
+  for (uint32_t i = 0; i < kDynamicPoolCount; ++i) {
+    fake_device->SetResourceConnectorIds(
+        {kEdpConnId, kDpRootConnId, kLruBaseConnId + i});
+    fake_device->RefreshConnectors();
+  }
+
+  // Touch "mst:101-1" (slot 2) so slot 3 ("mst:101-2") becomes the oldest
+  // inactive sticky slot, then disconnect all dynamic connectors.
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kRefreshFirstStickyConnId});
+  fake_device->RefreshConnectors();
+  fake_device->SetResourceConnectorIds({kEdpConnId, kDpRootConnId});
+  fake_device->RefreshConnectors();
+
+  fake_device->SetResourceConnectorIds({kEdpConnId, kDpRootConnId,
+                                        kOverflowNewPathConnId,
+                                        kVerifyPreservedStickyConnId});
+  fake_device->RefreshConnectors();
+  ASSERT_EQ(fake_device->GetConnectors().size(), 4U);
+  EXPECT_EQ(fake_device->GetConnectors()[2]->GetIndexInResArray(),
+            kSecondDynamicPort);
+  EXPECT_EQ(fake_device->GetConnectors()[3]->GetIndexInResArray(),
+            kFirstDynamicPort);
+}
+
+TEST_F(DrmHwcTest,
+       RefreshConnectorsDropsNewDynamicConnectorWhenAllPortSlotsActive) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kFirstDynamicPort = 2;
+  constexpr uint32_t kDynamicPoolCount = DrmDevice::kMaxPortsPerDevice -
+                                         kFirstDynamicPort;
+  constexpr uint32_t kActiveBaseConnId = 600;
+  constexpr uint32_t kOverflowSimultaneousConnId = 700;
+
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    const uint32_t id = conn.GetId();
+    if (id >= kActiveBaseConnId && id <= kOverflowSimultaneousConnId) {
+      conn.SetMstPath("mst:101-" +
+                      std::to_string((id - kActiveBaseConnId) + 1));
+    }
+  });
+
+  std::vector<uint32_t> active_ids = {kEdpConnId, kDpRootConnId};
+  for (uint32_t i = 0; i < kDynamicPoolCount; ++i) {
+    active_ids.push_back(kActiveBaseConnId + i);
+  }
+  active_ids.push_back(kOverflowSimultaneousConnId);
+
+  fake_device->SetResourceConnectorIds(active_ids);
+  fake_device->RefreshConnectors();
+
+  ASSERT_EQ(fake_device->GetConnectors().size(), DrmDevice::kMaxPortsPerDevice);
+  EXPECT_EQ(fake_device->GetConnectors().back()->GetId(),
+            kActiveBaseConnId + kDynamicPoolCount - 1);
+  EXPECT_EQ(fake_device->GetConnectors().back()->GetIndexInResArray(),
+            DrmDevice::kMaxPortsPerDevice - 1);
 }
 
 }  // namespace android::drm_hwcomposer

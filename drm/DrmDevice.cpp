@@ -28,6 +28,7 @@
 #include <xf86drmMode.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cinttypes>
@@ -35,12 +36,14 @@
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -107,6 +110,14 @@ auto DrmDevice::Init(const char *path) -> int {
     // devices fail fast without redundant ioctls on subsequent retries.
     if (attempt == 1 && !IsKMSDev(*GetFd())) {
       return -ENODEV;
+    }
+
+    if (index_in_dev_array_ >= kMaxKmsDevices) {
+      ALOGE(
+          "Reached maximum of %u KMS display devices for 8-bit port encoding; "
+          "dropping %s to avoid display port ID collisions.",
+          kMaxKmsDevices, path);
+      return -ENOSPC;
     }
 
     // Without CAP_SYS_ADMIN, the kernel only allows drmSetMaster() if the fd
@@ -207,7 +218,7 @@ auto DrmDevice::Init(const char *path) -> int {
 
   for (int i = 0; i < res->count_connectors; ++i) {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    auto conn = DrmConnector::CreateInstance(*this, res->connectors[i], i);
+    auto conn = DrmConnector::CreateInstance(*this, res->connectors[i]);
 
     if (!conn) {
       continue;
@@ -221,6 +232,7 @@ auto DrmDevice::Init(const char *path) -> int {
       ignored_connectors_.emplace_back(std::move(conn));
     }
   }
+  InitializeConnectorPorts();
 
   auto plane_res = MakeDrmModePlaneResUnique(*GetFd());
   if (!plane_res) {
@@ -381,14 +393,225 @@ auto DrmDevice::GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
   return MakeDrmModeObjectPropertiesUnique(*GetFd(), obj_id, obj_type);
 }
 
-auto DrmDevice::CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+auto DrmDevice::CreateConnectorInstance(uint32_t connector_id)
     -> std::unique_ptr<DrmConnector> {
-  return DrmConnector::CreateInstance(*this, connector_id, index);
+  return DrmConnector::CreateInstance(*this, connector_id);
 }
 
 auto DrmDevice::CommitAtomicReset(drmModeAtomicReq &pset) -> int {
   return drmModeAtomicCommit(*GetFd(), &pset, DRM_MODE_ATOMIC_ALLOW_MODESET,
                              this);
+}
+
+// Normalizes a connector's parsed kernel MST PATH ("mst:<root_id>-<port>...")
+// by replacing `base_connector_id` (the root physical connector's raw kernel
+// object ID, which can vary across boots) with the root connector's canonical
+// native port index (0..N-1). This produces a stable topological key
+// (e.g. root native port 1 -> branch port 2 -> branch port 1) for both sticky
+// port matching and deterministic topological sorting.
+auto DrmDevice::GetNormalizedMstPath(const DrmConnector &conn) const
+    -> std::optional<DrmConnector::MstPath> {
+  auto mst_path = conn.GetMstPath();
+  if (!mst_path.has_value()) {
+    return std::nullopt;
+  }
+
+  for (const auto *list : {&connectors_, &ignored_connectors_}) {
+    for (const auto &c : *list) {
+      if (!c->IsWriteback() && !c->IsMst() &&
+          c->GetId() == mst_path->base_connector_id) {
+        mst_path->base_connector_id = c->GetIndexInResArray();
+        return mst_path;
+      }
+    }
+  }
+
+  return mst_path;
+}
+
+auto DrmDevice::HasInactiveStickySlot(
+    const std::optional<DrmConnector::MstPath> &path) const -> bool {
+  if (!path.has_value()) {
+    return false;
+  }
+  for (uint32_t i = native_ports_count_; i < kMaxPortsPerDevice; ++i) {
+    if (!dynamic_ports_[i].active && dynamic_ports_[i].sticky_path == path) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Allocates a dynamic port slot in [native_ports_count_, 63] for a hotplugged
+// MST connector. If an inactive "sticky" slot is already bound to `path` from
+// an earlier connection in this session, it is reclaimed so unplug/replug or
+// DPMS wake races do not swap monitor port IDs. Otherwise, the first unused
+// slot (last_used_seq == 0) is chosen, falling back to evicting the
+// least-recently-used inactive sticky slot only when all 64 slots have been
+// bound. Returns std::nullopt if all 64 slots on this KMS device are
+// simultaneously active.
+auto DrmDevice::AllocateDynamicPort(
+    const std::optional<DrmConnector::MstPath> &path)
+    -> std::optional<uint32_t> {
+  bool path_already_sticky = false;
+
+  // 1. Reuse the existing sticky slot for this normalized MST path if free.
+  if (path.has_value()) {
+    for (uint32_t i = native_ports_count_; i < kMaxPortsPerDevice; ++i) {
+      if (dynamic_ports_[i].sticky_path == path) {
+        if (!dynamic_ports_[i].active) {
+          dynamic_ports_[i].active = true;
+          dynamic_ports_[i].last_used_seq = ++port_alloc_seq_;
+          return i;
+        }
+        path_already_sticky = true;
+      }
+    }
+  }
+
+  // 2. Pick the first unreserved slot (last_used_seq == 0), or evict the
+  // least-recently-used inactive sticky slot (smallest last_used_seq > 0).
+  uint32_t candidate = kMaxPortsPerDevice;
+  uint64_t oldest_seq = std::numeric_limits<uint64_t>::max();
+  for (uint32_t i = native_ports_count_; i < kMaxPortsPerDevice; ++i) {
+    if (!dynamic_ports_[i].active &&
+        dynamic_ports_[i].last_used_seq < oldest_seq) {
+      oldest_seq = dynamic_ports_[i].last_used_seq;
+      candidate = i;
+    }
+  }
+
+  if (candidate < kMaxPortsPerDevice) {
+    dynamic_ports_[candidate].active = true;
+    if (path.has_value() && !path_already_sticky) {
+      dynamic_ports_[candidate].sticky_path = path;
+      dynamic_ports_[candidate].last_used_seq = ++port_alloc_seq_;
+    } else {
+      dynamic_ports_[candidate].sticky_path.reset();
+      dynamic_ports_[candidate].last_used_seq = 0;
+    }
+    return candidate;
+  }
+
+  return std::nullopt;
+}
+
+void DrmDevice::MoveOverflowConnectorsToIgnored(
+    const std::set<uint32_t> &overflow_ids,
+    std::vector<DrmConnector *> *out_added_connectors) {
+  if (overflow_ids.empty()) {
+    return;
+  }
+  auto keep_it = std::stable_partition(connectors_.begin(), connectors_.end(),
+                                       [&](const auto &conn) {
+                                         return overflow_ids.count(
+                                                    conn->GetId()) == 0;
+                                       });
+  std::move(keep_it, connectors_.end(),
+            std::back_inserter(ignored_connectors_));
+  connectors_.erase(keep_it, connectors_.end());
+  if (out_added_connectors != nullptr) {
+    out_added_connectors->erase(std::remove_if(out_added_connectors->begin(),
+                                               out_added_connectors->end(),
+                                               [&](const DrmConnector *conn) {
+                                                 return overflow_ids.count(
+                                                            conn->GetId()) != 0;
+                                               }),
+                                out_added_connectors->end());
+  }
+}
+
+void DrmDevice::AssignDynamicPorts(
+    std::vector<DrmConnector *> &conns,
+    std::vector<DrmConnector *> *out_added_connectors) {
+  // Sort connectors so those reclaiming an existing inactive sticky slot are
+  // assigned first (preventing a new path in the same batch from evicting
+  // their sticky slot when the pool is full), and sort remaining new MST
+  // connectors canonically by their normalized MstPath (root native port, then
+  // branch hops) so batch/boot discovery order never depends on kernel
+  // connector array order.
+  std::sort(conns.begin(), conns.end(),
+            [this](const DrmConnector *a, const DrmConnector *b) {
+              const auto path_a = GetNormalizedMstPath(*a);
+              const auto path_b = GetNormalizedMstPath(*b);
+              const bool sticky_a = HasInactiveStickySlot(path_a);
+              const bool sticky_b = HasInactiveStickySlot(path_b);
+              return std::make_tuple(!sticky_a, !path_a.has_value(), path_a,
+                                     a->GetId()) <
+                     std::make_tuple(!sticky_b, !path_b.has_value(), path_b,
+                                     b->GetId());
+            });
+  std::set<uint32_t> overflow_ids;
+  for (auto *conn : conns) {
+    auto port = AllocateDynamicPort(GetNormalizedMstPath(*conn));
+    if (port.has_value()) {
+      conn->SetIndexInResArray(*port);
+    } else {
+      ALOGE(
+          "All %u ports on KMS device %u are simultaneously active; dropping "
+          "connector ID %u to avoid display port ID collisions.",
+          kMaxPortsPerDevice, index_in_dev_array_, conn->GetId());
+      conn->SetIndexInResArray(kMaxPortsPerDevice);
+      overflow_ids.insert(conn->GetId());
+    }
+  }
+  MoveOverflowConnectorsToIgnored(overflow_ids, out_added_connectors);
+}
+
+void DrmDevice::InitializeConnectorPorts() {
+  std::vector<DrmConnector *> native_conns;
+  for (const auto *list : {&connectors_, &ignored_connectors_}) {
+    for (const auto &c : *list) {
+      if (!c->IsWriteback() && !c->IsMst()) {
+        native_conns.push_back(c.get());
+      }
+    }
+  }
+
+  // Sort native non-MST connectors canonically with internal panels first,
+  // then by (connector_type, connector_type_id, connector_id), so primary
+  // internal displays always receive port 0 and physical external ports get
+  // deterministic port IDs regardless of kernel driver registration order.
+  std::sort(native_conns.begin(), native_conns.end(),
+            [](const DrmConnector *a, const DrmConnector *b) {
+              return std::make_tuple(!a->IsInternal(), a->GetConnectorType(),
+                                     a->GetConnectorTypeId(), a->GetId()) <
+                     std::make_tuple(!b->IsInternal(), b->GetConnectorType(),
+                                     b->GetConnectorTypeId(), b->GetId());
+            });
+
+  native_ports_count_ = std::min<uint32_t>(static_cast<uint32_t>(
+                                               native_conns.size()),
+                                           kMaxPortsPerDevice);
+  dynamic_ports_ = {};
+  port_alloc_seq_ = 0;
+
+  for (uint32_t i = 0; i < native_ports_count_; ++i) {
+    native_conns[i]->SetIndexInResArray(i);
+    dynamic_ports_[i].active = true;
+    dynamic_ports_[i].last_used_seq = ++port_alloc_seq_;
+  }
+
+  std::set<uint32_t> overflow_ids;
+  for (size_t i = native_ports_count_; i < native_conns.size(); ++i) {
+    ALOGE(
+        "Native connector ID %u on KMS device %u exceeds max %u ports per "
+        "device; dropping connector to avoid display port ID collisions.",
+        native_conns[i]->GetId(), index_in_dev_array_, kMaxPortsPerDevice);
+    native_conns[i]->SetIndexInResArray(kMaxPortsPerDevice);
+    overflow_ids.insert(native_conns[i]->GetId());
+  }
+  MoveOverflowConnectorsToIgnored(overflow_ids);
+
+  std::vector<DrmConnector *> mst_conns;
+  for (const auto *list : {&connectors_, &ignored_connectors_}) {
+    for (const auto &c : *list) {
+      if (!c->IsWriteback() && c->IsMst()) {
+        mst_conns.push_back(c.get());
+      }
+    }
+  }
+  AssignDynamicPorts(mst_conns);
 }
 
 auto DrmDevice::SnapshotConnectorsUnderLock() const -> ConnectorSnapshot {
@@ -431,7 +654,7 @@ auto DrmDevice::ProbeConnectorsOffLock(const ConnectorSnapshot &snapshot)
       continue;
     }
     seen_ids.insert(conn_id);
-    auto conn = CreateConnectorInstance(conn_id, i);
+    auto conn = CreateConnectorInstance(conn_id);
     if (!conn) {
       probed.had_probe_error = true;
       continue;
@@ -483,6 +706,12 @@ auto DrmDevice::ApplyProbedConnectorsUnderLock(
 
     for (auto it = stale_it; it != conns.end(); ++it) {
       (*it)->MarkDeleted();
+      if (!(*it)->IsWriteback()) {
+        const uint32_t slot = (*it)->GetIndexInResArray();
+        if (slot < kMaxPortsPerDevice) {
+          dynamic_ports_[slot].active = false;
+        }
+      }
     }
     if (!is_ignored) {
       std::move(stale_it, conns.end(), std::back_inserter(stale_connectors));
@@ -491,15 +720,29 @@ auto DrmDevice::ApplyProbedConnectorsUnderLock(
     conns.erase(stale_it, conns.end());
   };
 
+  // Release port slots of stale connectors from both active and ignored lists
+  // before scanning new resources so a rapid MST hub replug in the same
+  // refresh pass can immediately reuse its sticky port slot.
   remove_stale(connectors_, false);
   remove_stale(ignored_connectors_, true);
 
+  for (const auto *list : {&connectors_, &ignored_connectors_}) {
+    for (const auto &conn : *list) {
+      if (!conn->IsWriteback() &&
+          conn->GetIndexInResArray() < kMaxPortsPerDevice) {
+        dynamic_ports_[conn->GetIndexInResArray()].active = true;
+      }
+    }
+  }
+
+  std::vector<DrmConnector *> new_conns;
   for (auto &conn : state.new_connectors) {
     if (!conn || conn->IsDeleted() ||
         conn_ids_present.count(conn->GetId()) != 0) {
       continue;
     }
     conn_ids_present.insert(conn->GetId());
+    new_conns.push_back(conn.get());
     if (IsConnectorAllowed(*conn)) {
       if (out_added_connectors != nullptr) {
         out_added_connectors->push_back(conn.get());
@@ -509,6 +752,7 @@ auto DrmDevice::ApplyProbedConnectorsUnderLock(
       ignored_connectors_.emplace_back(std::move(conn));
     }
   }
+  AssignDynamicPorts(new_conns, out_added_connectors);
 
   return stale_connectors;
 }

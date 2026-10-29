@@ -215,7 +215,20 @@ class HwcDisplay : public ICompositorDisplay {
   // Get the edid bytes for this display. Return an empty vector on error.
   auto GetRawEdid() const -> std::vector<uint8_t>;
 
-  // Get the port id that this display is plugged into.
+  // Returns the 8-bit hardware display port ID: bits [7:6] encode the KMS
+  // DrmDevice ordinal (0..3) and bits [5:0] encode the per-device connector
+  // port (0..63). Two bits (4 KMS display devices) are sufficient because
+  // ResourceManager::Init() filters /dev/dri/card* via DrmDevice::IsKMSDev(),
+  // counting only KMS-capable display controllers (skipping non-display DRM
+  // nodes such as vgem, NPU, or compute/render-only cards), and target
+  // platforms have at most 1-2 display controllers (e.g. a single SoC display
+  // engine or iGPU + dGPU).
+  //
+  // Returns 0 when the display is in headless mode or is a writeback-backed
+  // virtual display. This cannot collide with a physical display at port 0
+  // because headless mode only exists when no physical display is connected,
+  // and virtual displays are backed by writeback connectors that do not
+  // represent physical display ports or expose EDID identification data.
   auto GetPort() const -> uint8_t;
 
   auto HasBacklight() const -> bool {

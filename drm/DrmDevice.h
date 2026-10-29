@@ -18,6 +18,7 @@
 
 #include <xf86drmMode.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -29,6 +30,7 @@
 
 #include "backend/Backend.h"
 #include "drm/AtomicCommitSink.h"
+#include "drm/DrmConnector.h"
 #include "drm/DrmUnique.h"
 #include "utils/fd.h"
 
@@ -36,7 +38,6 @@ namespace android::drm_hwcomposer {
 
 struct AtomicCommitArgs;
 struct BufferInfo;
-class DrmConnector;
 class DrmCrtc;
 class DrmEncoder;
 class DrmFbImporter;
@@ -50,6 +51,9 @@ class DrmDevice {
   friend class FakeCompositorDrmDevice;
 
  public:
+  static constexpr uint32_t kMaxKmsDevices = 4;
+  static constexpr uint32_t kMaxPortsPerDevice = 64;
+
   virtual ~DrmDevice();
 
   static auto CreateInstance(std::string const &path, ResourceManager *res_man,
@@ -145,6 +149,7 @@ class DrmDevice {
       ProbedConnectorResources &&probed,
       std::vector<DrmConnector *> *out_added_connectors = nullptr)
       -> std::vector<std::unique_ptr<DrmConnector>>;
+  void InitializeConnectorPorts();
   auto RefreshConnectors() -> std::vector<std::unique_ptr<DrmConnector>>;
   auto ResetConnectorsAndCrtcs() -> void;
 
@@ -152,7 +157,7 @@ class DrmDevice {
   virtual auto GetResources() const -> DrmModeResUnique;
   virtual auto GetObjectProperties(uint32_t obj_id, uint32_t obj_type) const
       -> DrmModeObjectPropertiesUnique;
-  virtual auto CreateConnectorInstance(uint32_t connector_id, uint32_t index)
+  virtual auto CreateConnectorInstance(uint32_t connector_id)
       -> std::unique_ptr<DrmConnector>;
   virtual auto CommitAtomicReset(drmModeAtomicReq &pset) -> int;
 
@@ -160,6 +165,18 @@ class DrmDevice {
   explicit DrmDevice(ResourceManager *res_man, uint32_t index);
   auto Init(const char *path) -> int;
   auto IsConnectorAllowed(DrmConnector &conn) const -> bool;
+  auto GetNormalizedMstPath(const DrmConnector &conn) const
+      -> std::optional<DrmConnector::MstPath>;
+  auto HasInactiveStickySlot(
+      const std::optional<DrmConnector::MstPath> &path) const -> bool;
+  auto AllocateDynamicPort(const std::optional<DrmConnector::MstPath> &path)
+      -> std::optional<uint32_t>;
+  void AssignDynamicPorts(
+      std::vector<DrmConnector *> &conns,
+      std::vector<DrmConnector *> *out_added_connectors = nullptr);
+  void MoveOverflowConnectorsToIgnored(
+      const std::set<uint32_t> &overflow_ids,
+      std::vector<DrmConnector *> *out_added_connectors = nullptr);
 
   static auto IsKMSDev(int fd) -> bool;
 
@@ -172,6 +189,23 @@ class DrmDevice {
   std::vector<std::unique_ptr<DrmEncoder>> encoders_;
   std::vector<std::unique_ptr<DrmCrtc>> crtcs_;
   std::vector<std::unique_ptr<DrmPlane>> planes_;
+
+  // Represents one slot in the per-device 64-port table (0..63).
+  // Slots [0, native_ports_count_ - 1] are permanently active for static
+  // native connectors. Slots [native_ports_count_, 63] are dynamically
+  // allocated to hotplugged MST connectors and remain "sticky" after
+  // disconnect: when an MST connector is unplugged, `active` is cleared to
+  // false while `sticky_path` is preserved so replugging or waking a display
+  // on the same hub port reclaims its previous port ID instead of drifting.
+  struct DynamicPortSlot {
+    bool active = false;
+    std::optional<DrmConnector::MstPath> sticky_path;
+    uint64_t last_used_seq = 0;
+  };
+
+  uint32_t native_ports_count_ = 0;
+  uint64_t port_alloc_seq_ = 0;
+  std::array<DynamicPortSlot, kMaxPortsPerDevice> dynamic_ports_{};
 
   std::pair<uint32_t, uint32_t> min_resolution_;
   std::pair<uint32_t, uint32_t> max_resolution_;

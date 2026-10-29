@@ -234,7 +234,10 @@ void ResourceManager::Init() {
       if (stat(path.str().c_str(), &buf) != 0)
         break;
 
-      auto dev = DrmDevice::CreateInstance(path.str(), this, idx);
+      // Use drms_.size() rather than the raw card<idx> number so non-KMS nodes
+      // (e.g. vgem/ivpu on card0) do not shift KMS device port prefixes.
+      auto dev = DrmDevice::CreateInstance(path.str(), this,
+                                           static_cast<uint32_t>(drms_.size()));
       if (dev) {
         drms_.emplace_back(std::move(dev));
       }

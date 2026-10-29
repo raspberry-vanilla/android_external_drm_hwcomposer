@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "drm/DrmColorspace.h"
@@ -55,8 +56,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
   friend class FakeDrmConnector;
 
  public:
-  static auto CreateInstance(DrmDevice &dev, uint32_t connector_id,
-                             uint32_t index) -> std::unique_ptr<DrmConnector>;
+  static auto CreateInstance(DrmDevice &dev, uint32_t connector_id)
+      -> std::unique_ptr<DrmConnector>;
 
   DrmConnector(const DrmProperty &) = delete;
   DrmConnector &operator=(const DrmProperty &) = delete;
@@ -78,6 +79,10 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   auto GetIndexInResArray() const {
     return index_in_res_array_;
+  }
+
+  void SetIndexInResArray(uint32_t index) {
+    index_in_res_array_ = index;
   }
 
   virtual uint32_t GetCurrentEncoderId() const {
@@ -213,7 +218,34 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->connector_type;
   }
 
+  virtual uint32_t GetConnectorTypeId() const {
+    return connector_->connector_type_id;
+  }
+
+  struct MstPath {
+    uint32_t base_connector_id = 0;
+    std::vector<uint32_t> ports;
+
+    bool operator==(const MstPath &rhs) const {
+      return base_connector_id == rhs.base_connector_id && ports == rhs.ports;
+    }
+
+    bool operator<(const MstPath &rhs) const {
+      if (base_connector_id != rhs.base_connector_id) {
+        return base_connector_id < rhs.base_connector_id;
+      }
+      return ports < rhs.ports;
+    }
+  };
+
   bool IsMst() const;
+
+  // Parses a kernel DRM "PATH" blob string of the format:
+  //   mst:{DRM_BASE_CONNECTOR_ID#}-{BRANCH_1_PORT#}-...-{BRANCH_N_PORT#}\0
+  // For example, "mst:6-2-1" represents:
+  //   Device <--conn6-- MST1 <--port2-- MST2 <--port1-- Display
+  static auto ParseMstPath(std::string_view raw_path) -> std::optional<MstPath>;
+  auto GetMstPath() const -> std::optional<MstPath>;
 
   void MarkDeleted() {
     deleted_ = true;
@@ -235,9 +267,14 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsForceMode(drmModeModeInfo raw_mode, std::string force_mode);
 
+ protected:
+  virtual bool GetPathPropertyBlobData(std::vector<char> &path_data) const {
+    return path_property_.GetBlobData(path_data);
+  }
+
  private:
   DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
-               uint32_t index);
+               uint32_t index = 0);
 
   DrmModeConnectorUnique connector_;
   DrmDevice *const drm_;
@@ -257,7 +294,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   auto GetTileBlobData() -> std::optional<std::vector<char>>;
 
-  const uint32_t index_in_res_array_;
+  uint32_t index_in_res_array_;
   bool deleted_ = false;
   bool reported_incompatible_cable_ = false;
   uint64_t probe_generation_ = 0;
