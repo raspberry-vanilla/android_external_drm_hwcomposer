@@ -220,6 +220,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   std::optional<uint32_t> GetPhysicalPortBaseId() const;
 
+  bool IsForceMode(drmModeModeInfo raw_mode, std::string force_mode);
+
  private:
   DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
                uint32_t index);

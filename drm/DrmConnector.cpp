@@ -242,7 +242,10 @@ auto DrmConnector::Init() -> bool {
       }
     }
     if (!exists) {
-      modes_.emplace_back(&raw_mode);
+      std::string force_mode = Properties::GetForceMode();
+      if (IsForceMode(raw_mode, force_mode)) {
+        modes_.emplace_back(&raw_mode);
+      }
     }
   }
 
@@ -349,18 +352,6 @@ std::string DrmConnector::GetName() const {
 }
 
 auto DrmConnector::ProbeModesAndPropertiesOffLock() -> ProbedState {
-  std::string force_mode = Properties::GetForceMode();
-  uint32_t xres = 0, yres = 0, rate = 0;
-  // Parse <xres>x<yres>[@<refreshrate>]
-  if (sscanf(force_mode.c_str(), "%dx%d@%d", &xres, &yres, &rate) != 3) {
-    rate = 0;
-    if (sscanf(force_mode.c_str(), "%dx%d", &xres, &yres) != 2) {
-      xres = yres = 0;
-    }
-  }
-  ALOGI_IF(xres && yres, "Force mode %dx%d@%dHz for display in connector %s",
-      xres, yres, rate, GetName().c_str());
-
   ProbedState probed{};
   const uint32_t id = GetId();
   auto conn = drm_->GetConnector(id);
@@ -389,26 +380,10 @@ auto DrmConnector::ProbeModesAndPropertiesOffLock() -> ProbedState {
     }
 
     if (!exists) {
-      DrmMode m(&raw_mode);
-      ALOGI("Supported mode %dx%d@%fHz for display in connector %s",
-          m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
-          m.GetVRefresh(), GetName().c_str());
-      if (xres && yres) {
-        if (!rate && m.GetRawMode().hdisplay == xres
-            && m.GetRawMode().vdisplay == yres) {
-          rate = uint32_t(m.GetVRefresh());
-        }
-        if (m.GetRawMode().hdisplay != xres
-            || m.GetRawMode().vdisplay != yres
-            || uint32_t(m.GetVRefresh()) != rate) {
-          continue;
-        }
+      std::string force_mode = Properties::GetForceMode();
+      if (IsForceMode(raw_mode, force_mode)) {
+        probed.modes.emplace_back(&raw_mode);
       }
-      ALOGI("Add mode %dx%d@%fHz for display in connector %s",
-          m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
-          m.GetVRefresh(), GetName().c_str());
-
-      probed.modes.emplace_back(&raw_mode);
     }
   }
 
@@ -614,6 +589,44 @@ std::optional<uint32_t> DrmConnector::GetPhysicalPortBaseId() const {
     return base_id;
   }
   return std::nullopt;
+}
+
+bool DrmConnector::IsForceMode(drmModeModeInfo raw_mode, std::string force_mode) {
+  // Don't force mode on writeback connectors
+  if (IsWriteback()) {
+    return true;
+  }
+
+  // Parse <xres>x<yres>[@<refreshrate>]
+  uint32_t xres = 0, yres = 0, rate = 0;
+  if (sscanf(force_mode.c_str(), "%dx%d@%d", &xres, &yres, &rate) != 3) {
+    rate = 0;
+    if (sscanf(force_mode.c_str(), "%dx%d", &xres, &yres) != 2) {
+      xres = yres = 0;
+    }
+  }
+
+  // Match forced mode
+  DrmMode m(&raw_mode);
+  ALOGI("Supported mode %dx%d@%fHz for display in connector %s",
+      m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+      m.GetVRefresh(), GetName().c_str());
+  if (xres && yres) {
+    if (!rate && m.GetRawMode().hdisplay == xres
+        && m.GetRawMode().vdisplay == yres) {
+      rate = uint32_t(m.GetVRefresh());
+    }
+    if (m.GetRawMode().hdisplay != xres
+        || m.GetRawMode().vdisplay != yres
+        || uint32_t(m.GetVRefresh()) != rate) {
+      return false;
+    }
+  }
+  ALOGI("Add mode %dx%d@%fHz for display in connector %s",
+      m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+      m.GetVRefresh(), GetName().c_str());
+
+  return true;
 }
 
 }  // namespace android::drm_hwcomposer

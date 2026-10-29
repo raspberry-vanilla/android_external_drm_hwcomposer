@@ -50,8 +50,6 @@ HwcDisplayConfigs HwcDisplayConfigsGenerator::GetFakeMode(uint16_t width,
       xres = yres = 0;
     }
   }
-  ALOGI_IF(xres && yres, "Force mode %dx%d@%dHz for HEADLESS-MODE",
-      xres, yres, rate);
 
   const uint32_t kHeadlessModeDisplayWidthMm = xres ? xres : 160;
   const uint32_t kHeadlessModeDisplayHeightMm = yres ? yres : 90;
