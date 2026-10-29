@@ -137,4 +137,25 @@ TEST_F(HwcBufferCacheTest, GetFbReimportsWhenInitialImportReturnedNullptr) {
   EXPECT_EQ(import_attempts, 3);
 }
 
+TEST_F(HwcBufferCacheTest,
+       GetFbReturnsNullptrRepeatedlyWhenImporterAlwaysFails) {
+  int import_attempts = 0;
+  cache = std::make_unique<HwcBufferCache>(
+      [&](BufferInfo&) -> std::shared_ptr<DrmFbIdHandle> {
+        ++import_attempts;
+        return nullptr;
+      });
+
+  BufferInfo bi{};
+  bi.width = kTestBufferWidth;
+  bi.height = kTestBufferHeight;
+
+  cache->SetSlot(0, bi);
+  EXPECT_EQ(import_attempts, 1);
+  EXPECT_EQ(cache->GetFb(0), nullptr);
+  EXPECT_EQ(import_attempts, 2);
+  EXPECT_EQ(cache->GetFb(0), nullptr);
+  EXPECT_EQ(import_attempts, 3);
+}
+
 }  // namespace android::drm_hwcomposer

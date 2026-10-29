@@ -1007,6 +1007,10 @@ bool HwcDisplay::GetDisplayEnabled() const {
 }
 
 bool HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
+  if (pipeline_ == nullptr || pipeline == nullptr) {
+    staged_mode_config_id_.reset();
+    active_config_id_ = 0;
+  }
   Deinit();
 
   pipeline_ = std::move(pipeline);
@@ -1192,6 +1196,9 @@ bool HwcDisplay::Init() {
       ALOGE("Failed to create event worker for d=%d\n", int(handle_));
       return false;
     }
+    if (vsync_event_en_) {
+      SetVsyncCallbacksEnabled(true);
+    }
   }
 
   requires_reprobe_on_power_on_ = false;
@@ -1266,6 +1273,11 @@ bool HwcDisplay::Init() {
   lp.blend_mode = BufferBlendMode::kPreMult;
   client_layer_.SetLayerProperties(lp);
 
+  std::optional<HwcDisplayConfig> prev_config;
+  if (const auto *last_req = GetLastRequestedConfig(); last_req != nullptr) {
+    prev_config = *last_req;
+  }
+
   if (is_virtual_) {
     configs_ = configs_generator_.GetFakeMode(virtual_disp_width_,
                                               virtual_disp_height_);
@@ -1319,7 +1331,24 @@ bool HwcDisplay::Init() {
   }
   SetColorMode(default_color_mode, ui::RenderIntent::COLORIMETRIC);
 
-  if (GetDisplayType() == DisplayType::kExternal) {
+  ConfigId initial_config_id = configs_.preferred_config_id;
+  if (prev_config.has_value()) {
+    constexpr float kRefreshRateEpsilon = 0.5F;
+    for (const auto &[id, cfg] : configs_.hwc_configs) {
+      if (cfg.mode.GetRawMode().hdisplay ==
+              prev_config->mode.GetRawMode().hdisplay &&
+          cfg.mode.GetRawMode().vdisplay ==
+              prev_config->mode.GetRawMode().vdisplay &&
+          std::abs(cfg.mode.GetVRefresh() - prev_config->mode.GetVRefresh()) <
+              kRefreshRateEpsilon &&
+          cfg.output_type == prev_config->output_type) {
+        initial_config_id = id;
+        break;
+      }
+    }
+  }
+
+  if (GetDisplayType() == DisplayType::kExternal && !prev_config.has_value()) {
     // Defer the initial blocking KMS modeset on external displays until the
     // client (SurfaceFlinger / DisplayManager) finishes selecting its target
     // mode and calls SetPowerMode(PowerMode::kOn). This avoids holding
@@ -1336,17 +1365,23 @@ bool HwcDisplay::Init() {
     }
     defer_modeset_until_power_on_ = true;
     staged_power_mode_ = PowerMode::kOn;
-  } else if (SetConfig(configs_.preferred_config_id) !=
-             HwcDisplay::ConfigError::kNone) {
-    ALOGW(
-        "Failed to set preferred config %u during Init on display %d; keeping "
-        "display initialized for subsequent userspace modesets.",
-        configs_.preferred_config_id, static_cast<int>(handle_));
-    staged_power_mode_ = PowerMode::kOn;
-    if (boot_state == BootAnimationState::kActive) {
-      SetBootAnimationState(BootAnimationState::kInactive);
-      if (hwc_ != nullptr) {
-        hwc_->AbortEarlyBootAnimation();
+  } else {
+    auto set_config_err = SetConfig(initial_config_id);
+    if (set_config_err != HwcDisplay::ConfigError::kNone &&
+        initial_config_id != configs_.preferred_config_id) {
+      set_config_err = SetConfig(configs_.preferred_config_id);
+    }
+    if (set_config_err != HwcDisplay::ConfigError::kNone) {
+      ALOGW(
+          "Failed to set preferred config %u during Init on display %d; "
+          "keeping display initialized for subsequent userspace modesets.",
+          configs_.preferred_config_id, static_cast<int>(handle_));
+      staged_power_mode_ = PowerMode::kOn;
+      if (boot_state == BootAnimationState::kActive) {
+        SetBootAnimationState(BootAnimationState::kInactive);
+        if (hwc_ != nullptr) {
+          hwc_->AbortEarlyBootAnimation();
+        }
       }
     }
   }
@@ -2562,10 +2597,21 @@ bool HwcDisplay::CursorPlaneNeedsColorPipeline(
 }
 
 std::string HwcDisplay::Dump() const {
-  if (pipeline_ && pipeline_->atomic_state_manager) {
-    return pipeline_->atomic_state_manager->DumpState();
+  std::stringstream ss;
+  if (pipeline_ && pipeline_->connector && pipeline_->connector->Get()) {
+    if (auto tile_info = pipeline_->connector->Get()->GetTileInfo()) {
+      ss << "Tile Info: group_id=" << tile_info->group_id
+         << " single_monitor=" << tile_info->tile_is_single_monitor
+         << " grid=" << tile_info->num_h_tile << "x" << tile_info->num_v_tile
+         << " loc=(" << tile_info->tile_h_loc << "," << tile_info->tile_v_loc
+         << ") tile_size=" << tile_info->tile_h_size << "x"
+         << tile_info->tile_v_size << "\n";
+    }
   }
-  return {};
+  if (pipeline_ && pipeline_->atomic_state_manager) {
+    ss << pipeline_->atomic_state_manager->DumpState();
+  }
+  return ss.str();
 }
 
 }  // namespace android::drm_hwcomposer

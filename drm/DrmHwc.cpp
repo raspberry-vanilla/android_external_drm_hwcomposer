@@ -211,6 +211,42 @@ bool DrmHwc::UnbindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) {
   return true;
 }
 
+bool DrmHwc::ReplaceDisplay(std::shared_ptr<DrmDisplayPipeline> old_pipeline,
+                            std::shared_ptr<DrmDisplayPipeline> new_pipeline) {
+  if (display_handles_.count(old_pipeline) == 0) {
+    ALOGE("%s, can't find the display for old pipeline: %p", __func__,
+          old_pipeline.get());
+    return false;
+  }
+  if (display_handles_.count(new_pipeline) != 0) {
+    ALOGE("%s, new pipeline is already used by another display: %p", __func__,
+          new_pipeline.get());
+    return false;
+  }
+
+  auto handle = display_handles_[old_pipeline];
+  if (displays_.count(handle) == 0) {
+    ALOGE("%s, can't find the display, handle: %" PRIu64, __func__, handle);
+    return false;
+  }
+
+  ALOGI("Replacing pipeline '%s' with '%s' on the display #%" PRIu64 "%s",
+        old_pipeline->connector->Get()->GetName().c_str(),
+        new_pipeline->connector->Get()->GetName().c_str(), handle,
+        handle == kPrimaryDisplay ? " (Primary)" : "");
+
+  if (!displays_[handle]->SetPipeline(new_pipeline)) {
+    return false;
+  }
+
+  display_handles_.erase(old_pipeline);
+  display_handles_[new_pipeline] = handle;
+
+  RequestHdcpNegotiation(handle);
+
+  return true;
+}
+
 void DrmHwc::NotifyDisplayLinkStatus(
     std::shared_ptr<DrmDisplayPipeline> pipeline) {
   if (display_handles_.count(pipeline) == 0) {

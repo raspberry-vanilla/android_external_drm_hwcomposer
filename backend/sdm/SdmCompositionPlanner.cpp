@@ -186,12 +186,13 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
   // the composition_type_map with the composition type initially requested from
   // the client.
   CompositionPlanner::CompositionTypeMap composition_type_map;
+  uint32_t next_z_order = 0;
   for (const auto* layer : display->GetOrderLayersByZPos()) {
     CompositionType composition_type = layer->GetSfType();
     if (ForceClientComposition(display, layer)) {
       composition_type = CompositionType::kClient;
     }
-    UpdateLayer(layer, composition_type);
+    UpdateLayer(layer, composition_type, next_z_order++);
     composition_type_map[layer] = composition_type;
   }
 
@@ -209,97 +210,137 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
 
   // This will always be true because validate_only is true.
   bool out_needs_commit = false;
+  FlattenReason flatten_reason = FlattenReason::kNone;
+  std::vector<const HwcLayer*> punch_out_layers;
   auto display_error = draw_cycle_intf_->CommitOrPrepare(sdm_display_id_,
                                                          validate_only,
                                                          &out_retire_fence,
                                                          &out_num_types,
                                                          &out_num_requests,
                                                          &out_needs_commit);
-  ALOGE_IF(display_error != sdm::kErrorNone &&
-               display_error != sdm::kErrorNeedsCommit,
-           "CommitOrPrepare failed: %s", ErrorToString(display_error).c_str());
-
-  display_error = draw_cycle_intf_->AcceptDisplayChanges(sdm_display_id_);
-  ALOGE_IF(display_error != sdm::kErrorNone, "AcceptDisplayChanges failed: %s",
-           ErrorToString(display_error).c_str());
-
-  // Obtain the size for changed_layers and changed_composition_types.
-  uint32_t num_changed_composition_types = 0;
-  display_error = draw_cycle_intf_->GetChangedCompositionTypes(
-      sdm_display_id_, &num_changed_composition_types, nullptr, nullptr);
-  ALOGE_IF(display_error != sdm::kErrorNone,
-           "GetChangedCompositionTypes failed: %s",
-           ErrorToString(display_error).c_str());
-  ALOGE_IF(num_changed_composition_types != layer_mappings_.size(),
-           "GetChangedCompositionTypes out_num_elements mismatches the "
-           "number of layers.");
-  // Read back the changed composition types from SDM.
-  std::vector<SDMLayerId> changed_layers(num_changed_composition_types);
-  std::vector<int32_t> changed_composition_types(num_changed_composition_types);
-  display_error = draw_cycle_intf_->GetChangedCompositionTypes(
-      sdm_display_id_, &num_changed_composition_types, changed_layers.data(),
-      changed_composition_types.data());
-  ALOGE_IF(display_error != sdm::kErrorNone,
-           "GetChangedCompositionTypes failed: %s",
-           ErrorToString(display_error).c_str());
-  if (display_error == sdm::kErrorNone) {
-    // Iterate through the changed_layers and update the CompositionTypeMap with
-    // the corresponding changed_composition_type.
-    for (uint32_t i = 0; i < num_changed_composition_types; i++) {
-      const auto* hwc_layer = GetHwcLayer(changed_layers[i]);
-      if (hwc_layer == nullptr) {
-        ALOGE("couldn't find hwc layer id for sdm layer id: %d",
-              static_cast<int>(changed_layers[i]));
-        continue;
+  if (display_error != sdm::kErrorNone &&
+      display_error != sdm::kErrorNeedsCommit) {
+    ALOGW("CommitOrPrepare failed (%s); falling back to client composition",
+          ErrorToString(display_error).c_str());
+    flatten_reason = FlattenReason::kValidateFailed;
+    for (auto& [layer, composition_type] : composition_type_map) {
+      composition_type = CompositionType::kClient;
+      if (auto it = layer_mappings_.find(layer); it != layer_mappings_.end()) {
+        UpdateCompositionType(it->second, CompositionType::kClient);
       }
-      if (composition_type_map.count(hwc_layer) == 0) {
-        ALOGE("HwcLayer was not in the CompositionTypeMap.");
-        continue;
-      }
-      composition_type_map[hwc_layer] = SdmCompositionTypeToDrmHwc(
-          changed_composition_types[i]);
     }
-  }
+    if (!layer_mappings_.empty()) {
+      draw_cycle_intf_->LayerStackUpdated(sdm_display_id_);
+      display_error = draw_cycle_intf_->CommitOrPrepare(sdm_display_id_,
+                                                        validate_only,
+                                                        &out_retire_fence,
+                                                        &out_num_types,
+                                                        &out_num_requests,
+                                                        &out_needs_commit);
+      ALOGE_IF(display_error != sdm::kErrorNone &&
+                   display_error != sdm::kErrorNeedsCommit,
+               "Client fallback CommitOrPrepare failed: %s",
+               ErrorToString(display_error).c_str());
+    }
+    display_error = draw_cycle_intf_->AcceptDisplayChanges(sdm_display_id_);
+    ALOGE_IF(display_error != sdm::kErrorNone,
+             "AcceptDisplayChanges failed: %s",
+             ErrorToString(display_error).c_str());
+  } else {
+    display_error = draw_cycle_intf_->AcceptDisplayChanges(sdm_display_id_);
+    ALOGE_IF(display_error != sdm::kErrorNone,
+             "AcceptDisplayChanges failed: %s",
+             ErrorToString(display_error).c_str());
 
-  // Obtain the size for requested_layers and requested_masks.
-  int32_t display_reqs = 0;
-  uint32_t num_display_requests = 0;
-  display_error = draw_cycle_intf_->GetDisplayRequests(sdm_display_id_,
-                                                       &display_reqs,
-                                                       &num_display_requests,
-                                                       nullptr, nullptr);
-  ALOGE_IF(display_error != sdm::kErrorNone, "GetDisplayRequests failed: %s",
-           ErrorToString(display_error).c_str());
-  ALOGE_IF(num_display_requests != layer_mappings_.size(),
-           "GetDisplayRequests out_num_elements mismatches the "
-           "number of layers.");
-  // Get DisplayRequests from SDM.
-  std::vector<sdm::LayerId> requested_layers(num_display_requests);
-  std::vector<int32_t> requested_masks(num_display_requests);
-  display_error = draw_cycle_intf_->GetDisplayRequests(sdm_display_id_,
-                                                       &display_reqs,
-                                                       &num_display_requests,
-                                                       requested_layers.data(),
-                                                       requested_masks.data());
-  ALOGE_IF(display_error != sdm::kErrorNone, "GetDisplayRequests failed: %s",
-           ErrorToString(display_error).c_str());
-  // This doesn't appear to be set in SDM.
-  ALOGW_IF(display_reqs != 0, "Got unexpected display_reqs: %d", display_reqs);
-
-  std::vector<const HwcLayer*> punch_out_layers;
-  if (display_error == sdm::kErrorNone) {
-    // For each SDM layer id, find the corresponding HwcLayer.
-    for (uint32_t i = 0; i < num_display_requests; i++) {
-      const auto* hwc_layer = GetHwcLayer(requested_layers[i]);
-      if (hwc_layer == nullptr) {
-        ALOGE("couldn't find hwc layer id for sdm layer id: %d",
-              static_cast<int>(requested_layers[i]));
-        continue;
+    // Obtain the size for changed_layers and changed_composition_types.
+    // SDM returns only the subset of layers whose composition type changed
+    // (0 when all layers are accepted as DEVICE); only a count exceeding
+    // layer_mappings_.size() indicates an error.
+    uint32_t num_changed_composition_types = 0;
+    display_error = draw_cycle_intf_->GetChangedCompositionTypes(
+        sdm_display_id_, &num_changed_composition_types, nullptr, nullptr);
+    ALOGE_IF(display_error != sdm::kErrorNone,
+             "GetChangedCompositionTypes failed: %s",
+             ErrorToString(display_error).c_str());
+    ALOGE_IF(num_changed_composition_types > layer_mappings_.size(),
+             "GetChangedCompositionTypes out_num_elements (%u) exceeds the "
+             "number of layers (%zu).",
+             num_changed_composition_types, layer_mappings_.size());
+    if (display_error == sdm::kErrorNone && num_changed_composition_types > 0) {
+      // Read back the changed composition types from SDM.
+      std::vector<SDMLayerId> changed_layers(num_changed_composition_types);
+      std::vector<int32_t> changed_composition_types(
+          num_changed_composition_types);
+      display_error = draw_cycle_intf_->GetChangedCompositionTypes(
+          sdm_display_id_, &num_changed_composition_types,
+          changed_layers.data(), changed_composition_types.data());
+      ALOGE_IF(display_error != sdm::kErrorNone,
+               "GetChangedCompositionTypes failed: %s",
+               ErrorToString(display_error).c_str());
+      if (display_error == sdm::kErrorNone) {
+        // Iterate through the changed_layers and update the CompositionTypeMap
+        // with the corresponding changed_composition_type.
+        for (uint32_t i = 0; i < num_changed_composition_types; i++) {
+          const auto* hwc_layer = GetHwcLayer(changed_layers[i]);
+          if (hwc_layer == nullptr) {
+            ALOGE("couldn't find hwc layer id for sdm layer id: %d",
+                  static_cast<int>(changed_layers[i]));
+            continue;
+          }
+          if (composition_type_map.count(hwc_layer) == 0) {
+            ALOGE("HwcLayer was not in the CompositionTypeMap.");
+            continue;
+          }
+          composition_type_map[hwc_layer] = SdmCompositionTypeToDrmHwc(
+              changed_composition_types[i]);
+        }
       }
-      int32_t mask = requested_masks[i];
-      if ((mask & static_cast<int32_t>(
-                      sdm::SDMLayerRequest::ClearClientTarget)) != 0) {
-        punch_out_layers.push_back(hwc_layer);
+    }
+
+    // Obtain the size for requested_layers and requested_masks.
+    int32_t display_reqs = 0;
+    uint32_t num_display_requests = 0;
+    display_error = draw_cycle_intf_->GetDisplayRequests(sdm_display_id_,
+                                                         &display_reqs,
+                                                         &num_display_requests,
+                                                         nullptr, nullptr);
+    ALOGE_IF(display_error != sdm::kErrorNone, "GetDisplayRequests failed: %s",
+             ErrorToString(display_error).c_str());
+    ALOGE_IF(num_display_requests > layer_mappings_.size(),
+             "GetDisplayRequests out_num_elements (%u) exceeds the "
+             "number of layers (%zu).",
+             num_display_requests, layer_mappings_.size());
+    // This doesn't appear to be set in SDM.
+    ALOGW_IF(display_reqs != 0, "Got unexpected display_reqs: %d",
+             display_reqs);
+    if (display_error == sdm::kErrorNone && num_display_requests > 0) {
+      // Get DisplayRequests from SDM.
+      std::vector<sdm::LayerId> requested_layers(num_display_requests);
+      std::vector<int32_t> requested_masks(num_display_requests);
+      display_error = draw_cycle_intf_
+                          ->GetDisplayRequests(sdm_display_id_, &display_reqs,
+                                               &num_display_requests,
+                                               requested_layers.data(),
+                                               requested_masks.data());
+      ALOGE_IF(display_error != sdm::kErrorNone,
+               "GetDisplayRequests failed: %s",
+               ErrorToString(display_error).c_str());
+
+      if (display_error == sdm::kErrorNone) {
+        // For each SDM layer id, find the corresponding HwcLayer.
+        for (uint32_t i = 0; i < num_display_requests; i++) {
+          const auto* hwc_layer = GetHwcLayer(requested_layers[i]);
+          if (hwc_layer == nullptr) {
+            ALOGE("couldn't find hwc layer id for sdm layer id: %d",
+                  static_cast<int>(requested_layers[i]));
+            continue;
+          }
+          int32_t mask = requested_masks[i];
+          if ((mask & static_cast<int32_t>(
+                          sdm::SDMLayerRequest::ClearClientTarget)) != 0) {
+            punch_out_layers.push_back(hwc_layer);
+          }
+        }
       }
     }
   }
@@ -353,7 +394,7 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
                   .composition_types = composition_type_map,
                   .punch_out_layers = punch_out_layers,
                   .composition_plan = composition_plan,
-                  .flatten_reason = FlattenReason::kNone,
+                  .flatten_reason = flatten_reason,
                   .cursor_plane_validated = std::nullopt,
               },
           .short_circuited = false};
@@ -405,7 +446,8 @@ void SdmCompositionPlanner::UpdateLayerMapping(
 }
 
 void SdmCompositionPlanner::UpdateLayer(const HwcLayer* hwc_layer,
-                                        CompositionType composition_type) {
+                                        CompositionType composition_type,
+                                        uint32_t z_order) {
   if (layer_mappings_.count(hwc_layer) == 0) {
     ALOGE("couldn't find sdm layer for hwc layer");
     return;
@@ -421,7 +463,7 @@ void SdmCompositionPlanner::UpdateLayer(const HwcLayer* hwc_layer,
   UpdateLayerAlpha(sdm_layer_id, layer_data);
   UpdateLayerSourceCrop(sdm_layer_id, layer_data);
   UpdateLayerTransform(sdm_layer_id, layer_data);
-  UpdateZOrder(sdm_layer_id, hwc_layer->GetZOrder());
+  UpdateZOrder(sdm_layer_id, z_order);
   UpdateCompositionType(sdm_layer_id, composition_type);
   UpdateLayerDataspace(sdm_layer_id, layer_data);
   UpdateLayerBrightness(sdm_layer_id, layer_data);

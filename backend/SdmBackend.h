@@ -46,6 +46,8 @@ namespace android::drm_hwcomposer {
 // SdmBackend interfaces with Qualcomm's SDM library to implement a
 // drm_hwcomposer Backend.
 class SdmBackend : public Backend {
+  friend class SdmHotplugHandlerTest;
+
  public:
   using SdmDisplayId = uint64_t;
 
@@ -68,6 +70,10 @@ class SdmBackend : public Backend {
   static bool Init();
 
  private:
+  static bool BindPrimaryPlane(DrmDisplayPipeline* pipeline);
+  static void SetTestLifeCycleIntf(
+      std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf);
+  static SdmHotplugHandler& GetHotplugHandlerForTest();
   static std::optional<SdmDisplayId> GetDisplayIdForConnector(
       const DrmConnector& connector);
   static std::optional<SdmDisplayId> GetBuiltinDisplayId();

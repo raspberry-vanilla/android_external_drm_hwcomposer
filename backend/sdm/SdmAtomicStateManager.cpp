@@ -211,31 +211,38 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
   if (args.display_mode) {
     auto sdm_config_idx = GetSdmConfigId(*args.display_mode);
     if (sdm_config_idx.has_value()) {
-      ALOGV("Setting active SDM config %u for mode %s", *sdm_config_idx,
-            args.display_mode->GetName().c_str());
-      sdm::DisplayError display_error = sdm::kErrorNone;
-      // TODO (b/544508262): Use SetActiveConfig for both seamless and
-      // non-seamless changes.
-      if (args.seamless && IsSeamlessConfigChange(*args.display_mode)) {
-        ALOGV("Executing seamless mode change using SetActiveConfigIndex");
-        display_error = draw_cycle_intf_->SetActiveConfigIndex(sdm_display_id_,
-                                                               *sdm_config_idx);
-        if (display_error != sdm::kErrorNone) {
-          ALOGE("SetActiveConfigIndex failed: %s",
-                ErrorToString(display_error).c_str());
-          return std::nullopt;
+      if (!IsActive() || !active_sdm_config_id_.has_value() ||
+          *active_sdm_config_id_ != *sdm_config_idx) {
+        ALOGV("Setting active SDM config %u for mode %s", *sdm_config_idx,
+              args.display_mode->GetName().c_str());
+        sdm::DisplayError display_error = sdm::kErrorNone;
+        // TODO (b/544508262): Use SetActiveConfig for both seamless and
+        // non-seamless changes.
+        if (args.seamless && IsSeamlessConfigChange(*args.display_mode)) {
+          ALOGV("Executing seamless mode change using SetActiveConfigIndex");
+          display_error = draw_cycle_intf_
+                              ->SetActiveConfigIndex(sdm_display_id_,
+                                                     *sdm_config_idx);
+          if (display_error != sdm::kErrorNone) {
+            ALOGE("SetActiveConfigIndex failed: %s",
+                  ErrorToString(display_error).c_str());
+            return std::nullopt;
+          }
+        } else {
+          ALOGV("Executing non-seamless mode change using SetActiveConfig");
+          display_error = settings_intf_->SetActiveConfig(sdm_display_id_,
+                                                          *sdm_config_idx);
+          if (display_error != sdm::kErrorNone) {
+            ALOGE("SetActiveConfig failed: %s",
+                  ErrorToString(display_error).c_str());
+            return std::nullopt;
+          }
         }
-      } else {
-        ALOGV("Executing non-seamless mode change using SetActiveConfig");
-        display_error = settings_intf_->SetActiveConfig(sdm_display_id_,
-                                                        *sdm_config_idx);
-        if (display_error != sdm::kErrorNone) {
-          ALOGE("SetActiveConfig failed: %s",
-                ErrorToString(display_error).c_str());
-          return std::nullopt;
-        }
+        active_sdm_config_id_ = sdm_config_idx;
+        last_color_mode_ = std::nullopt;
+        last_color_matrix_ = nullptr;
+        last_brightness_nits_ = std::nullopt;
       }
-      active_sdm_config_id_ = sdm_config_idx;
     } else {
       ALOGE("Failed to find SDM config for DRM mode %s (vsync %d ns)",
             args.display_mode->GetName().c_str(),
@@ -285,6 +292,19 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
     }
     last_color_matrix_ = args.color_matrix;
   }
+  if (args.brightness_nits &&
+      (!last_brightness_nits_ ||
+       *args.brightness_nits != *last_brightness_nits_)) {
+    auto display_error = settings_intf_
+                             ->SetDisplayBrightnessNits(sdm_display_id_,
+                                                        args.brightness_nits
+                                                            .value());
+    if (display_error != sdm::kErrorNone) {
+      ALOGW("SetDisplayBrightnessNits failed (non-fatal): %s",
+            ErrorToString(display_error).c_str());
+    }
+    last_brightness_nits_ = args.brightness_nits;
+  }
   if (args.composition) {
     if (!UpdateClientTarget(*args.composition)) {
       ALOGE("UpdateClientTarget failed");
@@ -301,17 +321,6 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
     if (out_retire_fence) {
       // Dup to take ownership of new fence.
       result.present_fence = MakeSharedFd(sdm::Fence::Dup(out_retire_fence));
-    }
-  }
-  if (args.brightness_nits) {
-    auto display_error = settings_intf_
-                             ->SetDisplayBrightnessNits(sdm_display_id_,
-                                                        args.brightness_nits
-                                                            .value());
-    if (display_error != sdm::kErrorNone) {
-      ALOGE("SetDisplayBrightnessNits failed: %s",
-            ErrorToString(display_error).c_str());
-      return std::nullopt;
     }
   }
   return result;
@@ -349,6 +358,10 @@ bool SdmAtomicStateManager::UpdateClientTarget(
   std::shared_ptr<SnapAllocHandle>
       snap_handle = std::static_pointer_cast<SnapAllocHandle>(
           layer_data->bi->fds_shared);
+  if (!snap_handle) {
+    ALOGE("Client target layer has null SnapAllocHandle");
+    return false;
+  }
   std::shared_ptr<sdm::Fence> acquire_fence;
   if (layer_data->acquire_fence != nullptr) {
     acquire_fence = sdm::Fence::Create(DupFd(layer_data->acquire_fence),

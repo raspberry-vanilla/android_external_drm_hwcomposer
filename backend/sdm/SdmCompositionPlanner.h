@@ -49,7 +49,8 @@ class SdmCompositionPlanner : public CompositionPlanner {
   using SDMLayerId = int64_t;
 
   void UpdateLayerMapping(const ICompositorDisplay& display);
-  void UpdateLayer(const HwcLayer* hwc_layer, CompositionType composition_type);
+  void UpdateLayer(const HwcLayer* hwc_layer, CompositionType composition_type,
+                   uint32_t z_order);
 
   void UpdateLayerBuffer(SDMLayerId sdm_layer_id, const LayerData& layer_data);
   void UpdateLayerBlendMode(SDMLayerId sdm_layer_id,

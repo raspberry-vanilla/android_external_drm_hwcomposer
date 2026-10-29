@@ -16,6 +16,7 @@
 
 #include "backend/sdm/SdmAtomicStateManager.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -60,13 +61,27 @@ using ::testing::SetArgPointee;
 
 constexpr uint64_t kTestSdmDisplayId = 52;
 constexpr uint32_t kTestSdmConfigId = 1;
+constexpr uint32_t kTestAltFpsSdmConfigId = 2;
+constexpr uint32_t kTestAltResSdmConfigId = 3;
 constexpr uint16_t kTestWidth = 1920;
 constexpr uint16_t kTestHeight = 1080;
+constexpr uint16_t kTestAltWidth = 2560;
+constexpr uint16_t kTestAltHeight = 1440;
 constexpr uint32_t kTestFps = 60;
+constexpr uint32_t kTestAltFps = 120;
 constexpr uint32_t kTestVsyncPeriodNs = 16666666;
+constexpr uint32_t kTestAltVsyncPeriodNs = 8333333;
+constexpr int kTestConfigGroupDefault = 0;
+constexpr int kTestConfigGroupAltRes = 1;
 constexpr uint16_t kTestHBlank = 160;
 constexpr uint16_t kTestVBlank = 45;
 constexpr uint32_t kTestKhzDivisor = 1000;
+constexpr float kTestBrightnessNits = 250.0F;
+constexpr float kTestBrightnessNitsAlt = 600.0F;
+constexpr float kMatrixScaleA = 0.85F;
+constexpr size_t kMatrixIndexB = 5;
+constexpr float kMatrixScaleB = 0.65F;
+constexpr float kMatrixScaleRetry = 0.75F;
 
 class MockSdmLifeCycleIntf : public sdm::SDMDisplayLifeCycleIntf {
  public:
@@ -174,6 +189,23 @@ struct SdmAtomicStateManagerTest : public ::testing::Test {
     cfg.fps = kTestFps;
     cfg.vsync_period_ns = kTestVsyncPeriodNs;
     configs[kTestSdmConfigId] = cfg;
+
+    sdm::DisplayConfigVariableInfo alt_fps_cfg = cfg;
+    alt_fps_cfg.fps = kTestAltFps;
+    alt_fps_cfg.vsync_period_ns = kTestAltVsyncPeriodNs;
+    configs[kTestAltFpsSdmConfigId] = alt_fps_cfg;
+
+    sdm::DisplayConfigVariableInfo alt_res_cfg = cfg;
+    alt_res_cfg.x_pixels = kTestAltWidth;
+    alt_res_cfg.y_pixels = kTestAltHeight;
+    configs[kTestAltResSdmConfigId] = alt_res_cfg;
+
+    ON_CALL(settings_intf, GetDisplayConfigGroup(kTestSdmDisplayId, _))
+        .WillByDefault([](uint64_t,
+                          const sdm::DisplayConfigVariableInfo& config_info) {
+          return config_info.x_pixels == kTestWidth ? kTestConfigGroupDefault
+                                                    : kTestConfigGroupAltRes;
+        });
 
     ON_CALL(settings_intf, GetAllDisplayAttributes(kTestSdmDisplayId, _))
         .WillByDefault(
@@ -336,5 +368,302 @@ TEST_F(SdmAtomicStateManagerTest,
   EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
 }
 
+TEST_F(SdmAtomicStateManagerTest,
+       ClientTargetWithNullSnapAllocHandleFailsWithoutPresentDisplay) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData client_layer{};
+  client_layer.bi = BufferInfo{};
+  client_layer.bi->fds_shared = nullptr;
+  plan->plan.emplace_back(std::move(client_layer), nullptr, 0);
+  plan->client_z_order = 0;
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+
+  EXPECT_CALL(draw_cycle_intf, SetClientTarget(_, _, _, _, _, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(_, _)).Times(0);
+
+  EXPECT_FALSE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       BrightnessFailureDoesNotAbortFrameOrDropPresentFence) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+  frame_args.brightness_nits = kTestBrightnessNits;
+
+  {
+    InSequence seq;
+    EXPECT_CALL(settings_intf, SetDisplayBrightnessNits(kTestSdmDisplayId,
+                                                        kTestBrightnessNits))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNotSupported));
+    EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+        .Times(1)
+        .WillOnce(Return(sdm::kErrorNone));
+  }
+
+  auto result = manager->ExecuteAtomicCommit(frame_args);
+  EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitCachesAndDeduplicatesBrightnessNits) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.composition = plan;
+  frame_args.brightness_nits = kTestBrightnessNits;
+
+  EXPECT_CALL(settings_intf,
+              SetDisplayBrightnessNits(kTestSdmDisplayId, kTestBrightnessNits))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .WillRepeatedly(Return(sdm::kErrorNone));
+
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+
+  frame_args.brightness_nits = kTestBrightnessNitsAlt;
+  EXPECT_CALL(settings_intf, SetDisplayBrightnessNits(kTestSdmDisplayId,
+                                                      kTestBrightnessNitsAlt))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       SeamlessRefreshRateSwitchOnActiveDisplayCallsSetActiveConfigIndex) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  AtomicCommitArgs mrr_args{};
+  mrr_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight, kTestAltFps);
+  mrr_args.seamless = true;
+
+  EXPECT_CALL(settings_intf, SetActiveConfig(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf,
+              SetActiveConfigIndex(kTestSdmDisplayId, kTestAltFpsSdmConfigId))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(mrr_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ResolutionChangeOnActiveDisplayCallsSetActiveConfig) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  AtomicCommitArgs modeset_args{};
+  modeset_args.display_mode = MakeTestDrmMode(kTestAltWidth, kTestAltHeight,
+                                              kTestFps);
+  modeset_args.seamless = false;
+
+  EXPECT_CALL(draw_cycle_intf, SetActiveConfigIndex(_, _)).Times(0);
+  EXPECT_CALL(settings_intf,
+              SetActiveConfig(kTestSdmDisplayId, kTestAltResSdmConfigId))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(modeset_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       RedundantDisplayModeOnActiveDisplaySkipsSetActiveConfig) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight,
+                                               kTestFps);
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(settings_intf, SetActiveConfig(kTestSdmDisplayId, kTestSdmConfigId))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+  ASSERT_TRUE(manager->IsActive());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  AtomicCommitArgs frame_args{};
+  frame_args.display_mode = MakeTestDrmMode(kTestWidth, kTestHeight, kTestFps);
+  frame_args.composition = plan;
+
+  EXPECT_CALL(settings_intf, SetActiveConfig(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, SetActiveConfigIndex(_, _)).Times(0);
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(frame_args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitCachesColorModeAndColorMatrixAcrossCommits) {
+  InitManagerWithNativeColorMode();
+
+  auto matrix_a = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix_a)[0] = kMatrixScaleA;
+  const std::vector<float> expected_matrix_a(matrix_a->begin(),
+                                             matrix_a->end());
+
+  // Commit 1: initial color_mode and color_matrix are forwarded to SDM.
+  EXPECT_CALL(settings_intf,
+              SetColorModeWithRenderIntent(kTestSdmDisplayId,
+                                           static_cast<int32_t>(
+                                               ColorMode::kDisplayP3),
+                                           0))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix_a))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  AtomicCommitArgs commit1{};
+  commit1.color_mode = ColorMode::kDisplayP3;
+  commit1.color_matrix = matrix_a;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit1).has_value());
+
+  // Intermediate steady-state pageflip with unset color args must preserve
+  // cached color state without invoking SDM.
+  EXPECT_CALL(settings_intf, SetColorModeWithRenderIntent(_, _, _)).Times(0);
+  EXPECT_CALL(settings_intf, SetColorTransform(_, _)).Times(0);
+
+  AtomicCommitArgs empty_commit{};
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(empty_commit).has_value());
+
+  // Commit 2: identical color_mode and a distinct shared_ptr with identical
+  // matrix contents must be skipped via value-comparison caching (b/555745603).
+  auto matrix_a_copy = std::make_shared<HalColorTransformMatrix>(*matrix_a);
+  AtomicCommitArgs commit2{};
+  commit2.color_mode = ColorMode::kDisplayP3;
+  commit2.color_matrix = matrix_a_copy;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit2).has_value());
+
+  // Commit 3: changed color_mode and changed color_matrix are forwarded to SDM.
+  auto matrix_b = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix_b)[kMatrixIndexB] = kMatrixScaleB;
+  const std::vector<float> expected_matrix_b(matrix_b->begin(),
+                                             matrix_b->end());
+
+  EXPECT_CALL(settings_intf, SetColorModeWithRenderIntent(kTestSdmDisplayId,
+                                                          static_cast<int32_t>(
+                                                              ColorMode::kSrgb),
+                                                          0))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix_b))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  AtomicCommitArgs commit3{};
+  commit3.color_mode = ColorMode::kSrgb;
+  commit3.color_matrix = matrix_b;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit3).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       FailedSetColorTransformDoesNotUpdateCachedValue) {
+  InitManagerWithNativeColorMode();
+
+  AtomicCommitArgs power_on_args{};
+  power_on_args.power_mode = PowerMode::kOn;
+  ON_CALL(lifecycle_intf, SetPowerMode(kTestSdmDisplayId, _))
+      .WillByDefault(Return(sdm::kErrorNone));
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(power_on_args).has_value());
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData client_layer{};
+  client_layer.bi = BufferInfo{};
+  client_layer.bi->fds_shared = SnapAllocHandle::Create(nullptr);
+  plan->plan.emplace_back(std::move(client_layer), nullptr, 0);
+  plan->client_z_order = 0;
+
+  auto matrix = std::make_shared<HalColorTransformMatrix>(kIdentityMatrix);
+  (*matrix)[0] = kMatrixScaleRetry;
+  const std::vector<float> expected_matrix(matrix->begin(), matrix->end());
+
+  AtomicCommitArgs args{};
+  args.color_matrix = matrix;
+  args.composition = plan;
+
+  // First commit: SetColorTransform fails, aborting the commit before present.
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNotSupported));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(_, _)).Times(0);
+
+  EXPECT_FALSE(manager->ExecuteAtomicCommit(args).has_value());
+
+  // Second commit with the same args: cached last_color_matrix_ was not
+  // updated, so SetColorTransform is retried. When it succeeds, PresentDisplay
+  // proceeds.
+  EXPECT_CALL(settings_intf,
+              SetColorTransform(kTestSdmDisplayId, expected_matrix))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf,
+              SetClientTarget(kTestSdmDisplayId, nullptr, _, _, _, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
+}
 }  // namespace
 }  // namespace android::drm_hwcomposer

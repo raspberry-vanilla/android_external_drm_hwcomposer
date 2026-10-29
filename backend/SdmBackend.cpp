@@ -27,7 +27,6 @@
 #include <vector>
 
 #include <cutils/native_handle.h>
-#include <ui/GraphicTypes.h>
 #include <xf86drmMode.h>
 
 #include <core/sdm_types.h>
@@ -105,11 +104,23 @@ void SdmBackend::SetRefreshCallbackForConnector(uint32_t connector_id,
 
 void SdmBackend::SetHotplugHandler(HotplugHandler handler) {
   bool enable = (handler != nullptr);
-  hotplug_handler.SetHotplugHandler(std::move(handler));
-  if (life_cycle_intf) {
+  if (!enable && life_cycle_intf) {
     life_cycle_intf->RegisterCompositorCallback(callback_interface.get(),
-                                                enable);
+                                                false);
   }
+  hotplug_handler.SetHotplugHandler(std::move(handler));
+  if (enable && life_cycle_intf) {
+    life_cycle_intf->RegisterCompositorCallback(callback_interface.get(), true);
+  }
+}
+
+void SdmBackend::SetTestLifeCycleIntf(
+    std::shared_ptr<sdm::SDMDisplayLifeCycleIntf> intf) {
+  life_cycle_intf = std::move(intf);
+}
+
+SdmHotplugHandler& SdmBackend::GetHotplugHandlerForTest() {
+  return hotplug_handler;
 }
 
 namespace {
@@ -479,35 +490,6 @@ class SdmAtomicCommitSink : public AtomicCommitSink {
   }
 };
 
-// Returns true if a primary plane was found and bound to the pipeline, false
-// otherwise.
-bool BindPrimaryPlane(DrmDisplayPipeline* pipeline) {
-  // Find planes that are compatible with the crtc.
-  std::vector<DrmPlane*> compatible_planes;
-  for (const auto& plane : pipeline->device->GetPlanes()) {
-    if (plane->IsCrtcSupported(*pipeline->crtc->Get())) {
-      compatible_planes.push_back(plane.get());
-    }
-  }
-  if (compatible_planes.empty()) {
-    ALOGE("Couldn't find any compatible planes for crtc %d",
-          pipeline->crtc->Get()->GetId());
-    return false;
-  }
-
-  // Find an unbound primary plane and bind it.
-  for (auto& plane : compatible_planes) {
-    if (plane->GetType() != DRM_PLANE_TYPE_PRIMARY) {
-      continue;
-    }
-    pipeline->primary_plane = plane->BindPipeline(pipeline);
-    if (pipeline->primary_plane != nullptr) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Find the encoder currently associated with this connector. If there is no
 // such encoder, pick the first compatible one.
 DrmEncoder* GetEncoderForConnector(const DrmConnector& connector) {
@@ -554,6 +536,66 @@ DrmCrtc* GetCrtcForEncoder(DrmDevice& device, DrmEncoder& encoder) {
 constexpr const char* kDriverName = "msm_drm";
 
 }  // namespace
+
+// Returns true if a primary plane was found and bound to the pipeline, false
+// otherwise.
+bool SdmBackend::BindPrimaryPlane(DrmDisplayPipeline* pipeline) {
+  // Find planes that are compatible with the crtc.
+  std::vector<DrmPlane*> compatible_planes;
+  for (const auto& plane : pipeline->device->GetPlanes()) {
+    if (plane->IsCrtcSupported(*pipeline->crtc->Get())) {
+      compatible_planes.push_back(plane.get());
+    }
+  }
+  if (compatible_planes.empty()) {
+    ALOGE("Couldn't find any compatible planes for crtc %d",
+          pipeline->crtc->Get()->GetId());
+    return false;
+  }
+
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+
+  // First, prefer a primary plane already active on this CRTC.
+  for (auto& plane : compatible_planes) {
+    if (plane->GetType() != DRM_PLANE_TYPE_PRIMARY ||
+        plane->GetPipeline() != nullptr) {
+      continue;
+    }
+    if (plane->GetCrtcProperty().GetValue().value_or(0) == crtc_id) {
+      pipeline->primary_plane = plane->BindPipeline(pipeline);
+      if (pipeline->primary_plane != nullptr) {
+        return true;
+      }
+    }
+  }
+
+  // Second, prefer an idle primary plane (CRTC_ID == 0) so we do not steal a
+  // shared SSPP currently active on another CRTC.
+  for (auto& plane : compatible_planes) {
+    if (plane->GetType() != DRM_PLANE_TYPE_PRIMARY ||
+        plane->GetPipeline() != nullptr) {
+      continue;
+    }
+    if (plane->GetCrtcProperty().GetValue().value_or(0) == 0) {
+      pipeline->primary_plane = plane->BindPipeline(pipeline);
+      if (pipeline->primary_plane != nullptr) {
+        return true;
+      }
+    }
+  }
+
+  // Fallback: bind any compatible unbound primary plane.
+  for (auto& plane : compatible_planes) {
+    if (plane->GetType() != DRM_PLANE_TYPE_PRIMARY) {
+      continue;
+    }
+    pipeline->primary_plane = plane->BindPipeline(pipeline);
+    if (pipeline->primary_plane != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Default base class initialization will associate this backend with the
 // msm_drm drm device.

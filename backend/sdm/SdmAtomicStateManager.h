@@ -92,6 +92,7 @@ class SdmAtomicStateManager : public AtomicStateManager {
   // commit.
   std::optional<ColorMode> last_color_mode_;
   std::shared_ptr<const HalColorTransformMatrix> last_color_matrix_;
+  std::optional<float> last_brightness_nits_;
   std::map<uint32_t, sdm::DisplayConfigVariableInfo> sdm_configs_;
   std::optional<uint32_t> active_sdm_config_id_;
 };

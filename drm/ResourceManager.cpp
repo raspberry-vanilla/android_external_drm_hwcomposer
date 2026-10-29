@@ -145,7 +145,6 @@ bool HasDelayedEdidQuirk(DrmConnector *conn) {
 
 }  // namespace
 
-
 ResourceManager::ResourceManager(
     PipelineToFrontendBindingInterface *p2f_bind_interface)
     : frontend_interface_(p2f_bind_interface) {
@@ -164,6 +163,38 @@ void ResourceManager::ReloadProperties() {
   force_color_mode_ = Properties::ForceColorMode();
   persistent_hdr_enabled_ = Properties::PersistentHdrEnabled();
   external_hdr_enabled_ = Properties::ExternalHdrEnabled();
+}
+
+auto ResourceManager::GetConnectorTileGroupKey(DrmConnector *conn)
+    -> std::optional<TileGroupKey> {
+  if (conn == nullptr) {
+    return std::nullopt;
+  }
+  auto tile_info = conn->GetTileInfo();
+  if (!tile_info) {
+    return std::nullopt;
+  }
+  if (tile_info->tile_is_single_monitor && tile_info->group_id > 0 &&
+      (tile_info->num_h_tile * tile_info->num_v_tile) > 1) {
+    return std::make_pair(&conn->GetDev(), tile_info->group_id);
+  }
+  return std::nullopt;
+}
+
+auto ResourceManager::FindAttachedSiblingTileConnector(DrmConnector *conn) const
+    -> DrmConnector * {
+  auto tile_key = GetConnectorTileGroupKey(conn);
+  if (!tile_key.has_value()) {
+    return nullptr;
+  }
+  for (const auto &[existing_conn, existing_key] : attached_tile_groups_) {
+    if (existing_conn != conn &&
+        attached_pipelines_.count(existing_conn) != 0 &&
+        existing_key == *tile_key) {
+      return existing_conn;
+    }
+  }
+  return nullptr;
 }
 
 void ResourceManager::Init() {
@@ -274,11 +305,7 @@ void ResourceManager::Init() {
                        "ResourceManager: connector %u connected state mismatch "
                        "(DRM=%d, backend=%d)",
                        connector_id, conn->IsConnected(), connected);
-              auto it = attached_pipelines_.find(conn);
-              if (it != attached_pipelines_.end()) {
-                frontend_interface_->UnbindDisplay(it->second);
-                attached_pipelines_.erase(it);
-              }
+              DetachConnector(conn);
             } else {
               ProcessHotplugForConnector(conn);
               ALOGW_IF(!conn->IsConnected(),
@@ -569,10 +596,8 @@ bool ResourceManager::UpdateFrontendDisplays(
   auto ordered_connectors = GetOrderedConnectors();
   bool needs_settle_reprobe = false;
 
-  // Pass 1: Update modes and properties on all connectors (when requested) and
-  // detach any disconnected connectors first so their shared CRTCs, encoders,
-  // and planes are released before Pass 2 allocates pipelines for newly
-  // connected ones.
+  // Pass 1: Update modes and properties on all connectors (when requested)
+  // first.
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
       continue;
@@ -581,17 +606,19 @@ bool ResourceManager::UpdateFrontendDisplays(
         (conn->UpdateModesAndProperties() != 0 || conn->IsDeleted())) {
       needs_settle_reprobe = true;
     }
-    if (!conn->IsConnected()) {
-      auto it = attached_pipelines_.find(conn);
-      if (it != attached_pipelines_.end()) {
-        ALOGI("Detaching connector %s", conn->GetName().c_str());
-        frontend_interface_->UnbindDisplay(it->second);
-        attached_pipelines_.erase(it);
-      }
+  }
+
+  // Pass 2: Process disconnections first so their shared CRTCs, encoders, and
+  // planes are released before allocating new pipelines, and so an active tiled
+  // connector that is unplugged can fail over in-place to a remaining connected
+  // sibling tile connector.
+  for (auto *conn : ordered_connectors) {
+    if (conn != nullptr && !conn->IsConnected()) {
+      ProcessHotplugForConnector(conn, false);
     }
   }
 
-  // Pass 2: Attach pipelines for newly connected connectors using the
+  // Pass 3: Attach pipelines for newly connected connectors using the
   // connector state already probed in Pass 1 (or off-lock).
   for (auto *conn : ordered_connectors) {
     if (conn == nullptr) {
@@ -608,7 +635,8 @@ bool ResourceManager::UpdateFrontendDisplays(
                                refresh_status_props, check_status_props,
                                cp_was_updated);
     if (conn->IsUnknownConnection() ||
-        (conn->IsConnected() && attached_pipelines_.count(conn) == 0)) {
+        (conn->IsConnected() && attached_pipelines_.count(conn) == 0 &&
+         FindAttachedSiblingTileConnector(conn) == nullptr)) {
       needs_settle_reprobe = true;
     }
   }
@@ -633,10 +661,17 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
   auto attached = (it != attached_pipelines_.end());
 
   if (connected != attached) {
-    ALOGI("%s connector %s", connected ? "Attaching" : "Detaching",
-          conn->GetName().c_str());
-
     if (connected) {
+      if (auto *existing_conn = FindAttachedSiblingTileConnector(conn)) {
+        ALOGI(
+            "Ignoring connector %s (id=%u): sibling tile connector %s "
+            "(id=%u) is already attached for this tiled display",
+            conn->GetName().c_str(), conn->GetId(),
+            existing_conn->GetName().c_str(), existing_conn->GetId());
+        return;
+      }
+      auto tile_key = GetConnectorTileGroupKey(conn);
+      ALOGI("Attaching connector %s", conn->GetName().c_str());
       if (conn->GetModes().empty()) {
         const bool link_good = refresh_status_props
                                    ? conn->IsLinkStatusGood()
@@ -661,6 +696,9 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
         // modes are available.
         if (frontend_interface_->BindDisplay(pipeline)) {
           attached_pipelines_[conn] = std::move(pipeline);
+          if (tile_key.has_value()) {
+            attached_tile_groups_[conn] = *tile_key;
+          }
         } else {
           ALOGW(
               "Failed to bind display for connector %s; leaving connector "
@@ -669,8 +707,7 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
         }
       }
     } else {
-      frontend_interface_->UnbindDisplay(it->second);
-      attached_pipelines_.erase(it);
+      DetachConnector(conn, update_modes);
     }
   } else if (connected && check_status_props) {
     auto attached_it = attached_pipelines_.find(conn);
@@ -703,6 +740,64 @@ void ResourceManager::ProcessHotplugForConnector(DrmConnector *conn,
   }
 }
 
+void ResourceManager::DetachConnector(DrmConnector *conn, bool update_modes) {
+  auto it = attached_pipelines_.find(conn);
+  if (it == attached_pipelines_.end()) {
+    return;
+  }
+
+  ALOGI("Detaching connector %s", conn->GetName().c_str());
+
+  bool failed_over = false;
+  auto tile_it = attached_tile_groups_.find(conn);
+  if (tile_it != attached_tile_groups_.end()) {
+    const TileGroupKey detached_key = tile_it->second;
+    for (auto *candidate : GetOrderedConnectors()) {
+      if (candidate == conn || attached_pipelines_.count(candidate) != 0) {
+        continue;
+      }
+      if (update_modes) {
+        candidate->UpdateModesAndProperties();
+      }
+      if (!candidate->IsConnected() || candidate->GetModes().empty()) {
+        continue;
+      }
+      auto candidate_key = GetConnectorTileGroupKey(candidate);
+      if (!candidate_key.has_value() || detached_key != *candidate_key) {
+        continue;
+      }
+
+      ALOGI(
+          "Failing over tiled display from detached connector %s (id=%u) "
+          "to connected sibling connector %s (id=%u)",
+          conn->GetName().c_str(), conn->GetId(), candidate->GetName().c_str(),
+          candidate->GetId());
+
+      std::shared_ptr<DrmDisplayPipeline>
+          new_pipeline = candidate->GetDev().GetBackend().CreatePipeline(
+              *candidate);
+      ALOGE_IF(new_pipeline == nullptr,
+               "Failed to create failover pipeline for connector %s",
+               candidate->GetName().c_str());
+      if (new_pipeline &&
+          frontend_interface_->ReplaceDisplay(it->second, new_pipeline)) {
+        attached_pipelines_.erase(it);
+        attached_tile_groups_.erase(tile_it);
+        attached_pipelines_[candidate] = std::move(new_pipeline);
+        attached_tile_groups_[candidate] = *candidate_key;
+        failed_over = true;
+        break;
+      }
+    }
+  }
+
+  if (!failed_over) {
+    frontend_interface_->UnbindDisplay(it->second);
+    attached_pipelines_.erase(it);
+    attached_tile_groups_.erase(conn);
+  }
+}
+
 void ResourceManager::DetachStalePipelines(
     const std::vector<std::unique_ptr<DrmConnector>> &stale_connectors) {
   for (const auto &conn : stale_connectors) {
@@ -712,6 +807,7 @@ void ResourceManager::DetachStalePipelines(
             conn->GetName().c_str(), conn->GetId());
       frontend_interface_->UnbindDisplay(it->second);
       attached_pipelines_.erase(it);
+      attached_tile_groups_.erase(conn.get());
     }
   }
 }
@@ -721,6 +817,7 @@ void ResourceManager::DetachAllFrontendDisplays() {
     frontend_interface_->UnbindDisplay(p.second);
   }
   attached_pipelines_.clear();
+  attached_tile_groups_.clear();
   frontend_interface_->FinalizeDisplayBinding();
 }
 
@@ -858,6 +955,7 @@ void ResourceManager::MaybeScheduleDelayedEdidRecovery() {
         ALOGI("Tearing down DP link on %s for delayed-EDID recovery",
               conn->GetName().c_str());
         frontend_interface_->UnbindDisplay(it->second);
+        attached_tile_groups_.erase(conn);
         it = attached_pipelines_.erase(it);
       } else {
         ++it;

@@ -23,7 +23,6 @@
 
 #include "bufferinfo/BufferInfo.h"
 #include "drm/DrmFbImporter.h"
-#include "utils/log.h"
 
 namespace android::drm_hwcomposer {
 
@@ -41,9 +40,11 @@ void HwcBufferCache::SetSlot(int32_t slot_id,
       .bi = bi.value(),
       .fb = {},
   };
-  bool success = ImportFb(slots_[slot_id]);
-  ALOGE_IF(!success, "Unable to create framebuffer object for layer %p slot %d",
-           this, slot_id);
+  // Do not log ALOGE when ImportFb returns false: importer_ legitimately
+  // returns nullptr in headless mode and on backends without DRM FB import
+  // (such as SdmBackend's StubFbImporter), while DrmFbCachedImporter logs
+  // specific DRM errors directly.
+  ImportFb(slots_[slot_id]);
 }
 
 std::optional<BufferInfo> HwcBufferCache::GetBufferInfo(int32_t slot_id) {
@@ -63,8 +64,6 @@ std::shared_ptr<DrmFbIdHandle> HwcBufferCache::GetFb(int32_t slot_id) {
   // headless mode (where importer_ returns nullptr) are lazily imported once a
   // physical pipeline is attached.
   if (!ImportFb(*slot_entry)) {
-    ALOGE("Unable to create framebuffer object for layer %p slot %d", this,
-          slot_id);
     return nullptr;
   }
   return slot_entry->fb;
