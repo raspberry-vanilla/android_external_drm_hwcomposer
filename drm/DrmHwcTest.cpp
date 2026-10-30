@@ -256,6 +256,15 @@ struct DrmHwcTest : public ::testing::Test {
     fake_device->InitializeConnectorPorts();
   }
 
+  DrmConnector* FindConnectorById(uint32_t id) const {
+    for (const auto& conn : fake_device->GetConnectors()) {
+      if (conn->GetId() == id) {
+        return conn.get();
+      }
+    }
+    return nullptr;
+  }
+
   std::unique_ptr<FakeDrmDevice> fake_device;
   RecordingDrmHwc hwc;
 };
@@ -2861,6 +2870,85 @@ TEST_F(DrmHwcTest,
             kActiveBaseConnId + kDynamicPoolCount - 1);
   EXPECT_EQ(fake_device->GetConnectors().back()->GetIndexInResArray(),
             DrmDevice::kMaxPortsPerDevice - 1);
+}
+
+TEST_F(DrmHwcTest,
+       InitializeConnectorPortsSeparatesUnpopulatedPathMstFromNativePorts) {
+  constexpr uint32_t kVirtual1ConnId = 34;
+  constexpr uint32_t kEdp1ConnId = 66;
+  constexpr uint32_t kDp1RootConnId = 74;
+  constexpr uint32_t kMstDp2ConnId = 348;
+  constexpr uint32_t kMstDp3ConnId = 353;
+  constexpr uint32_t kTypeIdOne = 1;
+  constexpr uint32_t kTypeIdTwo = 2;
+  constexpr uint32_t kTypeIdThree = 3;
+
+  auto* virt1 = fake_device->AddTypedConnector(kVirtual1ConnId,
+                                               DRM_MODE_CONNECTOR_VIRTUAL,
+                                               kTypeIdOne,
+                                               /*is_external=*/true);
+  auto* edp1 = fake_device->AddTypedConnector(kEdp1ConnId,
+                                              DRM_MODE_CONNECTOR_eDP,
+                                              kTypeIdOne,
+                                              /*is_external=*/false);
+  auto* dp1 = fake_device->AddTypedConnector(kDp1RootConnId,
+                                             DRM_MODE_CONNECTOR_DisplayPort,
+                                             kTypeIdOne, /*is_external=*/true);
+  auto* mst_dp2 = fake_device->AddTypedConnector(kMstDp2ConnId,
+                                                 DRM_MODE_CONNECTOR_DisplayPort,
+                                                 kTypeIdTwo,
+                                                 /*is_external=*/true);
+  auto* mst_dp3 = fake_device->AddTypedConnector(kMstDp3ConnId,
+                                                 DRM_MODE_CONNECTOR_DisplayPort,
+                                                 kTypeIdThree,
+                                                 /*is_external=*/true);
+  mst_dp2->SetMstPath("");
+  mst_dp3->SetMstPath("");
+
+  fake_device->InitializeConnectorPorts();
+
+  // GetIndexInResArray() stores the assigned HWC port ID. Because mst_dp2 and
+  // mst_dp3 (DRM_MODE_CONNECTOR_DisplayPort = 10) still report IsMst() == true
+  // when their PATH property has an empty blob, they are excluded from the
+  // static native pool (ports 0..2: edp1=0, dp1=1, virt1[VIRTUAL=15]=2) and
+  // assigned dynamic ports starting at native_ports_count_ (3 and 4) instead of
+  // sorting ahead of virt1 as native DisplayPort connectors.
+  EXPECT_EQ(edp1->GetIndexInResArray(), 0U);
+  EXPECT_EQ(dp1->GetIndexInResArray(), 1U);
+  EXPECT_EQ(virt1->GetIndexInResArray(), 2U);
+  EXPECT_EQ(mst_dp2->GetIndexInResArray(), 3U);
+  EXPECT_EQ(mst_dp3->GetIndexInResArray(), 4U);
+}
+
+TEST_F(DrmHwcTest, RefreshConnectorsAssignsDistinctPortsWhenMstPathBlobIsZero) {
+  constexpr uint32_t kEdpConnId = 100;
+  constexpr uint32_t kDpRootConnId = 101;
+  constexpr uint32_t kMstConn301Id = 301;
+  constexpr uint32_t kMstConn302Id = 302;
+
+  // Static native connectors claim port 0 (eDP-1) and port 1 (DP-1).
+  InitStandardNativePorts(kEdpConnId, kDpRootConnId);
+  fake_device->SetConnectorConfigCallback([](FakeDrmConnector& conn) {
+    if (conn.GetId() == kMstConn301Id || conn.GetId() == kMstConn302Id) {
+      conn.SetMstPath("");
+    }
+  });
+
+  // Enumerate 302 before 301 in res->connectors to verify that when
+  // GetMstPath() is empty for both, RefreshConnectors() assigns dynamic ports
+  // (starting at port 2) in ascending connector-ID order (301 -> port 2,
+  // 302 -> port 3) even though GetConnectors() retains resource-array insertion
+  // order.
+  fake_device->SetResourceConnectorIds(
+      {kEdpConnId, kDpRootConnId, kMstConn302Id, kMstConn301Id});
+  fake_device->RefreshConnectors();
+
+  DrmConnector* mst_301 = FindConnectorById(kMstConn301Id);
+  DrmConnector* mst_302 = FindConnectorById(kMstConn302Id);
+  ASSERT_NE(mst_301, nullptr);
+  ASSERT_NE(mst_302, nullptr);
+  EXPECT_EQ(mst_301->GetIndexInResArray(), 2U);
+  EXPECT_EQ(mst_302->GetIndexInResArray(), 3U);
 }
 
 }  // namespace android::drm_hwcomposer
