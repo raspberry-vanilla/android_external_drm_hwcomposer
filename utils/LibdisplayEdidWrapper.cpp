@@ -21,24 +21,7 @@ extern "C" {
 #include <libdisplay-info/edid.h>
 #include <libdisplay-info/info.h>
 }
-#ifdef ANDROID
-#include <ui/GraphicTypes.h>
-#else
-// <ui/GraphicTypes.h> and <android/hardware/graphics/common/1.1/types.h> pull
-// in <hidl/HidlInternal.h>, which fails a static_assert on sizeof(std::string)
-// when compiled against host GNU libstdc++ in drm_hwcomposer_unittests.
-namespace aidl::android::hardware::graphics::common {
-enum class Hdr : int32_t {
-  INVALID = 0,
-  DOLBY_VISION = 1,
-  HDR10 = 2,
-  HLG = 3,
-  HDR10_PLUS = 4,
-  DOLBY_VISION_4K30 = 5,
-  HLG_PLUS = 6,
-};
-}  // namespace aidl::android::hardware::graphics::common
-#endif
+#include <aidl/android/hardware/graphics/common/Hdr.h>
 
 #include <cmath>
 #include <cstdint>
@@ -57,6 +40,12 @@ namespace android::drm_hwcomposer {
 
 auto LibdisplayEdidWrapper::Create(DrmModePropertyBlobUnique blob)
     -> std::unique_ptr<LibdisplayEdidWrapper> {
+  return Create(std::move(blob), VendorStringOps{});
+}
+
+auto LibdisplayEdidWrapper::Create(DrmModePropertyBlobUnique blob,
+                                   VendorStringOps string_ops)
+    -> std::unique_ptr<LibdisplayEdidWrapper> {
   if (!blob)
     return nullptr;
 
@@ -67,7 +56,7 @@ auto LibdisplayEdidWrapper::Create(DrmModePropertyBlobUnique blob)
   }
 
   return std::unique_ptr<LibdisplayEdidWrapper>(
-      new LibdisplayEdidWrapper(std::move(info)));
+      new LibdisplayEdidWrapper(info, string_ops));
 }
 
 void LibdisplayEdidWrapper::GetSupportedHdrTypes(std::vector<ui::Hdr> &types) {
@@ -188,9 +177,16 @@ auto LibdisplayEdidWrapper::GetBoundsMm() -> std::pair<int32_t, int32_t> {
 
 EdidWrapper::VendorProductInfo LibdisplayEdidWrapper::GetVendorProductInfo()
     const {
-  auto vendor = VendorProductInfo{.make = std::string(di_info_get_make(info_)),
-                                  .model = std::string(
-                                      di_info_get_model(info_))};
+  // di_info_get_make() and di_info_get_model() return heap-allocated strings
+  // that the caller must free(), or nullptr on allocation failure.
+  using OwnedString = std::unique_ptr<char, void (*)(void *)>;
+  const OwnedString make(string_ops_.get_make(info_), string_ops_.free_string);
+  const OwnedString model(string_ops_.get_model(info_),
+                          string_ops_.free_string);
+  auto vendor = VendorProductInfo{
+      .make = make ? std::string(make.get()) : std::string(),
+      .model = model ? std::string(model.get()) : std::string(),
+  };
 
   const auto *edid = di_info_get_edid(info_);
   if (edid != nullptr) {

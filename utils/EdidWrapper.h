@@ -26,6 +26,7 @@ extern "C" {
 #include <libdisplay-info/info.h>
 }
 
+#include <cstdlib>
 #include <memory>
 
 #include "drm/DrmUnique.h"
@@ -117,10 +118,26 @@ class LibdisplayEdidWrapper final : public EdidWrapper {
   std::pair<uint32_t, uint32_t> GetVerticalDisplayRangeLimits() const override;
 
  private:
-  LibdisplayEdidWrapper(di_info *info) : info_(std::move(info)) {
+  friend class LibdisplayEdidWrapperStringOpsTest;
+
+  // libdisplay-info getters that return heap-allocated strings, and the
+  // deallocator that releases them. Unit tests substitute these to inject
+  // nullptr returns and observe frees without replacing global C symbols.
+  struct VendorStringOps {
+    char *(*get_make)(const di_info *) = di_info_get_make;
+    char *(*get_model)(const di_info *) = di_info_get_model;
+    void (*free_string)(void *) = std::free;
+  };
+
+  static auto Create(DrmModePropertyBlobUnique blob, VendorStringOps string_ops)
+      -> std::unique_ptr<LibdisplayEdidWrapper>;
+
+  LibdisplayEdidWrapper(di_info *info, VendorStringOps string_ops)
+      : info_(info), string_ops_(string_ops) {
   }
 
   di_info *info_{};
+  VendorStringOps string_ops_;
 };
 #endif
 

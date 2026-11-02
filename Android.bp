@@ -383,6 +383,8 @@ cc_test_host {
         "utils/BacklightControllerTest.cpp",
         "utils/ColorUtil.cpp",
         "utils/ColorUtilTest.cpp",
+        "utils/LibdisplayEdidWrapper.cpp",
+        "utils/LibdisplayEdidWrapperTest.cpp",
         "utils/SlruCacheTest.cpp",
         "utils/SysfsBacklightController.cpp",
         "utils/SysfsBacklightControllerTest.cpp",

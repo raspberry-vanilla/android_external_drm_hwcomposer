@@ -121,6 +121,7 @@ UNITTEST_SRCS := \
 	utils/ColorUtil.cpp \
 	utils/ColorUtilTest.cpp \
 	utils/LibdisplayEdidWrapper.cpp \
+	utils/LibdisplayEdidWrapperTest.cpp \
 	utils/SlruCacheTest.cpp \
 	utils/SysfsBacklightController.cpp \
 	utils/SysfsBacklightControllerTest.cpp \
