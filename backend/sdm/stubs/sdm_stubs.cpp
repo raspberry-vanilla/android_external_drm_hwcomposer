@@ -14,18 +14,26 @@
  * limitations under the License.
  */
 
+#include <unistd.h>
+
 #include <SnapHandle.h>
 #include <sdm_interface_factory.h>
 #include <utils/fence.h>
 
 namespace sdm {
 
-std::shared_ptr<Fence> Fence::Create(int /*fd*/, const char * /*name*/) {
-  return nullptr;
+std::shared_ptr<Fence> Fence::Create(int fd, const char * /*name*/) {
+  if (fd < 0) {
+    return nullptr;
+  }
+  return std::make_shared<Fence>(fd);
 }
 
-int Fence::Dup(const std::shared_ptr<Fence> & /*fence*/) {
-  return -1;
+int Fence::Dup(const std::shared_ptr<Fence> &fence) {
+  if (!fence || fence->GetFd() < 0) {
+    return -1;
+  }
+  return dup(fence->GetFd());
 }
 
 SDMInterfaceFactory *GetSDMInterfaceFactory() {

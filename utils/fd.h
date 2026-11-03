@@ -27,6 +27,8 @@ auto MakeUniqueFd(int fd) -> UniqueFd;
 
 auto MakeSharedFd(int fd) -> SharedFd;
 
+auto DupFd(int fd) -> int;
+
 auto DupFd(SharedFd const &fd) -> int;
 
 }  // namespace android::drm_hwcomposer

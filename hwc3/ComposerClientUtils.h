@@ -22,6 +22,7 @@
 #include <memory>
 
 #include "bufferinfo/BufferInfo.h"
+#include "compositor/DisplayInfo.h"
 #include "hwc/HwcDisplay.h"
 
 // Forward declarations
@@ -52,7 +53,7 @@ struct NativeHandleDeleter {
 auto ToPixelFormat(::android::drm_hwcomposer::BufferFormat format)
     -> common::PixelFormat;
 
-auto ToDataspace(::android::drm_hwcomposer::BufferFormat format)
+auto ToDataspace(::android::drm_hwcomposer::HwcColorspace colorspace)
     -> common::Dataspace;
 
 auto ImportFb(const ::android::drm_hwcomposer::HwcDisplay* display,

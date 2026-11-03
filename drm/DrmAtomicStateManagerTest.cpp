@@ -50,6 +50,7 @@
 #include "drm/DrmProperty.h"
 #include "drm/DrmTestUtils.h"
 #include "drm/DrmUnique.h"
+#include "hwc/HwcWriteback.h"
 #include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
@@ -1502,6 +1503,76 @@ TEST_F(DrmAtomicStateManagerTest,
   EXPECT_TRUE(
       GetAtomicReqPropertyValue(prop_set, conn_id, kTestHdrMetadataPropId)
           .has_value());
+}
+
+TEST_F(
+    DrmAtomicStateManagerTest,
+    WritebackCommitConsumesBufferAndRejectsSubsequentCommitOfConsumedBuffer) {
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  auto bound_wb_conn = wb_conn->BindPipeline(pipeline.get());
+  ASSERT_NE(bound_wb_conn, nullptr);
+
+  WritebackBuffer wb_buffer{
+      .bi = BufferInfo{},
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId2),
+      .fence = {},
+  };
+  auto writeback = std::make_shared<HwcWriteback>(std::move(bound_wb_conn),
+                                                  std::move(wb_buffer));
+  EXPECT_FALSE(writeback->IsBufferConsumed());
+
+  AtomicCommitArgs args{};
+  args.blocking = true;
+  args.power_mode = PowerMode::kOn;
+  args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight, kTestVRefresh);
+  args.composition = CreateSinglePlanePlan(kTestFbId1);
+  args.writeback = writeback;
+
+  auto req = state_manager->GetAtomicModeReqForArgs(args);
+  ASSERT_NE(req, nullptr);
+  // GetAtomicModeReqForArgs alone (used by TestAtomicCommit) must not consume
+  // the writeback buffer before FinishPendingRequest.
+  EXPECT_FALSE(writeback->IsBufferConsumed());
+
+  int zero_fd = 0;
+  const SharedFd non_owning_stdin(&zero_fd, [](const int*) {});
+  const int fence_fd = DupFd(non_owning_stdin);
+  ASSERT_GE(fence_fd, 0);
+
+  auto* drm_req = AsDrmRequest(req);
+  drm_req->wb_fence_address = fence_fd;
+
+  state_manager->FinishPendingRequest(args, std::move(req));
+  EXPECT_TRUE(writeback->IsBufferConsumed());
+
+  SharedFd out_fence = writeback->TakeOutFence();
+  ASSERT_NE(out_fence, nullptr);
+  EXPECT_EQ(*out_fence, fence_fd);
+
+  // Attempting to build another atomic request with the same HwcWriteback
+  // (whose buffer has already been consumed) must fail.
+  AtomicCommitArgs second_args{};
+  second_args.blocking = true;
+  second_args.composition = CreateSinglePlanePlan(kTestFbId1);
+  second_args.writeback = writeback;
+  EXPECT_EQ(state_manager->GetAtomicModeReqForArgs(second_args), nullptr);
+
+  // Attempting to build an atomic request with an HwcWriteback that has no
+  // DRM writeback connector must also fail in DrmAtomicStateManager.
+  WritebackBuffer null_conn_buffer{
+      .bi = BufferInfo{},
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId3),
+      .fence = {},
+  };
+  AtomicCommitArgs null_conn_args{};
+  null_conn_args.blocking = true;
+  null_conn_args.composition = CreateSinglePlanePlan(kTestFbId1);
+  null_conn_args.writeback = std::make_shared<HwcWriteback>(
+      /*connector=*/nullptr, std::move(null_conn_buffer));
+  EXPECT_EQ(state_manager->GetAtomicModeReqForArgs(null_conn_args), nullptr);
 }
 
 }  // namespace android::drm_hwcomposer

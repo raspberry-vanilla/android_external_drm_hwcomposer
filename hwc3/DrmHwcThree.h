@@ -25,6 +25,7 @@
 #include <optional>
 #include <set>
 
+#include "bufferinfo/GrallocBufferCache.h"
 #include "compositor/DisplayInfo.h"
 #include "drm/DrmHwc.h"
 #include "hwc/HwcDisplay.h"
@@ -38,6 +39,10 @@ class Hwc3Display : public ::android::drm_hwcomposer::FrontendDisplayBase {
   std::optional<int64_t> desired_present_time = std::nullopt;
 
   int64_t next_layer_id = 1;
+
+  // Used for caching virtual display output buffers.
+  std::shared_ptr<::android::drm_hwcomposer::GrallocBufferCache>
+      output_buffer_cache;
 };
 
 class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {

@@ -41,11 +41,8 @@
 #include <android/binder_auto_utils.h>
 #include <android/binder_ibinder_platform.h>
 #include <cutils/native_handle.h>
-#include <ui/GraphicBufferMapper.h>
 #include <ui/GraphicTypes.h>
-#include <utils/Errors.h>
 
-#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -61,6 +58,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "bufferinfo/GrallocBufferCache.h"
+#include "bufferinfo/GrallocBufferHandle.h"  // IWYU pragma: keep
 #include "compositor/DisplayInfo.h"
 #include "compositor/LayerData.h"
 #include "drm/AtomicStateManager.h"
@@ -84,7 +82,6 @@
 #include "utils/log.h"
 #include "utils/properties.h"
 
-using ::android::drm_hwcomposer::BufferBlendMode;
 using ::android::drm_hwcomposer::DisplayHandle;
 using ::android::drm_hwcomposer::GrallocBufferCache;
 using ::android::drm_hwcomposer::HwcDisplay;
@@ -634,11 +631,12 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferAttributes(
     if (display == nullptr)
       return ToBinderStatus(hwc3::Error::kBadDisplay);
 
-    if (!display->IsWritebackSupported())
+    const auto readback_attrs = display->GetWritebackBufferAttributes();
+    if (!readback_attrs)
       return ToBinderStatus(hwc3::Error::kUnsupported);
 
-    attrs->format = ToPixelFormat(display->GetWritebackBufferFormat());
-    attrs->dataspace = common::Dataspace::SRGB;
+    attrs->format = ToPixelFormat(readback_attrs->format);
+    attrs->dataspace = ToDataspace(readback_attrs->colorspace);
   }
 
   return ndk::ScopedAStatus::ok();
@@ -657,26 +655,15 @@ ndk::ScopedAStatus ComposerClient::getReadbackBufferFence(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  // Check if this display supports readback operations
-  if (!display->IsWritebackSupported()) {
-    ALOGI("ComposerClient: Display %" PRId64 " does not support readback",
-          display_handle);
-    return ToBinderStatus(hwc3::Error::kUnsupported);
-  }
-
   ::android::drm_hwcomposer::SharedFd fence = display
-                                                  ->GetWritebackBufferFence();
-  display->SetWritebackEnabled(false);
-
+                                                  ->TakeWritebackBufferFence();
   if (!fence) {
     ALOGE("ComposerClient: Failed to get readback buffer fence");
     return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
-  if (fence && *fence >= 0) {
-    *acquire_fence = ndk::ScopedFileDescriptor(
-        ::android::drm_hwcomposer::DupFd(fence));
-  }
+  *acquire_fence = ndk::ScopedFileDescriptor(
+      ::android::drm_hwcomposer::DupFd(fence));
 
   return ndk::ScopedAStatus::ok();
 }
@@ -908,7 +895,7 @@ hwc3::Error ComposerClient::SetActiveConfigs(
     return hwc3::Error::kConfigFailed;
   }
 
-  const auto& results = result.value();
+  [[maybe_unused]] const auto& results = result.value();
   for (size_t i = 0; i < desired_configs.size(); i++) {
     LOG_FATAL_IF(results[i].first != commit_args[i].first,
                  "Commit results don't match request");
@@ -916,8 +903,7 @@ hwc3::Error ComposerClient::SetActiveConfigs(
     int64_t display_id = desired_config.display_id;
     HwcDisplay* display = GetDisplay(display_id);
     auto a_args = commit_args[i].second;
-    auto result = results[i].second;
-    display->ApplyCommitChanges(a_args, result);
+    display->ApplyCommitChanges(a_args);
   }
   return hwc3::Error::kNone;
 }
@@ -1098,12 +1084,7 @@ ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
     return ToBinderStatus(hwc3::Error::kBadDisplay);
   }
 
-  if (!display->IsWritebackSupported()) {
-    return ToBinderStatus(hwc3::Error::kUnsupported);
-  }
-
-  if (!display->SetWritebackEnabled(true)) {
-    ALOGE("ComposerClient: Failed to enable writeback");
+  if (display->GetDisplayType() == HwcDisplay::DisplayType::kVirtual) {
     return ToBinderStatus(hwc3::Error::kUnsupported);
   }
 
@@ -1114,37 +1095,32 @@ ndk::ScopedAStatus ComposerClient::setReadbackBuffer(
     return ToBinderStatus(hwc3::Error::kBadParameter);
   }
 
-  buffer_handle_t imported_handle = nullptr;
-  auto result = ::android::GraphicBufferMapper::get()
-                    .importBufferNoValidate(raw_buffer.get(), &imported_handle);
-
-  if (result != ::android::OK) {
-    ALOGE("ComposerClient: Failed to import readback buffer handle: %d",
-          result);
+  auto imported_handle = ::android::drm_hwcomposer::BufferInfoGetter::
+                             GetInstance()
+                                 ->Import(raw_buffer.get());
+  if (imported_handle == nullptr) {
+    ALOGE("ComposerClient: Failed to import readback buffer handle");
     return ToBinderStatus(hwc3::Error::kBadParameter);
   }
 
-  std::unique_ptr<HwcLayer>& writeback_layer = display->GetWritebackLayer();
-  if (!writeback_layer) {
-    ALOGE("HwcDisplay: Writeback layer not available");
-    return ToBinderStatus(hwc3::Error::kBadParameter);
-  }
-  HwcLayer::LayerProperties properties;
-  ndk::ScopedFileDescriptor release_fence = ndk::ScopedFileDescriptor(
-      release_fence_in.get());
-  properties.blend_mode = BufferBlendMode::kNone;
   auto bi = ::android::drm_hwcomposer::BufferInfoGetter::GetInstance()
-                ->GetBoInfo(imported_handle);
+                ->GetBoInfo(imported_handle->GetHandle());
   if (bi == std::nullopt) {
     ALOGE("Failed to get BufferInfo for readback buffer.");
     return ToBinderStatus(hwc3::Error::kBadParameter);
   }
-  properties.buffer = {
+  bi->fds_shared = imported_handle;
+
+  HwcLayer::Buffer buffer{
       .bi = bi.value(),
       .fb = std::static_pointer_cast<IDrmFbIdHandle>(ImportFb(display, *bi)),
-      .fence = ::android::drm_hwcomposer::MakeSharedFd(release_fence.release()),
+      .fence = ::android::drm_hwcomposer::MakeSharedFd(
+          ::android::drm_hwcomposer::DupFd(release_fence_in.get())),
   };
-  writeback_layer->SetLayerProperties(properties);
+  if (!display->SetWritebackBuffer(buffer)) {
+    ALOGE("ComposerClient: Failed to set writeback buffer");
+    return ToBinderStatus(hwc3::Error::kUnsupported);
+  }
 
   return ndk::ScopedAStatus::ok();
 }

@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "bufferinfo/BufferInfo.h"
+
 namespace android::drm_hwcomposer {
 
 using DisplayHandle = int64_t;
@@ -111,6 +113,11 @@ enum class HwcColorspace : int32_t {
   kBt709,
   kDciP3,
   kBt2020,
+};
+
+struct WritebackAttributes {
+  BufferFormat format;
+  HwcColorspace colorspace;
 };
 
 /**

@@ -34,6 +34,7 @@ class BindingOwner;
 
 class IDrmFbIdHandle;
 class DrmPlane;
+class HwcWriteback;
 struct LayerToPlaneJoiningPlan;
 
 enum class HwcColorspace;
@@ -65,8 +66,7 @@ struct AtomicCommitArgs {
   std::optional<float> hdr_headroom;
   std::optional<ColorMode> color_mode;
 
-  std::shared_ptr<IDrmFbIdHandle> writeback_fb;
-  SharedFd writeback_release_fence;
+  std::shared_ptr<HwcWriteback> writeback;
 
   /* helpers */
   auto HasInputs() const -> bool {
@@ -75,7 +75,6 @@ struct AtomicCommitArgs {
 };
 
 struct AtomicCommitResult {
-  SharedFd writeback_complete_fence;
   SharedFd present_fence;
 };
 

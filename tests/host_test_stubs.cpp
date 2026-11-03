@@ -109,7 +109,13 @@ GrallocBufferHandle::~GrallocBufferHandle() = default;
 
 std::shared_ptr<SnapAllocHandle> SnapAllocHandle::Create(
     buffer_handle_t handle) {
-  return std::shared_ptr<SnapAllocHandle>(new SnapAllocHandle(handle, nullptr));
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-const-cast,cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* snap_handle = reinterpret_cast<
+      vendor::qti::hardware::display::snapalloc::SnapHandle*>(
+      const_cast<native_handle_t*>(handle));
+  // NOLINTEND(cppcoreguidelines-pro-type-const-cast,cppcoreguidelines-pro-type-reinterpret-cast)
+  return std::shared_ptr<SnapAllocHandle>(
+      new SnapAllocHandle(handle, snap_handle));
 }
 
 bool SnapAllocHandle::Init(sdm::DebugCallbackIntf* /*debug_callback*/) {

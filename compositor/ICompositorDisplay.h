@@ -32,6 +32,7 @@ namespace android::drm_hwcomposer {
 
 class DrmPlane;
 class FlatteningController;
+class HwcWriteback;
 
 struct CommitStatus;
 
@@ -65,6 +66,10 @@ class ICompositorDisplay {
   virtual std::pair<uint32_t, uint32_t> GetSize() const = 0;
 
   virtual const HwcLayer &GetClientLayer() const = 0;
+
+  virtual std::shared_ptr<HwcWriteback> GetWriteback() const {
+    return nullptr;
+  }
 
   virtual std::shared_ptr<const HalColorTransformMatrix>
   GetColorTransformMatrix() const = 0;

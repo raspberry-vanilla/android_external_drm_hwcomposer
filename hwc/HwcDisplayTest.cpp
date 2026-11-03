@@ -60,6 +60,7 @@
 #include "hwc/HwcBufferCache.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "hwc/HwcWriteback.h"  // IWYU pragma: keep
 #include "utils/ColorUtil.h"
 #include "utils/TestUtils.h"
 #include "utils/fd.h"
@@ -3674,4 +3675,637 @@ TEST_F(HwcDisplayTest, GetPortClampsConnectorPortOverflowInsteadOfWrapping) {
   display.SetPipeline(nullptr);
 }
 
+namespace {
+
+class FakeHdrCapabilities : public BackendDisplayCapabilities {
+ public:
+  std::optional<std::vector<Hdr>> GetHdrTypesOverride() const override {
+    return std::vector<Hdr>{Hdr::HDR10, Hdr::HLG};
+  }
+};
+
+HwcLayer::Buffer CreateHdrTestLayerBuffer() {
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+  return HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(kTestFbId),
+      .fence = {},
+  };
+}
+
+void ExpectWritebackFormat(const HwcDisplay& disp,
+                           BufferFormat expected_format) {
+  const auto attrs = disp.GetWritebackBufferAttributes();
+  if (!attrs.has_value()) {
+    ADD_FAILURE() << "Expected writeback attributes";
+    return;
+  }
+  EXPECT_EQ(attrs->format, expected_format);
+}
+
+}  // namespace
+
+TEST_F(HwcDisplayTest,
+       SdrDisplayWithHdrLayerUsesRgba8888ClientTargetAndWritebackFormat) {
+  ScopedTestProperty device_path("vendor.hwc.drm.device", "/nonexistent");
+  ScopedTestProperty external_hdr_prop("vendor.hwc.drm.external_hdr_enabled",
+                                       "1");
+  hwc.GetResMan().Init();
+
+  auto sdr_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(sdr_pipeline, nullptr);
+
+  HwcDisplay sdr_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  sdr_display.SetPipeline(sdr_pipeline);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(sdr_display.CreateLayer(kLayerId));
+  sdr_display.get_layer(kLayerId)->SetLayerProperties({
+      .buffer = CreateHdrTestLayerBuffer(),
+      .transfer_func = TransferFunction::kPq,
+  });
+  EXPECT_FALSE(sdr_display.HasHdrOutput());
+  EXPECT_EQ(sdr_display.GetClientTargetFormat(), BufferFormat::kRgba8888);
+  EXPECT_FALSE(sdr_display.GetWritebackBufferAttributes().has_value());
+
+  fake_device->AddWritebackConnector(sdr_pipeline->encoder->Get()->GetId());
+  ExpectWritebackFormat(sdr_display, BufferFormat::kRgba8888);
+
+  hwc.GetResMan().DeInit();
+}
+
+TEST_F(
+    HwcDisplayTest,
+    HdrDisplayUsesRgbaFp16ClientTargetAndWritebackFormatWhenHdrLayerPresent) {
+  ScopedTestProperty device_path("vendor.hwc.drm.device", "/nonexistent");
+  ScopedTestProperty external_hdr_prop("vendor.hwc.drm.external_hdr_enabled",
+                                       "1");
+  hwc.GetResMan().Init();
+
+  auto hdr_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(hdr_pipeline, nullptr);
+  hdr_pipeline->capabilities = std::make_unique<FakeHdrCapabilities>();
+
+  HwcDisplay hdr_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  hdr_display.SetPipeline(hdr_pipeline);
+  EXPECT_FALSE(hdr_display.GetWritebackBufferAttributes().has_value());
+
+  fake_device->AddWritebackConnector(hdr_pipeline->encoder->Get()->GetId());
+
+  EXPECT_FALSE(hdr_display.HasHdrOutput());
+  EXPECT_EQ(hdr_display.GetClientTargetFormat(), BufferFormat::kRgba8888);
+  ExpectWritebackFormat(hdr_display, BufferFormat::kRgba8888);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(hdr_display.CreateLayer(kLayerId));
+  HwcLayer* hdr_layer = hdr_display.get_layer(kLayerId);
+  ASSERT_NE(hdr_layer, nullptr);
+
+  hdr_layer->SetLayerProperties({
+      .buffer = CreateHdrTestLayerBuffer(),
+      .transfer_func = TransferFunction::kSrgb,
+  });
+  EXPECT_FALSE(hdr_display.HasHdrOutput());
+  EXPECT_EQ(hdr_display.GetClientTargetFormat(), BufferFormat::kRgba8888);
+  ExpectWritebackFormat(hdr_display, BufferFormat::kRgba8888);
+
+  hdr_layer->SetLayerProperties({
+      .transfer_func = TransferFunction::kPq,
+  });
+  EXPECT_TRUE(hdr_display.HasHdrOutput());
+  EXPECT_EQ(hdr_display.GetClientTargetFormat(), BufferFormat::kRgbaFp16);
+  ExpectWritebackFormat(hdr_display, BufferFormat::kRgbaFp16);
+
+  hdr_layer->SetLayerProperties({
+      .transfer_func = TransferFunction::kHlg,
+  });
+  EXPECT_TRUE(hdr_display.HasHdrOutput());
+  EXPECT_EQ(hdr_display.GetClientTargetFormat(), BufferFormat::kRgbaFp16);
+  ExpectWritebackFormat(hdr_display, BufferFormat::kRgbaFp16);
+
+  hwc.GetResMan().DeInit();
+}
+
+namespace {
+
+HwcLayer::Buffer CreateWritebackTestBuffer(uint32_t fb_id,
+                                           SharedFd fence = {}) {
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+  return HwcLayer::Buffer{
+      .bi = bo,
+      .fb = fb_id != 0 ? std::make_shared<FakeFbIdHandle>(fb_id) : nullptr,
+      .fence = std::move(fence),
+  };
+}
+
+std::shared_ptr<DrmDisplayPipeline> CreateVirtualWritebackPipeline(
+    FakeDrmDevice& device, DrmConnector** out_wb_conn = nullptr) {
+  device.AddPipelineResources(/*is_external=*/true);
+  device.AddWritebackConnector(device.GetEncoders().back()->GetId());
+  DrmConnector* wb_conn = device.GetWritebackConnectors().back().get();
+  if (out_wb_conn != nullptr) {
+    *out_wb_conn = wb_conn;
+  }
+  return wb_conn != nullptr ? device.GetBackend().CreatePipeline(*wb_conn)
+                            : nullptr;
+}
+
+}  // namespace
+
+TEST_F(HwcDisplayTest,
+       VirtualDisplayRejectsPresentWithoutWritebackBufferAndInvalidFb) {
+  DrmConnector* wb_conn = nullptr;
+  auto pipeline = CreateVirtualWritebackPipeline(*fake_device, &wb_conn);
+  ASSERT_NE(pipeline, nullptr);
+  ASSERT_NE(wb_conn, nullptr);
+
+  constexpr DisplayHandle kVirtualDisplayHandle = 1;
+  HwcDisplay display(kVirtualDisplayHandle, /*is_virtual=*/true, &hwc);
+  display.SetVirtualDisplayResolution(kFhdWidth, kFhdHeight);
+  display.SetPipeline(pipeline);
+
+  ASSERT_FALSE(display.IsInHeadlessMode());
+  ASSERT_EQ(display.GetDisplayType(), HwcDisplay::DisplayType::kVirtual);
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+  EXPECT_FALSE(display.GetWritebackBufferAttributes().has_value());
+
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  EXPECT_FALSE(
+      display.SetWritebackBuffer(CreateWritebackTestBuffer(/*fb_id=*/0)));
+}
+
+TEST_F(
+    HwcDisplayTest,
+    VirtualDisplayConsumesWritebackBufferOnPresentAndRequiresNewBufferNextFrame) {
+  DrmConnector* wb_conn = nullptr;
+  auto pipeline = CreateVirtualWritebackPipeline(*fake_device, &wb_conn);
+  ASSERT_NE(pipeline, nullptr);
+  ASSERT_NE(wb_conn, nullptr);
+
+  constexpr DisplayHandle kVirtualDisplayHandle = 1;
+  HwcDisplay display(kVirtualDisplayHandle, /*is_virtual=*/true, &hwc);
+  display.SetVirtualDisplayResolution(kFhdWidth, kFhdHeight);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  const auto virtual_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+  ASSERT_TRUE(display.SetWritebackBuffer(virtual_buffer));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& frame1_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(frame1_args.writeback, nullptr);
+  EXPECT_EQ(frame1_args.writeback->GetConnector(), wb_conn);
+  EXPECT_TRUE(frame1_args.writeback->IsBufferConsumed());
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+
+  ASSERT_TRUE(display.SetWritebackBuffer(virtual_buffer));
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+}
+
+TEST_F(HwcDisplayTest, VirtualDisplayAllowsSetWritebackBufferAfterValidate) {
+  DrmConnector* wb_conn = nullptr;
+  auto pipeline = CreateVirtualWritebackPipeline(*fake_device, &wb_conn);
+  ASSERT_NE(pipeline, nullptr);
+  ASSERT_NE(wb_conn, nullptr);
+
+  constexpr DisplayHandle kVirtualDisplayHandle = 1;
+  HwcDisplay display(kVirtualDisplayHandle, /*is_virtual=*/true, &hwc);
+  display.SetVirtualDisplayResolution(kFhdWidth, kFhdHeight);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  const auto virtual_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+  (void)display.ValidateStagedComposition();
+  ASSERT_TRUE(display.SetWritebackBuffer(virtual_buffer));
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+}
+
+TEST_F(HwcDisplayTest,
+       HeadlessAndWritebackConnectorlessDisplaysRejectWriteback) {
+  const auto wb_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+
+  HwcDisplay headless_display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  headless_display.SetPipeline(nullptr);
+  EXPECT_FALSE(headless_display.GetWritebackBufferAttributes().has_value());
+  EXPECT_FALSE(headless_display.SetWritebackBuffer(wb_buffer));
+  EXPECT_EQ(headless_display.TakeWritebackBufferFence(), nullptr);
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  EXPECT_FALSE(display.GetWritebackBufferAttributes().has_value());
+  EXPECT_FALSE(display.SetWritebackBuffer(wb_buffer));
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       PhysicalDisplayWritebackRejectsNullFbAndFailsBetweenValidateAndPresent) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  ExpectWritebackFormat(display, BufferFormat::kRgba8888);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  EXPECT_FALSE(
+      display.SetWritebackBuffer(CreateWritebackTestBuffer(/*fb_id=*/0)));
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  (void)display.ValidateStagedComposition();
+  EXPECT_FALSE(
+      display.SetWritebackBuffer(CreateWritebackTestBuffer(kTestFbId + 1)));
+
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+}
+
+TEST_F(HwcDisplayTest,
+       PhysicalDisplayWritebackStagesBufferAndReturnsFenceAfterPresent) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  TemporaryFile release_tf;
+  const SharedFd release_fence = MakeSharedFd(release_tf.release());
+  const auto wb_buffer1 = CreateWritebackTestBuffer(kTestFbId + 1,
+                                                    release_fence);
+  const auto wb_buffer2 = CreateWritebackTestBuffer(kTestFbId + 2,
+                                                    release_fence);
+
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer1));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer2));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  TemporaryFile complete_tf;
+  const SharedFd complete_source_fd = MakeSharedFd(complete_tf.release());
+  std::shared_ptr<IDrmFbIdHandle> captured_fb;
+  SharedFd captured_in_fence;
+  sink->SetExecuteCommitHook(
+      [&](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              args) {
+        const auto& wb = args.front().second.writeback;
+        if (wb) {
+          if (const auto& wb_buf = wb->GetBuffer(); wb_buf.has_value()) {
+            captured_fb = wb_buf->fb;
+            captured_in_fence = wb_buf->fence;
+            wb->SetOutFence(MakeSharedFd(DupFd(complete_source_fd)));
+          }
+        }
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>{
+                {args.front().first, AtomicCommitResult{}},
+            });
+      });
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  sink->ClearHistory();
+
+  EXPECT_EQ(captured_fb, wb_buffer2.fb);
+  EXPECT_EQ(captured_in_fence, release_fence);
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+
+  SharedFd complete_fence = display.TakeWritebackBufferFence();
+  ASSERT_NE(complete_fence, nullptr);
+  EXPECT_GE(*complete_fence, 0);
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  sink->SetExecuteCommitHook(nullptr);
+}
+
+TEST_F(
+    HwcDisplayTest,
+    PhysicalDisplayWritebackResetsConsumedBufferOnNextValidateOrUnvalidatedPresent) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  TemporaryFile complete_tf;
+  const SharedFd complete_source_fd = MakeSharedFd(complete_tf.release());
+  sink->SetExecuteCommitHook(
+      [&](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              args) {
+        if (const auto& wb = args.front().second.writeback; wb != nullptr) {
+          (void)wb->GetBuffer();
+          wb->SetOutFence(MakeSharedFd(DupFd(complete_source_fd)));
+        }
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>{
+                {args.front().first, AtomicCommitResult{}},
+            });
+      });
+
+  const auto wb_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer));
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  sink->ClearHistory();
+
+  // Next validated frame without TakeWritebackBufferFence resets the consumed
+  // writeback buffer before planning.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().writeback, nullptr);
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+  sink->ClearHistory();
+
+  // Unvalidated PresentStagedComposition after a consumed writeback frame also
+  // resets the consumed writeback buffer gracefully.
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer));
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  sink->ClearHistory();
+
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().writeback, nullptr);
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  sink->SetExecuteCommitHook(nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       PhysicalDisplayWritebackResetsUnvalidatedBufferOnPresent) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  const auto wb_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer));
+  EXPECT_EQ(wb_conn->GetPipeline(), pipeline.get());
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().writeback, nullptr);
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+}
+
+TEST_F(HwcDisplayTest, PhysicalDisplayWritebackResetsBufferOnFailedCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetExecuteCommitHook(
+      [&](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+          /*args*/) {
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            CommitStatus::InternalFailure());
+      });
+
+  const auto wb_buffer = CreateWritebackTestBuffer(kTestFbId + 1);
+  ASSERT_TRUE(display.SetWritebackBuffer(wb_buffer));
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_FALSE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                release_fences));
+  sink->ClearHistory();
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  sink->SetExecuteCommitHook(nullptr);
+}
+
+class FakeWritebackCapabilities : public BackendDisplayCapabilities {
+ public:
+  std::optional<bool> GetWritebackSupportOverride() const override {
+    return true;
+  }
+
+  std::optional<WritebackAttributes> GetWritebackAttributes() const override {
+    return WritebackAttributes{
+        .format = BufferFormat::kRgba8888,
+        .colorspace = HwcColorspace::kBt709,
+    };
+  }
+};
+
+TEST_F(HwcDisplayTest,
+       BackendWritebackCapabilitiesOverrideWithoutDrmWritebackConnector) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  pipeline->capabilities = std::make_unique<FakeWritebackCapabilities>();
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  const auto writeback_attrs = display.GetWritebackBufferAttributes();
+  if (!writeback_attrs.has_value()) {
+    ADD_FAILURE() << "Expected writeback attributes";
+    return;
+  }
+  EXPECT_EQ(writeback_attrs->format, BufferFormat::kRgba8888);
+  EXPECT_EQ(writeback_attrs->colorspace, HwcColorspace::kBt709);
+
+  constexpr ILayerId kLayerId = 1;
+  ASSERT_TRUE(display.CreateLayer(kLayerId));
+  HwcLayer* layer = display.get_layer(kLayerId);
+  ASSERT_NE(layer, nullptr);
+  layer->SetLayerProperties(CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId)));
+
+  BufferInfo bo{};
+  bo.width = kFhdWidth;
+  bo.height = kFhdHeight;
+  bo.format = DRM_FORMAT_ABGR8888;
+  bo.pitches[0] = kFhdWidth * kBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  // Backend writeback override does not require a DRM framebuffer ID handle
+  // (e.g. SdmBackend uses StubFbImporter) or a DRM writeback connector.
+  ASSERT_TRUE(display.SetWritebackBuffer(WritebackBuffer{
+      .bi = bo,
+      .fb = nullptr,
+      .fence = {},
+  }));
+  ASSERT_NE(display.GetWriteback(), nullptr);
+  EXPECT_EQ(display.GetWriteback()->GetConnector(), nullptr);
+  EXPECT_FALSE(display.GetWriteback()->IsBufferConsumed());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetDriveStateManager(false);
+  TemporaryFile complete_tf;
+  const SharedFd complete_source_fd = MakeSharedFd(complete_tf.release());
+  sink->SetExecuteCommitHook(
+      [&](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              args) {
+        const auto& wb = args.front().second.writeback;
+        if (wb && !wb->IsBufferConsumed()) {
+          wb->SetOutFence(MakeSharedFd(DupFd(complete_source_fd)));
+        }
+        return CommitStatusOr<
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>>(
+            std::vector<std::pair<AtomicStateManager*, AtomicCommitResult>>{
+                {args.front().first, AtomicCommitResult{}},
+            });
+      });
+  sink->ClearHistory();
+
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_NE(sink->GetCommitHistory()[0][0].writeback, nullptr);
+  EXPECT_TRUE(sink->GetCommitHistory()[0][0].writeback->IsBufferConsumed());
+
+  // Present a second frame without calling TakeWritebackBufferFence; readback
+  // must stay disarmed and clear the completed HwcWriteback.
+  (void)display.ValidateStagedComposition();
+  display.AcceptValidatedComposition();
+  ASSERT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_EQ(sink->GetCommitHistory().size(), 2U);
+  EXPECT_EQ(sink->GetCommitHistory()[1][0].writeback, nullptr);
+  EXPECT_EQ(display.GetWriteback(), nullptr);
+  EXPECT_EQ(display.TakeWritebackBufferFence(), nullptr);
+
+  sink->SetExecuteCommitHook(nullptr);
+}
 }  // namespace android::drm_hwcomposer

@@ -214,6 +214,37 @@ cc_binary {
     init_rc: [":drm_hwcomposer_init_rc"],
 }
 
+cc_test {
+    name: "drm_hwcomposer_sdm_device_tests",
+    defaults: [
+        "hwcomposer.drm_defaults",
+        "sdm_backend",
+    ],
+    srcs: [
+        ":drm_hwcomposer_common",
+        "backend/SdmBackendTest.cpp",
+        "bufferinfo/legacy/BufferInfoLibdrm.cpp",
+    ],
+    shared_libs: [
+        "android.hardware.graphics.composer3-V5-ndk",
+        "libbinder_ndk",
+    ],
+    exclude_shared_libs: [
+        "liblz4",
+    ],
+    static_libs: [
+        "liblz4",
+    ],
+    cflags: [
+        "-DUSE_IMAPPER4_METADATA_API",
+        "-Wall",
+        "-Werror",
+    ],
+    test_config: "backend/SdmBackendTest.xml",
+    test_suites: ["general-tests"],
+    vendor: true,
+}
+
 // Used by hwcomposer.drm_imagination
 filegroup {
     name: "drm_hwcomposer_platformimagination",
@@ -374,6 +405,7 @@ cc_test_host {
         "hwc/HwcDisplayConfigsGeneratorTest.cpp",
         "hwc/HwcDisplayTest.cpp",
         "hwc/HwcLayer.cpp",
+        "hwc/HwcWritebackTest.cpp",
         "stats/CompositionStatsAtomReporter.cpp",
         "stats/CountActiveDisplaysReporter.cpp",
         "stats/DisplayConfigurationResultReporter.cpp",
@@ -414,6 +446,9 @@ cc_test_host {
     ],
     shared_libs: [
         "libhardware",
+    ],
+    header_libs: [
+        "drm_hwcomposer_sdm_stub_headers",
     ],
     cppflags: [
         "-DHAS_LZ4",

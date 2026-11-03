@@ -16,13 +16,20 @@
 
 #include "backend/sdm/SdmCompositionPlanner.h"
 
+#include <unistd.h>
+
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <cutils/native_handle.h>
+#include <drm/drm_fourcc.h>
 #include <system/graphics-base-v1.0.h>
 
 #include <SnapHandle.h>              // IWYU pragma: keep
@@ -32,8 +39,10 @@
 #include <core/sdm_types.h>
 #include <sdm_display_intf_drawcycle.h>
 #include <sdm_display_intf_layer_builder.h>
+#include <sdm_display_intf_settings.h>
 #include <utils/fence.h>
 
+#include "backend/sdm/SnapAllocHandle.h"
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/CompositionPlanner.h"
 #include "compositor/CompositorTestUtils.h"
@@ -41,6 +50,8 @@
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"  // IWYU pragma: keep
 #include "hwc/HwcLayer.h"
+#include "hwc/HwcWriteback.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 namespace {
@@ -54,6 +65,7 @@ using ::testing::Return;
 using ::testing::ReturnRef;
 using ::testing::SaveArg;
 using ::testing::SetArgPointee;
+using ::vendor::qti::hardware::display::snapalloc::SnapHandle;
 
 constexpr uint64_t kTestSdmDisplayId = 52;
 constexpr int64_t kFirstSdmLayerId = 10;
@@ -154,10 +166,40 @@ class MockSdmDrawCycleIntf : public sdm::SDMDisplayDrawCycleIntf {
               (override));
 };
 
+class MockSdmSettingsIntf : public sdm::SDMDisplaySettingsIntf {
+ public:
+  MOCK_METHOD(sdm::DisplayError, SetIdleTimeout, (uint32_t), (override));
+  MOCK_METHOD(sdm::DisplayError, GetColorModes, (uint64_t, uint32_t*, int32_t*),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, GetAllDisplayAttributes,
+              (uint64_t, (std::map<uint32_t, sdm::DisplayConfigVariableInfo>*)),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, GetActiveConfig, (uint64_t, uint32_t*),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, SetActiveConfig, (uint64_t, uint32_t),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, SetColorModeWithRenderIntent,
+              (uint64_t, int32_t, int32_t), (override));
+  MOCK_METHOD(sdm::DisplayError, SetColorTransform,
+              (uint64_t, const std::vector<float>&), (override));
+  MOCK_METHOD(int, GetDisplayConfigGroup,
+              (uint64_t, const sdm::DisplayConfigVariableInfo&), (override));
+  MOCK_METHOD(sdm::DisplayError, SetDisplayBrightnessNits, (uint64_t, float),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, GetReadbackBufferAttributes,
+              (uint64_t, int32_t*, int32_t*), (override));
+  MOCK_METHOD(sdm::DisplayError, GetReadbackBufferFence,
+              (uint64_t, std::shared_ptr<sdm::Fence>*), (override));
+  MOCK_METHOD(sdm::DisplayError, SetReadbackBuffer,
+              (uint64_t, void*, const std::shared_ptr<sdm::Fence>&),
+              (override));
+};
+
 struct SdmCompositionPlannerTest : public ::testing::Test {
   void SetUp() override {
     ON_CALL(display, CtmByGpu()).WillByDefault(Return(false));
     ON_CALL(display, GetClientLayer()).WillByDefault(ReturnRef(client_layer));
+    ON_CALL(display, GetWriteback()).WillByDefault(Return(nullptr));
     ON_CALL(layer_intf, CreateLayer(kTestSdmDisplayId, NotNull()))
         .WillByDefault(Invoke([this](uint64_t /*disp_id*/, int64_t* out_id) {
           *out_id = next_sdm_layer_id++;
@@ -176,15 +218,42 @@ struct SdmCompositionPlannerTest : public ::testing::Test {
             GetDisplayRequests(kTestSdmDisplayId, NotNull(), NotNull(), _, _))
         .WillByDefault(DoAll(SetArgPointee<1>(0), SetArgPointee<2>(0U),
                              Return(sdm::kErrorNone)));
+    ON_CALL(settings_intf, SetReadbackBuffer(kTestSdmDisplayId, _, _))
+        .WillByDefault(Return(sdm::kErrorNone));
 
     planner = std::make_unique<SdmCompositionPlanner>(kTestSdmDisplayId,
                                                       &layer_intf,
-                                                      &draw_cycle_intf);
+                                                      &draw_cycle_intf,
+                                                      &settings_intf);
+  }
+
+  static std::shared_ptr<HwcWriteback> CreateWriteback(
+      SnapHandle* snap_handle, SharedFd fence = nullptr,
+      std::weak_ptr<PrimeFdsSharedBase>* out_weak_handle = nullptr) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto* raw_handle = reinterpret_cast<buffer_handle_t>(snap_handle);
+    auto fds_shared = SnapAllocHandle::Create(raw_handle);
+    if (out_weak_handle != nullptr) {
+      *out_weak_handle = fds_shared;
+    }
+    WritebackBuffer buffer{
+        .bi =
+            BufferInfo{
+                .width = kTestLayerWidth,
+                .height = kTestLayerHeight,
+                .format = DRM_FORMAT_ABGR8888,
+                .fds_shared = std::move(fds_shared),
+            },
+        .fb = nullptr,
+        .fence = std::move(fence),
+    };
+    return std::make_shared<HwcWriteback>(nullptr, std::move(buffer));
   }
 
   NiceMock<MockCompositorDisplay> display;
   NiceMock<MockSdmLayerBuilderIntf> layer_intf;
   NiceMock<MockSdmDrawCycleIntf> draw_cycle_intf;
+  NiceMock<MockSdmSettingsIntf> settings_intf;
   HwcLayer client_layer{nullptr};
   int64_t next_sdm_layer_id = kFirstSdmLayerId;
   std::unique_ptr<SdmCompositionPlanner> planner;
@@ -564,6 +633,100 @@ TEST_F(SdmCompositionPlannerTest,
       .Times(1)
       .WillOnce(Return(sdm::kErrorNone));
   (void)planner->ValidateDisplay(&display);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateDisplaySkipsSetReadbackBufferWhenWritebackAbsent) {
+  EXPECT_CALL(settings_intf, SetReadbackBuffer(_, _, _)).Times(0);
+
+  (void)planner->ValidateDisplay(&display);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateDisplayStagesReadbackBufferAndDeduplicatesRepeatValidate) {
+  SnapHandle readback_snap_handle{};
+  SharedFd acquire_fence = MakeSharedFd(DupFd(STDIN_FILENO));
+  auto writeback = CreateWriteback(&readback_snap_handle, acquire_fence);
+  ON_CALL(display, GetWriteback()).WillByDefault(Return(writeback));
+
+  std::shared_ptr<sdm::Fence> captured_fence;
+  EXPECT_CALL(settings_intf,
+              SetReadbackBuffer(kTestSdmDisplayId, &readback_snap_handle, _))
+      .Times(1)
+      .WillOnce(DoAll(SaveArg<2>(&captured_fence), Return(sdm::kErrorNone)));
+
+  (void)planner->ValidateDisplay(&display);
+  EXPECT_NE(captured_fence, nullptr);
+  EXPECT_FALSE(writeback->IsBufferConsumed());
+
+  // A repeated ValidateDisplay before PresentDisplay with the same armed
+  // HwcWriteback must not call SetReadbackBuffer a second time.
+  EXPECT_CALL(settings_intf, SetReadbackBuffer(_, _, _)).Times(0);
+  (void)planner->ValidateDisplay(&display);
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateDisplayKeepsArmedSnapAllocHandleAliveUntilConsumed) {
+  SnapHandle readback_snap_handle{};
+  std::weak_ptr<PrimeFdsSharedBase> weak_snap_handle;
+  auto writeback = CreateWriteback(&readback_snap_handle, nullptr,
+                                   &weak_snap_handle);
+  std::shared_ptr<HwcWriteback> active_writeback = writeback;
+  ON_CALL(display, GetWriteback()).WillByDefault([&active_writeback]() {
+    return active_writeback;
+  });
+
+  EXPECT_CALL(settings_intf,
+              SetReadbackBuffer(kTestSdmDisplayId, &readback_snap_handle, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+
+  (void)planner->ValidateDisplay(&display);
+
+  // Even if HwcDisplay drops its HwcWriteback before commit (e.g. overwritten)
+  // and ValidateDisplay runs again without a new writeback buffer,
+  // SdmCompositionPlanner retains armed_writeback_ so the buffer's
+  // SnapAllocHandle stays alive while queued in SDM.
+  active_writeback.reset();
+  writeback.reset();
+  EXPECT_CALL(settings_intf, SetReadbackBuffer(_, _, _)).Times(0);
+  (void)planner->ValidateDisplay(&display);
+  EXPECT_FALSE(weak_snap_handle.expired());
+
+  // Staging and consuming a new readback buffer releases the previous handle.
+  SnapHandle next_snap_handle{};
+  std::weak_ptr<PrimeFdsSharedBase> weak_next_handle;
+  auto next_writeback = CreateWriteback(&next_snap_handle, nullptr,
+                                        &weak_next_handle);
+  active_writeback = next_writeback;
+  EXPECT_CALL(settings_intf,
+              SetReadbackBuffer(kTestSdmDisplayId, &next_snap_handle, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  (void)planner->ValidateDisplay(&display);
+  EXPECT_TRUE(weak_snap_handle.expired());
+
+  (void)next_writeback->ConsumeBuffer();
+  active_writeback.reset();
+  next_writeback.reset();
+  EXPECT_CALL(settings_intf, SetReadbackBuffer(_, _, _)).Times(0);
+  (void)planner->ValidateDisplay(&display);
+  EXPECT_TRUE(weak_next_handle.expired());
+}
+
+TEST_F(SdmCompositionPlannerTest,
+       ValidateDisplayDisarmsWritebackWhenSetReadbackBufferFails) {
+  SnapHandle readback_snap_handle{};
+  auto writeback = CreateWriteback(&readback_snap_handle);
+  ON_CALL(display, GetWriteback()).WillByDefault(Return(writeback));
+
+  EXPECT_CALL(settings_intf,
+              SetReadbackBuffer(kTestSdmDisplayId, &readback_snap_handle, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNotSupported));
+
+  (void)planner->ValidateDisplay(&display);
+  EXPECT_TRUE(writeback->IsBufferConsumed());
 }
 
 }  // namespace

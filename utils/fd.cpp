@@ -45,12 +45,19 @@ auto MakeSharedFd(int fd) -> SharedFd {
   return {new int(fd), CloseFd};
 }
 
+auto DupFd(int fd) -> int {
+  if (fd < 0)
+    return -1;
+
+  // NOLINTNEXTLINE(misc-include-cleaner)
+  return fcntl(fd, F_DUPFD_CLOEXEC, 0);
+}
+
 auto DupFd(SharedFd const &fd) -> int {
   if (!fd)
     return -1;
 
-  // NOLINTNEXTLINE(misc-include-cleaner)
-  return fcntl(*fd, F_DUPFD_CLOEXEC, 0);
+  return DupFd(*fd);
 }
 
 }  // namespace android::drm_hwcomposer

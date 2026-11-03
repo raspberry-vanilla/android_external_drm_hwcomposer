@@ -91,6 +91,9 @@ def main() -> int:
     mk_text = f.read()
 
   bp_ut = extract_bp_block_srcs(bp_text, "drm_hwcomposer_unittests")
+  bp_device_tests = extract_bp_block_srcs(
+      bp_text, "drm_hwcomposer_sdm_device_tests"
+  )
   mk_ut = extract_makefile_unittest_srcs(mk_text)
 
   errors: list[str] = []
@@ -119,7 +122,8 @@ def main() -> int:
       if line.strip() and not line.strip().startswith("tests/test_include/")
   }
   unwired_tests = sorted(
-      (git_test_files - bp_ut) - (mk_ut & MAKEFILE_ONLY_ALLOWLIST)
+      (git_test_files - (bp_ut | bp_device_tests))
+      - (mk_ut & MAKEFILE_ONLY_ALLOWLIST)
   )
   if unwired_tests:
     errors.append(

@@ -38,6 +38,7 @@
 #include "drm/drm_mode.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "hwc/HwcWriteback.h"
 #include "utils/BacklightController.h"
 #include "utils/EdidWrapper.h"
 #include "utils/fd.h"
@@ -118,7 +119,10 @@ class HwcDisplay : public ICompositorDisplay {
   HwcDisplay(const HwcDisplay &) = delete;
   ~HwcDisplay() override;
 
-  auto GetWritebackBufferFormat() const -> BufferFormat;
+  // Returns true if the display supports HDR and there are HDR layers in the
+  // scene.
+  bool HasHdrOutput() const;
+  auto GetClientTargetFormat() const -> BufferFormat;
 
   auto GetColorTransformMatrix() const
       -> std::shared_ptr<const HalColorTransformMatrix> override {
@@ -283,9 +287,10 @@ class HwcDisplay : public ICompositorDisplay {
   auto StartHdcp() -> bool;
   auto StopHdcp() -> bool;
 
-  bool IsWritebackSupported() const;
-  bool SetWritebackEnabled(bool enabled);
-  SharedFd GetWritebackBufferFence();
+  auto GetWritebackBufferAttributes() const
+      -> std::optional<WritebackAttributes>;
+  bool SetWritebackBuffer(const WritebackBuffer &buffer);
+  SharedFd TakeWritebackBufferFence();
 
   HwcLayer *get_layer(ILayerId layer) {
     auto it = layers_.find(layer);
@@ -357,8 +362,8 @@ class HwcDisplay : public ICompositorDisplay {
     return client_layer_;
   }
 
-  auto &GetWritebackLayer() {
-    return writeback_layer_;
+  std::shared_ptr<HwcWriteback> GetWriteback() const override {
+    return is_virtual_ ? nullptr : writeback_;
   }
 
   void SetVirtualDisplayResolution(uint16_t width, uint16_t height) {
@@ -379,8 +384,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   // Update HwcDisplay state tracking to reflect what was committed in |a_args|.
   // This should be called after a successful commit.
-  void ApplyCommitChanges(const AtomicCommitArgs &a_args,
-                          const AtomicCommitResult &result);
+  void ApplyCommitChanges(const AtomicCommitArgs &a_args);
 
   DisplayHandle GetHandle() const {
     return handle_;
@@ -497,7 +501,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   std::map<ILayerId, HwcLayer> layers_;
   HwcLayer client_layer_;
-  std::unique_ptr<HwcLayer> writeback_layer_;
+  std::shared_ptr<HwcWriteback> writeback_;
   uint16_t virtual_disp_width_{};
   uint16_t virtual_disp_height_{};
   std::shared_ptr<const HalColorTransformMatrix>
@@ -527,8 +531,6 @@ class HwcDisplay : public ICompositorDisplay {
   // the composition is committed.
   std::optional<CompositionPlanner::ValidatedComposition>
       validated_composition_ = std::nullopt;
-
-  SharedFd writeback_complete_fence_;
 
   uint32_t frame_no_ = 0;
   std::map<CompositionAttributes, CompositionStats> comp_stats_{};

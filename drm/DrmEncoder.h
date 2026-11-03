@@ -52,7 +52,7 @@ class DrmEncoder : public PipelineBindable<DrmEncoder> {
 
   bool CanClone(DrmEncoder &encoder);
 
-  bool SupportsCrtc(DrmCrtc &crtc);
+  virtual bool SupportsCrtc(DrmCrtc &crtc);
 
   virtual uint32_t GetCurrentCrtcId() const {
     return enc_->crtc_id;

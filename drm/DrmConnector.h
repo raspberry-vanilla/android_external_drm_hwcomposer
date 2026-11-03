@@ -89,11 +89,11 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
     return connector_->encoder_id;
   }
 
-  bool SupportsEncoder(DrmEncoder &enc) const;
+  virtual bool SupportsEncoder(DrmEncoder &enc) const;
 
   virtual bool IsInternal() const;
   virtual bool IsExternal() const;
-  bool IsWriteback() const;
+  virtual bool IsWriteback() const;
   bool IsValid() const;
 
   virtual std::string GetName() const;

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <unistd.h>
+
 #include <memory>
 
 namespace sdm {
@@ -24,8 +26,27 @@ using std::shared_ptr;
 
 class Fence {
  public:
+  explicit Fence(int fd = -1) : fd_(fd) {
+  }
+  ~Fence() {
+    if (fd_ >= 0) {
+      close(fd_);
+    }
+  }
+  Fence(const Fence &) = delete;
+  Fence &operator=(const Fence &) = delete;
+  Fence(Fence &&) = delete;
+  Fence &operator=(Fence &&) = delete;
+
   static std::shared_ptr<Fence> Create(int fd, const char *name);
   static int Dup(const std::shared_ptr<Fence> &fence);
+
+  int GetFd() const {
+    return fd_;
+  }
+
+ private:
+  int fd_ = -1;
 };
 
 }  // namespace sdm

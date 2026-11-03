@@ -24,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <core/buffer_allocator.h>  // IWYU pragma: keep
@@ -41,6 +42,7 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmMode.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcWriteback.h"  // IWYU pragma: keep
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -321,6 +323,25 @@ std::optional<AtomicCommitResult> SdmAtomicStateManager::ExecuteAtomicCommit(
     if (out_retire_fence) {
       // Dup to take ownership of new fence.
       result.present_fence = MakeSharedFd(sdm::Fence::Dup(out_retire_fence));
+    }
+    if (args.writeback) {
+      auto wb_buffer = args.writeback->ConsumeBuffer();
+      if (!wb_buffer.has_value()) {
+        ALOGE("Writeback buffer was not armed or already consumed");
+      } else {
+        std::shared_ptr<sdm::Fence> out_readback_fence;
+        display_error = settings_intf_
+                            ->GetReadbackBufferFence(sdm_display_id_,
+                                                     &out_readback_fence);
+        SharedFd fence;
+        if (display_error != sdm::kErrorNone) {
+          ALOGE("GetReadbackBufferFence failed: %s",
+                ErrorToString(display_error).c_str());
+        } else if (out_readback_fence) {
+          fence = MakeSharedFd(sdm::Fence::Dup(out_readback_fence));
+        }
+        args.writeback->SetOutFence(std::move(fence));
+      }
     }
   }
   return result;

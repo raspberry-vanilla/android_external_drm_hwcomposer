@@ -629,7 +629,7 @@ void ExecuteSetDisplayClientTarget(DrmHwc& hwc, int64_t display_handle,
 
   cmd_result_writer.AddClientTarget(display_handle, command.dataspace,
                                     ToPixelFormat(
-                                        display->GetWritebackBufferFormat()));
+                                        display->GetClientTargetFormat()));
 }
 
 void ExecuteSetDisplayOutputBuffer(DrmHwc& hwc, int64_t display_handle,
@@ -641,13 +641,18 @@ void ExecuteSetDisplayOutputBuffer(DrmHwc& hwc, int64_t display_handle,
     return;
   }
 
-  auto& writeback_layer = display->GetWritebackLayer();
-  if (!writeback_layer) {
+  if (display->GetDisplayType() != HwcDisplay::DisplayType::kVirtual) {
     cmd_result_writer.AddError(hwc3::Error::kBadLayer);
     return;
   }
 
-  auto buffer_cache = GetBufferCache(display, *writeback_layer);
+  auto hwc3_display = DrmHwcThree::GetHwc3Display(*display);
+  if (!hwc3_display->output_buffer_cache) {
+    hwc3_display->output_buffer_cache = std::make_shared<GrallocBufferCache>(
+        [display](auto& bi) -> std::shared_ptr<DrmFbIdHandle> {
+          return ImportFb(display, bi);
+        });
+  }
 
   std::unique_ptr<const native_handle_t, NativeHandleDeleter> raw_buffer;
   if (buffer.handle) {
@@ -657,21 +662,15 @@ void ExecuteSetDisplayOutputBuffer(DrmHwc& hwc, int64_t display_handle,
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   auto fence = const_cast<::ndk::ScopedFileDescriptor&>(buffer.fence).release();
 
-  HwcLayer::LayerProperties properties = {
-      .buffer = buffer_cache->HandleNextBuffer(raw_buffer
-                                                   ? std::make_optional(
-                                                         raw_buffer.get())
-                                                   : std::nullopt,
-                                               MakeSharedFd(fence),
-                                               buffer.slot),
-  };
-
-  if (!properties.buffer) {
+  auto hwc_buffer = hwc3_display->output_buffer_cache
+                        ->HandleNextBuffer(raw_buffer ? std::make_optional(
+                                                            raw_buffer.get())
+                                                      : std::nullopt,
+                                           MakeSharedFd(fence), buffer.slot);
+  if (!hwc_buffer || !display->SetWritebackBuffer(*hwc_buffer)) {
     cmd_result_writer.AddError(hwc3::Error::kBadLayer);
     return;
   }
-
-  writeback_layer->SetLayerProperties(properties);
 }
 
 const SharedFd& GetCachedHdrBoostLutFd() {
@@ -834,8 +833,7 @@ void ExecuteDisplayCommand(DrmHwcThree& hwc, const DisplayCommand& command,
     }
     cmd_result_writer.AddChanges(changes);
 
-    auto buffer_format = display->GetWritebackBufferFormat();
-    if (buffer_format == ::android::drm_hwcomposer::BufferFormat::kRgbaFp16) {
+    if (display->HasHdrOutput()) {
       std::vector<DisplayLuts::LayerLut> layer_luts;
       constexpr int32_t kLutSize = ColorUtil::kHdrBoostLut.size();
       const SharedFd& lut_fd = GetCachedHdrBoostLutFd();
@@ -936,6 +934,24 @@ auto ToPixelFormat(::android::drm_hwcomposer::BufferFormat format)
             static_cast<uint32_t>(format));
       return common::PixelFormat::RGBA_8888;
   }
+}
+
+auto ToDataspace(::android::drm_hwcomposer::HwcColorspace colorspace)
+    -> common::Dataspace {
+  switch (colorspace) {
+    case ::android::drm_hwcomposer::HwcColorspace::kBt601:
+      return common::Dataspace::BT601_625;
+    case ::android::drm_hwcomposer::HwcColorspace::kDciP3:
+      return common::Dataspace::DISPLAY_P3;
+    case ::android::drm_hwcomposer::HwcColorspace::kBt2020:
+      return common::Dataspace::BT2020;
+    case ::android::drm_hwcomposer::HwcColorspace::kBt709:
+    case ::android::drm_hwcomposer::HwcColorspace::kDefault:
+      return common::Dataspace::SRGB;
+  }
+  ALOGW("Unsupported colorspace: %d, using SRGB instead.",
+        static_cast<int32_t>(colorspace));
+  return common::Dataspace::SRGB;
 }
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

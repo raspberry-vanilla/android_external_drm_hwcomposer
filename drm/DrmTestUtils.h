@@ -95,6 +95,8 @@ constexpr uint32_t kFakeColorOpDataPropId = 47;
 inline constexpr uint32_t kFakePathPropId = 48;
 constexpr uint32_t kFakeColorspacePropId = 50;
 constexpr uint32_t kFakeHdrOutputMetadataPropId = 51;
+constexpr uint32_t kFakeWritebackFbIdPropId = 52;
+constexpr uint32_t kFakeWritebackOutFencePropId = 53;
 constexpr uint32_t kFakeAllCrtcsMask = 0xFFFFFFFFU;
 constexpr uint32_t kFakeFbBaseId = 500;
 constexpr uint32_t kFakeBlobBaseId = 1000;
@@ -337,17 +339,27 @@ class FakeDrmConnector : public DrmConnector {
                    bool is_external = false, uint32_t width = 0,
                    uint32_t height = 0,
                    uint32_t connector_id = kFakeConnectorBaseId,
-                   uint32_t index = 0, PropHook prop_hook = nullptr)
+                   uint32_t index = 0, PropHook prop_hook = nullptr,
+                   bool is_writeback = false)
       : DrmConnector(nullptr, dev, index),
         connector_id_(connector_id),
         encoder_id_(encoder_id),
         is_external_(is_external),
+        is_writeback_(is_writeback),
         width_(width),
         height_(height),
         prop_hook_(std::move(prop_hook)) {
     InitFakeDrmProperty(crtc_id_property_, connector_id_,
                         kFakeConnectorCrtcPropId, "CRTC_ID",
                         DRM_MODE_PROP_OBJECT, 0);
+    if (is_writeback_) {
+      InitFakeDrmProperty(writeback_fb_id_property_, connector_id_,
+                          kFakeWritebackFbIdPropId, "WRITEBACK_FB_ID",
+                          DRM_MODE_PROP_OBJECT, 0);
+      InitFakeDrmProperty(writeback_out_fence_property_, connector_id_,
+                          kFakeWritebackOutFencePropId,
+                          "WRITEBACK_OUT_FENCE_PTR", DRM_MODE_PROP_RANGE, 0);
+    }
   }
 
   void SetPropHook(PropHook hook) {
@@ -431,12 +443,29 @@ class FakeDrmConnector : public DrmConnector {
     return encoder_id_;
   }
 
+  bool SupportsEncoder(DrmEncoder& enc) const override {
+    if (is_writeback_) {
+      return enc.GetId() == encoder_id_;
+    }
+    return DrmConnector::SupportsEncoder(enc);
+  }
+
   bool IsExternal() const override {
+    if (is_writeback_) {
+      return false;
+    }
     return connector_ ? DrmConnector::IsExternal() : is_external_;
   }
 
   bool IsInternal() const override {
+    if (is_writeback_) {
+      return false;
+    }
     return connector_ ? DrmConnector::IsInternal() : !is_external_;
+  }
+
+  bool IsWriteback() const override {
+    return connector_ ? DrmConnector::IsWriteback() : is_writeback_;
   }
 
   bool IsConnected() const override {
@@ -511,6 +540,9 @@ class FakeDrmConnector : public DrmConnector {
   uint32_t GetConnectorType() const override {
     if (connector_) {
       return connector_->connector_type;
+    }
+    if (is_writeback_) {
+      return DRM_MODE_CONNECTOR_WRITEBACK;
     }
     return is_external_ ? DRM_MODE_CONNECTOR_DisplayPort
                         : DRM_MODE_CONNECTOR_eDP;
@@ -602,6 +634,7 @@ class FakeDrmConnector : public DrmConnector {
   const uint32_t connector_id_;
   const uint32_t encoder_id_;
   const bool is_external_;
+  const bool is_writeback_;
   uint32_t width_;
   uint32_t height_;
   uint32_t connector_type_id_ = 1;
@@ -656,9 +689,21 @@ class FakeDrmEncoder : public DrmEncoder {
     return crtc_id_;
   }
 
+  bool SupportsCrtc(DrmCrtc& crtc) override {
+    if (supports_crtc_override_) {
+      return crtc.GetId() == crtc_id_;
+    }
+    return DrmEncoder::SupportsCrtc(crtc);
+  }
+
+  void SetSupportsCrtcOverride(bool enable) {
+    supports_crtc_override_ = enable;
+  }
+
  private:
   const uint32_t id_;
   const uint32_t crtc_id_;
+  bool supports_crtc_override_ = false;
 };
 
 class FakeDrmCrtc : public DrmCrtc {
@@ -1031,6 +1076,27 @@ class FakeDrmDevice : public DrmDevice {
 
   void AddIgnoredConnector(std::unique_ptr<DrmConnector> connector) {
     ignored_connectors_.emplace_back(std::move(connector));
+  }
+
+  void AddWritebackConnector(uint32_t encoder_id) {
+    for (auto& enc : encoders_) {
+      if (enc->GetId() == encoder_id) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        static_cast<FakeDrmEncoder*>(enc.get())->SetSupportsCrtcOverride(true);
+      }
+    }
+    constexpr uint32_t kWritebackConnectorOffset = 100;
+    writeback_connectors_.emplace_back(
+        std::make_unique<FakeDrmConnector>(this, encoder_id,
+                                           /*is_external=*/false, /*width=*/0,
+                                           /*height=*/0,
+                                           kFakeConnectorBaseId +
+                                               kWritebackConnectorOffset +
+                                               static_cast<uint32_t>(
+                                                   writeback_connectors_
+                                                       .size()),
+                                           /*index=*/0, /*prop_hook=*/nullptr,
+                                           /*is_writeback=*/true));
   }
 
   void AddEncoder(std::unique_ptr<DrmEncoder> encoder) {

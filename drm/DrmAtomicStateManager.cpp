@@ -49,6 +49,7 @@
 #include "drm/DrmFbImporter.h"
 #include "drm/DrmPlane.h"
 #include "drm/DrmUnique.h"
+#include "hwc/HwcWriteback.h"  // IWYU pragma: keep
 #include "utils/ColorUtil.h"
 #include "utils/fd.h"
 #include "utils/log.h"
@@ -182,27 +183,32 @@ void DrmAtomicStateManager::CheckDoubleSettingState(
 
 bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(
     const AtomicCommitArgs &args, DrmAtomicRequest &request) {
-  if (!pipe_->writeback_connector || !args.writeback_fb) {
+  if (!args.writeback) {
     return true;
+  }
+  auto *wb_connector = args.writeback->GetConnector();
+  const auto &wb_buffer = args.writeback->GetBuffer();
+  if (wb_connector == nullptr || !wb_buffer || !wb_buffer->fb) {
+    ALOGE(
+        "DrmAtomicStateManager: HwcWriteback missing valid connector or "
+        "buffer");
+    return false;
   }
   auto *crtc = pipe_->crtc->Get();
 
-  if (!pipe_->writeback_connector->Get()
-           ->GetCrtcIdProperty()
-           .AtomicSet(*request.property_set, crtc->GetId())) {
+  if (!wb_connector->GetCrtcIdProperty().AtomicSet(*request.property_set,
+                                                   crtc->GetId())) {
     ALOGE("DrmAtomicStateManager: Failed to set writeback CRTC_ID property");
     return false;
   }
 
-  if (!pipe_->writeback_connector->Get()
-           ->GetWritebackFbIdProperty()
-           .AtomicSet(*request.property_set, args.writeback_fb->GetFbId())) {
+  if (!wb_connector->GetWritebackFbIdProperty()
+           .AtomicSet(*request.property_set, wb_buffer->fb->GetFbId())) {
     ALOGE("DrmAtomicStateManager: Failed to set writeback FB_ID property");
     return false;
   }
 
-  if (!pipe_->writeback_connector->Get()
-           ->GetWritebackOutFenceProperty()
+  if (!wb_connector->GetWritebackOutFenceProperty()
            .AtomicSet(*request.property_set,
                       uint64_t(&request.wb_fence_address))) {
     ALOGE(
@@ -212,11 +218,12 @@ bool DrmAtomicStateManager::SetWriteBackFenceIfNeeded(
   }
 
   // Wait on input fence if provided
-  if (args.writeback_release_fence) {
+  if (wb_buffer->fence) {
     ATRACE_NAME("WritebackFenceWait");
-    sync_wait(*args.writeback_release_fence, -1);
+    sync_wait(*wb_buffer->fence, -1);
   }
 
+  request.used_kms_objects.framebuffers.push_back(wb_buffer->fb);
   return true;
 }
 
@@ -880,9 +887,9 @@ AtomicCommitResult DrmAtomicStateManager::FinishPendingRequest(
   result.present_fence = MakeSharedFd(request->out_fence_address);
   committed_frame_state_ = std::move(request->new_frame_state);
 
-  // Store the writeback fence if this operation used a writeback connector
-  if (pipe_->writeback_connector && args.writeback_fb) {
-    result.writeback_complete_fence = MakeSharedFd(request->wb_fence_address);
+  // Store the writeback fence if this operation used writeback
+  if (args.writeback) {
+    args.writeback->SetOutFence(MakeSharedFd(request->wb_fence_address));
   }
 
   if (args.display_mode) {

@@ -41,6 +41,7 @@ soong_config_string_variable {
 
 cc_library_headers {
     name: "drm_hwcomposer_sdm_stub_headers",
+    host_supported: true,
     vendor: true,
     export_include_dirs: ["sdm/stubs/include"],
 }

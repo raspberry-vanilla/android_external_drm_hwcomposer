@@ -16,6 +16,8 @@
 
 #include "backend/sdm/SdmAtomicStateManager.h"
 
+#include <unistd.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -47,6 +49,8 @@
 #include "drm/AtomicStateManager.h"
 #include "drm/DrmMode.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcWriteback.h"
+#include "utils/fd.h"
 
 namespace android::drm_hwcomposer {
 namespace {
@@ -158,6 +162,16 @@ class MockSdmSettingsIntf : public sdm::SDMDisplaySettingsIntf {
               (override));
   MOCK_METHOD(sdm::DisplayError, SetDisplayBrightnessNits,
               (uint64_t disp_id, float brightness_nits), (override));
+  MOCK_METHOD(sdm::DisplayError, GetReadbackBufferAttributes,
+              (uint64_t disp_id, int32_t* format, int32_t* dataspace),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, GetReadbackBufferFence,
+              (uint64_t disp_id, std::shared_ptr<sdm::Fence>* release_fence),
+              (override));
+  MOCK_METHOD(sdm::DisplayError, SetReadbackBuffer,
+              (uint64_t disp_id, void* buffer,
+               const std::shared_ptr<sdm::Fence>& acquire_fence),
+              (override));
 };
 
 DrmMode MakeTestDrmMode(uint16_t width, uint16_t height, uint32_t vrefresh_hz) {
@@ -664,6 +678,77 @@ TEST_F(SdmAtomicStateManagerTest,
       .WillOnce(Return(sdm::kErrorNone));
 
   EXPECT_TRUE(manager->ExecuteAtomicCommit(args).has_value());
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitWithWritebackRetrievesFenceAndConsumesBuffer) {
+  InitManagerWithNativeColorMode();
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  WritebackBuffer wb_buffer{
+      .bi =
+          BufferInfo{
+              .width = kTestWidth,
+              .height = kTestHeight,
+              .fds_shared = SnapAllocHandle::Create(nullptr),
+          },
+      .fb = nullptr,
+  };
+  auto writeback = std::make_shared<HwcWriteback>(nullptr,
+                                                  std::move(wb_buffer));
+
+  auto sdm_fence = sdm::Fence::Create(DupFd(STDIN_FILENO), "readback_fence");
+
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf, GetReadbackBufferFence(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(sdm_fence), Return(sdm::kErrorNone)));
+
+  AtomicCommitArgs commit_args{};
+  commit_args.composition = plan;
+  commit_args.writeback = writeback;
+  ASSERT_TRUE(manager->ExecuteAtomicCommit(commit_args).has_value());
+  EXPECT_TRUE(writeback->IsBufferConsumed());
+
+  SharedFd out_fence = writeback->TakeOutFence();
+  ASSERT_NE(out_fence, nullptr);
+  EXPECT_GE(*out_fence, 0);
+}
+
+TEST_F(SdmAtomicStateManagerTest,
+       ExecuteAtomicCommitWithDisarmedWritebackSucceedsWithoutQueryingFence) {
+  InitManagerWithNativeColorMode();
+
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  plan->plan.emplace_back(LayerData{}, nullptr, 0);
+
+  WritebackBuffer wb_buffer{
+      .bi =
+          BufferInfo{
+              .width = kTestWidth,
+              .height = kTestHeight,
+              .fds_shared = SnapAllocHandle::Create(nullptr),
+          },
+      .fb = nullptr,
+  };
+  auto writeback = std::make_shared<HwcWriteback>(nullptr,
+                                                  std::move(wb_buffer));
+  (void)writeback->ConsumeBuffer();
+
+  EXPECT_CALL(draw_cycle_intf, PresentDisplay(kTestSdmDisplayId, _))
+      .Times(1)
+      .WillOnce(Return(sdm::kErrorNone));
+  EXPECT_CALL(settings_intf, GetReadbackBufferFence(_, _)).Times(0);
+
+  AtomicCommitArgs commit_args{};
+  commit_args.composition = plan;
+  commit_args.writeback = writeback;
+  EXPECT_TRUE(manager->ExecuteAtomicCommit(commit_args).has_value());
+  EXPECT_EQ(writeback->TakeOutFence(), nullptr);
 }
 }  // namespace
 }  // namespace android::drm_hwcomposer

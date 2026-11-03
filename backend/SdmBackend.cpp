@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <cutils/native_handle.h>
+#include <system/graphics-base-v1.0.h>
 #include <xf86drmMode.h>
 
 #include <core/sdm_types.h>
@@ -55,6 +56,7 @@
 #include "backend/sdm/SdmToConnectorMapper.h"
 #include "backend/sdm/SnapAllocHandle.h"
 #include "backend/sdm/sdm_error.h"
+#include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoMapperMetadata.h"
 #include "bufferinfo/GrallocBufferHandle.h"
 #include "compositor/DisplayInfo.h"
@@ -143,14 +145,97 @@ class SnapAllocBufferInfoGetter : public BufferInfoMapperMetadata {
   }
 };
 
+std::optional<BufferFormat> SdmFormatToBufferFormat(int32_t sdm_format) {
+  switch (sdm_format) {
+    case HAL_PIXEL_FORMAT_RGBA_8888:
+      return BufferFormat::kRgba8888;
+    case HAL_PIXEL_FORMAT_RGBX_8888:
+      return BufferFormat::kXrgb8888;
+    case HAL_PIXEL_FORMAT_RGB_888:
+      // SDM's ConcurrencyMgr::GetReadbackBufferAttributes hardcodes RGB_888,
+      // which SnapAlloc rejects for GPU_TEXTURE allocations used by HWC3
+      // readback clients (e.g., SurfaceFlinger and VTS). Advertise RGBA_8888
+      // instead, which SDM's CWB pipeline writes directly via GetSDMFormat.
+      return BufferFormat::kRgba8888;
+    case HAL_PIXEL_FORMAT_RGBA_FP16:
+      return BufferFormat::kRgbaFp16;
+    case HAL_PIXEL_FORMAT_RGBA_1010102:
+      return BufferFormat::kRgba1010102;
+    default:
+      ALOGW("Unsupported SDM format: 0x%x", sdm_format);
+      return std::nullopt;
+  }
+}
+
+std::optional<HwcColorspace> SdmDataspaceToHwcColorspace(int32_t dataspace) {
+  switch (dataspace & HAL_DATASPACE_STANDARD_MASK) {
+    case HAL_DATASPACE_STANDARD_BT601_625:
+    case HAL_DATASPACE_STANDARD_BT601_625_UNADJUSTED:
+    case HAL_DATASPACE_STANDARD_BT601_525:
+    case HAL_DATASPACE_STANDARD_BT601_525_UNADJUSTED:
+      return HwcColorspace::kBt601;
+    case HAL_DATASPACE_STANDARD_DCI_P3:
+      return HwcColorspace::kDciP3;
+    case HAL_DATASPACE_STANDARD_BT2020:
+    case HAL_DATASPACE_STANDARD_BT2020_CONSTANT_LUMINANCE:
+      return HwcColorspace::kBt2020;
+    case HAL_DATASPACE_STANDARD_BT709:
+      return HwcColorspace::kBt709;
+    case HAL_DATASPACE_STANDARD_UNSPECIFIED:
+      return HwcColorspace::kDefault;
+    default:
+      ALOGW("Unsupported SDM dataspace: 0x%x", dataspace);
+      return std::nullopt;
+  }
+}
+
 class SdmDisplayCapabilities : public BackendDisplayCapabilities {
  public:
   SdmDisplayCapabilities(uint64_t sdm_display_id,
                          const SdmAtomicStateManager* state_manager,
-                         sdm::SDMDisplayCapsIntf* caps_intf)
+                         sdm::SDMDisplayCapsIntf* caps_intf,
+                         sdm::SDMDisplaySettingsIntf* settings_intf)
       : state_manager_(state_manager),
         caps_intf_(caps_intf),
+        settings_intf_(settings_intf),
         sdm_display_id_(sdm_display_id) {
+  }
+
+  std::optional<bool> GetWritebackSupportOverride() const override {
+    return GetWritebackAttributes().has_value();
+  }
+
+  std::optional<WritebackAttributes> GetWritebackAttributes() const override {
+    if (settings_intf_ == nullptr) {
+      return std::nullopt;
+    }
+    int32_t format = 0;
+    int32_t dataspace = 0;
+    auto error = settings_intf_->GetReadbackBufferAttributes(sdm_display_id_,
+                                                             &format,
+                                                             &dataspace);
+    if (error != sdm::kErrorNone) {
+      if (error == sdm::kErrorNotSupported) {
+        ALOGV("GetReadbackBufferAttributes not supported for display %" PRIu64,
+              sdm_display_id_);
+      } else {
+        ALOGE("GetReadbackBufferAttributes failed for display %" PRIu64 ": %s",
+              sdm_display_id_, ErrorToString(error).c_str());
+      }
+      return std::nullopt;
+    }
+    auto buffer_format = SdmFormatToBufferFormat(format);
+    auto colorspace = SdmDataspaceToHwcColorspace(dataspace);
+    if (!buffer_format.has_value() || !colorspace.has_value()) {
+      ALOGE("Unsupported writeback attributes for display %" PRIu64
+            ": format=0x%x, dataspace=0x%x",
+            sdm_display_id_, format, dataspace);
+      return std::nullopt;
+    }
+    return WritebackAttributes{
+        .format = *buffer_format,
+        .colorspace = *colorspace,
+    };
   }
 
   std::optional<bool> GetHardwareColorTransformOverride() const override {
@@ -179,6 +264,7 @@ class SdmDisplayCapabilities : public BackendDisplayCapabilities {
  private:
   const SdmAtomicStateManager* state_manager_;
   sdm::SDMDisplayCapsIntf* caps_intf_;
+  sdm::SDMDisplaySettingsIntf* settings_intf_;
   uint64_t sdm_display_id_;
 };
 
@@ -758,11 +844,11 @@ std::unique_ptr<DrmDisplayPipeline> SdmBackend::CreatePipeline(
                              draw_cycle_intf.get(), settings_intf.get());
   pipe->capabilities = std::make_unique<
       SdmDisplayCapabilities>(sdm_display_id.value(), state_manager.get(),
-                              display_caps_intf.get());
+                              display_caps_intf.get(), settings_intf.get());
   pipe->atomic_state_manager = std::move(state_manager);
   pipe->planner = std::make_unique<
       SdmCompositionPlanner>(sdm_display_id.value(), layer_builder_intf.get(),
-                             draw_cycle_intf.get());
+                             draw_cycle_intf.get(), settings_intf.get());
   return pipe;
 }
 

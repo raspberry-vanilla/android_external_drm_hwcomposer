@@ -18,10 +18,12 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include <core/display_interface.h>
 #include <core/sdm_types.h>
+#include <utils/fence.h>
 
 namespace sdm {
 
@@ -47,6 +49,14 @@ class SDMDisplaySettingsIntf {
       uint64_t disp_id, const DisplayConfigVariableInfo &config) = 0;
   virtual DisplayError SetDisplayBrightnessNits(uint64_t disp_id,
                                                 float brightness_nits) = 0;
+  virtual DisplayError GetReadbackBufferAttributes(uint64_t disp_id,
+                                                   int32_t *format,
+                                                   int32_t *dataspace) = 0;
+  virtual DisplayError GetReadbackBufferFence(
+      uint64_t disp_id, std::shared_ptr<Fence> *release_fence) = 0;
+  virtual DisplayError SetReadbackBuffer(
+      uint64_t disp_id, void *buffer,
+      const std::shared_ptr<Fence> &acquire_fence) = 0;
 };
 
 }  // namespace sdm

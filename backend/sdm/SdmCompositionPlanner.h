@@ -18,17 +18,20 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 
 #include "compositor/CompositionPlanner.h"
 
 namespace sdm {
 class SDMDisplayLayerBuilderIntf;
 class SDMDisplayDrawCycleIntf;
+class SDMDisplaySettingsIntf;
 }  // namespace sdm
 
 namespace android::drm_hwcomposer {
 
 enum class CompositionType;
+class HwcWriteback;
 struct LayerData;
 
 // CompositionPlanner implementation that interfaces with SDM.
@@ -39,7 +42,8 @@ class SdmCompositionPlanner : public CompositionPlanner {
  public:
   SdmCompositionPlanner(uint64_t sdm_display_id,
                         sdm::SDMDisplayLayerBuilderIntf* layer_intf,
-                        sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf);
+                        sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf,
+                        sdm::SDMDisplaySettingsIntf* settings_intf);
   ~SdmCompositionPlanner() override;
 
   auto ValidateDisplay(const ICompositorDisplay* display)
@@ -49,6 +53,7 @@ class SdmCompositionPlanner : public CompositionPlanner {
   using SDMLayerId = int64_t;
 
   void UpdateLayerMapping(const ICompositorDisplay& display);
+  void UpdateReadbackBuffer(const ICompositorDisplay& display);
   void UpdateLayer(const HwcLayer* hwc_layer, CompositionType composition_type,
                    uint32_t z_order);
 
@@ -79,6 +84,12 @@ class SdmCompositionPlanner : public CompositionPlanner {
 
   sdm::SDMDisplayLayerBuilderIntf* layer_intf_;
   sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf_;
+  sdm::SDMDisplaySettingsIntf* settings_intf_;
+
+  // Tracks the HwcWriteback most recently armed in SDM so repeat
+  // ValidateDisplay calls do not queue duplicate CWB requests and the buffer's
+  // SnapAllocHandle stays open while queued in SDM.
+  std::shared_ptr<HwcWriteback> armed_writeback_;
 };
 
 }  // namespace android::drm_hwcomposer

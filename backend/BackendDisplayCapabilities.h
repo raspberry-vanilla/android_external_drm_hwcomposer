@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include <optional>
 #include <vector>
 
@@ -50,6 +52,17 @@ class BackendDisplayCapabilities {
   // Returns an override for Hardware Color Transform support, or std::nullopt
   // to fall through to DRM/KMS CRTC CTM property detection.
   virtual std::optional<bool> GetHardwareColorTransformOverride() const {
+    return std::nullopt;
+  }
+
+  // Returns an override for display writeback/readback support, or std::nullopt
+  // to fall through to DRM/KMS writeback connector detection.
+  virtual std::optional<bool> GetWritebackSupportOverride() const {
+    return std::nullopt;
+  }
+
+  // Returns backend-specific writeback buffer attributes when supported.
+  virtual std::optional<WritebackAttributes> GetWritebackAttributes() const {
     return std::nullopt;
   }
 

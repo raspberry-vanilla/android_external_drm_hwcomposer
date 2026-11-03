@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <system/graphics-base-v1.0.h>
@@ -32,6 +33,7 @@
 #include <core/sdm_types.h>
 #include <sdm_display_intf_drawcycle.h>
 #include <sdm_display_intf_layer_builder.h>
+#include <sdm_display_intf_settings.h>
 #include <utils/fence.h>
 
 #include "backend/sdm/SnapAllocHandle.h"
@@ -43,6 +45,7 @@
 #include "compositor/LayerData.h"
 #include "compositor/LayerToPlaneJoiningPlan.h"
 #include "hwc/HwcLayer.h"
+#include "hwc/HwcWriteback.h"
 #include "utils/fd.h"
 #include "utils/log.h"
 
@@ -157,10 +160,12 @@ bool ForceClientComposition(const ICompositorDisplay* display,
 
 SdmCompositionPlanner::SdmCompositionPlanner(
     uint64_t sdm_display_id, sdm::SDMDisplayLayerBuilderIntf* layer_intf,
-    sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf)
+    sdm::SDMDisplayDrawCycleIntf* draw_cycle_intf,
+    sdm::SDMDisplaySettingsIntf* settings_intf)
     : sdm_display_id_(sdm_display_id),
       layer_intf_(layer_intf),
-      draw_cycle_intf_(draw_cycle_intf) {
+      draw_cycle_intf_(draw_cycle_intf),
+      settings_intf_(settings_intf) {
 }
 
 SdmCompositionPlanner::~SdmCompositionPlanner() {
@@ -199,6 +204,8 @@ auto SdmCompositionPlanner::ValidateDisplay(const ICompositorDisplay* display)
   // Notify SDM that layers have been updated, so internal bookkeeping can be
   // updated.
   draw_cycle_intf_->LayerStackUpdated(sdm_display_id_);
+
+  UpdateReadbackBuffer(*display);
 
   // TODO: validate_only is hardcoded right now. Handle validateOrPresent case.
   const bool validate_only = true;
@@ -443,6 +450,57 @@ void SdmCompositionPlanner::UpdateLayerMapping(
       it = layer_mappings_.erase(it);
     }
   }
+}
+
+void SdmCompositionPlanner::UpdateReadbackBuffer(
+    const ICompositorDisplay& display) {
+  if (armed_writeback_ && armed_writeback_->IsBufferConsumed()) {
+    armed_writeback_.reset();
+  }
+
+  std::shared_ptr<HwcWriteback> writeback = display.GetWriteback();
+  if (!writeback || writeback->IsBufferConsumed()) {
+    return;
+  }
+
+  if (armed_writeback_ == writeback) {
+    return;
+  }
+
+  if (settings_intf_ == nullptr) {
+    ALOGE("UpdateReadbackBuffer called with null settings_intf");
+    (void)writeback->ConsumeBuffer();
+    return;
+  }
+
+  const auto& wb_buffer_opt = writeback->GetBuffer();
+  if (!wb_buffer_opt.has_value()) {
+    return;
+  }
+  const WritebackBuffer& wb_buffer = *wb_buffer_opt;
+  auto snap_handle = std::static_pointer_cast<SnapAllocHandle>(
+      wb_buffer.bi.fds_shared);
+  if (snap_handle == nullptr || snap_handle->GetSnapHandle() == nullptr) {
+    ALOGE("Readback buffer has no valid SnapAllocHandle");
+    (void)writeback->ConsumeBuffer();
+    return;
+  }
+
+  std::shared_ptr<sdm::Fence> acquire_fence;
+  if (wb_buffer.fence != nullptr) {
+    acquire_fence = sdm::Fence::Create(DupFd(wb_buffer.fence),
+                                       "readback_acquire_fence");
+  }
+  auto display_error = settings_intf_
+                           ->SetReadbackBuffer(sdm_display_id_,
+                                               snap_handle->GetSnapHandle(),
+                                               acquire_fence);
+  if (display_error != sdm::kErrorNone) {
+    ALOGE("SetReadbackBuffer failed: %s", ErrorToString(display_error).c_str());
+    (void)writeback->ConsumeBuffer();
+    return;
+  }
+  armed_writeback_ = std::move(writeback);
 }
 
 void SdmCompositionPlanner::UpdateLayer(const HwcLayer* hwc_layer,
