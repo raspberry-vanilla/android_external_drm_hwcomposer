@@ -85,6 +85,7 @@ filegroup {
         "compositor/HdcpController.cpp",
         "compositor/IntelMappingValidator.cpp",
         "compositor/LayerToPlaneJoiningPlan.cpp",
+        "compositor/MtkMappingValidator.cpp",
         "compositor/PresentedCompositionCache.cpp",
         "compositor/ShortCircuitor.cpp",
         "compositor/mapper/CursorLayerMapper.cpp",
@@ -116,6 +117,7 @@ filegroup {
         "backend/ClientBackend.cpp",
         "backend/GenericBackend.cpp",
         "backend/IntelBackend.cpp",
+        "backend/MtkBackend.cpp",
 
         "early_animation/EarlyBootAnimation.cpp",
 
@@ -328,6 +330,8 @@ cc_test_host {
         "compositor/IntelMappingValidator.cpp",
         "compositor/IntelMappingValidatorTest.cpp",
         "compositor/LayerToPlaneJoiningPlan.cpp",
+        "compositor/MtkMappingValidator.cpp",
+        "compositor/MtkMappingValidatorTest.cpp",
         "compositor/PresentedCompositionCache.cpp",
         "compositor/ShortCircuitor.cpp",
         "compositor/ShortCircuitorTest.cpp",

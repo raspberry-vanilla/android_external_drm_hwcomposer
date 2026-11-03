@@ -18,6 +18,7 @@ src_common = files(
     'compositor/GenericLayerMapperCompositionPlanner.cpp',
     'compositor/HdcpController.cpp',
     'compositor/IntelMappingValidator.cpp',
+    'compositor/MtkMappingValidator.cpp',
     'compositor/LayerToPlaneJoiningPlan.cpp',
     'compositor/PresentedCompositionCache.cpp',
     'compositor/ShortCircuitor.cpp',

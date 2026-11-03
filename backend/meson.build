@@ -4,6 +4,7 @@ src_common += files(
     'ClientBackend.cpp',
     'GenericBackend.cpp',
     'IntelBackend.cpp',
+    'MtkBackend.cpp',
     'SdmBackend.cpp',
     'sdm/SdmAtomicStateManager.cpp',
     'sdm/SdmCompositionPlanner.cpp',

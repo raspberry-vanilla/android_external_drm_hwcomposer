@@ -64,6 +64,8 @@ UNITTEST_SRCS := \
 	compositor/IntelMappingValidator.cpp \
 	compositor/IntelMappingValidatorTest.cpp \
 	compositor/LayerToPlaneJoiningPlan.cpp \
+	compositor/MtkMappingValidator.cpp \
+	compositor/MtkMappingValidatorTest.cpp \
 	compositor/PresentedCompositionCache.cpp \
 	compositor/ShortCircuitor.cpp \
 	compositor/ShortCircuitorTest.cpp \
