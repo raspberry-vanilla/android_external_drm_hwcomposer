@@ -241,8 +241,7 @@ auto DrmConnector::Init() -> bool {
       }
     }
     if (!exists) {
-      std::string force_mode = Properties::GetForceMode();
-      if (IsForceMode(raw_mode, force_mode)) {
+      if (IsForceMode(raw_mode)) {
         modes_.emplace_back(&raw_mode);
       }
     }
@@ -429,8 +428,7 @@ auto DrmConnector::ProbeModesAndPropertiesOffLock() -> ProbedState {
     }
 
     if (!exists) {
-      std::string force_mode = Properties::GetForceMode();
-      if (IsForceMode(raw_mode, force_mode)) {
+      if (IsForceMode(raw_mode)) {
         probed.modes.emplace_back(&raw_mode);
       }
     }
@@ -678,13 +676,27 @@ std::optional<uint32_t> DrmConnector::GetPhysicalPortBaseId() const {
   return std::nullopt;
 }
 
-bool DrmConnector::IsForceMode(drmModeModeInfo raw_mode, std::string force_mode) {
+bool DrmConnector::IsForceMode(drmModeModeInfo raw_mode) {
+  DrmMode m(&raw_mode);
+
   // Don't force mode on writeback connectors
   if (IsWriteback()) {
+    ALOGV("Add mode %dx%d@%fHz for connector %s",
+        m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+        m.GetVRefresh(), GetName().c_str());
+    return true;
+  }
+
+  // Don't force mode on internal connectors
+  if (IsInternal()) {
+    ALOGI("Add mode %dx%d@%fHz for display in connector %s",
+        m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
+        m.GetVRefresh(), GetName().c_str());
     return true;
   }
 
   // Parse <xres>x<yres>[@<refreshrate>]
+  std::string force_mode = Properties::GetForceMode();
   uint32_t xres = 0, yres = 0, rate = 0;
   if (sscanf(force_mode.c_str(), "%dx%d@%d", &xres, &yres, &rate) != 3) {
     rate = 0;
@@ -694,8 +706,7 @@ bool DrmConnector::IsForceMode(drmModeModeInfo raw_mode, std::string force_mode)
   }
 
   // Match forced mode
-  DrmMode m(&raw_mode);
-  ALOGI("Supported mode %dx%d@%fHz for display in connector %s",
+  ALOGV("Supported mode %dx%d@%fHz for display in connector %s",
       m.GetRawMode().hdisplay, m.GetRawMode().vdisplay,
       m.GetVRefresh(), GetName().c_str());
   if (xres && yres) {

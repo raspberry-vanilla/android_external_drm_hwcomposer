@@ -268,7 +268,7 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   std::optional<uint32_t> GetPhysicalPortBaseId() const;
 
-  bool IsForceMode(drmModeModeInfo raw_mode, std::string force_mode);
+  bool IsForceMode(drmModeModeInfo raw_mode);
 
  protected:
   virtual bool GetPathPropertyBlobData(std::vector<char> &path_data) const {
