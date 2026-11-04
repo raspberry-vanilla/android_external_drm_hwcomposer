@@ -170,6 +170,8 @@ class DrmConnector : public PipelineBindable<DrmConnector> {
 
   bool IsMst() const;
 
+  bool IsForceMode(DrmMode m);
+
  private:
   DrmConnector(DrmModeConnectorUnique connector, DrmDevice *drm,
                uint32_t index);
