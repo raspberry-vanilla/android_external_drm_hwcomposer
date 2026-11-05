@@ -442,6 +442,31 @@ std::vector<uint8_t> MakeEdidWithCtaExtensionBounds(
 }
 #endif
 
+// clang-format off
+// NOLINTBEGIN(readability-magic-numbers)
+constexpr HalColorTransformMatrix kNightLightCtm = {
+    1.0F, 0.0F, 0.0F, 0.0F,
+    0.0F, 0.8F, 0.0F, 0.0F,
+    0.0F, 0.0F, 0.6F, 0.0F,
+    0.0F, 0.0F, 0.0F, 1.0F,
+};
+// NOLINTEND(readability-magic-numbers)
+// clang-format on
+
+class FakeCtmDisplayCapabilities : public BackendDisplayCapabilities {
+ public:
+  explicit FakeCtmDisplayCapabilities(bool has_hw_ctm)
+      : has_hw_ctm_(has_hw_ctm) {
+  }
+
+  std::optional<bool> GetHardwareColorTransformOverride() const override {
+    return has_hw_ctm_;
+  }
+
+ private:
+  bool has_hw_ctm_;
+};
+
 }  // namespace
 
 struct HwcDisplayTest : public ::testing::Test {
@@ -504,6 +529,26 @@ struct HwcDisplayTest : public ::testing::Test {
 
   void ReloadProperties() {
     hwc.GetResMan().ReloadProperties();
+  }
+
+  std::shared_ptr<DrmDisplayPipeline> CreateLegacyCrtcCtmPipeline(
+      const std::vector<DrmMode>& modes = {
+          CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                            DRM_MODE_TYPE_PREFERRED, "1080p60")}) const {
+    auto pipeline = CreatePipelineWithModes(modes, /*is_external=*/true);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    auto* fake_crtc = static_cast<FakeDrmCrtc*>(pipeline->crtc->Get());
+    fake_crtc->SetCtmPropertySupported(true);
+    return pipeline;
+  }
+
+  static void ValidateAcceptAndPresent(HwcDisplay& display) {
+    (void)display.ValidateStagedComposition();
+    display.AcceptValidatedComposition();
+    SharedFd present_fence;
+    std::vector<HwcDisplay::ReleaseFence> release_fences;
+    EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                                 release_fences));
   }
 
   ScopedTestProperty reset_bootanim_completed{"vendor.hwc.bootanim.completed",
@@ -4308,4 +4353,189 @@ TEST_F(HwcDisplayTest,
 
   sink->SetExecuteCommitHook(nullptr);
 }
+
+TEST_F(HwcDisplayTest,
+       FlattenedClientCompositionWithoutHardwareColorTransformResetsCrtcCtm) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+  ASSERT_FALSE(display.HasHardwareColorTransform());
+  ASSERT_FALSE(display.CtmByGpu());
+
+  // Two DEVICE layers on a single-plane pipeline flatten to all-CLIENT.
+  ASSERT_TRUE(display.CreateLayer(1));
+  ASSERT_TRUE(display.CreateLayer(2));
+  display.get_layer(1)->SetLayerProperties(CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.get_layer(2)->SetLayerProperties(CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1)));
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kIdentityMatrix);
+}
+
+TEST_F(HwcDisplayTest,
+       EscapingFlatteningRestoresCrtcCtmWithoutNewSetColorTransformCall) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+
+  ASSERT_TRUE(display.CreateLayer(1));
+  ASSERT_TRUE(display.CreateLayer(2));
+  display.get_layer(1)->SetLayerProperties(CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.get_layer(2)->SetLayerProperties(CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1)));
+  ValidateAcceptAndPresent(display);
+
+  // Destroying layer 2 lets layer 1 escape flattening on the next frame when
+  // SurfaceFlinger requests DEVICE composition without a new
+  // SetColorTransformMatrix() call.
+  ASSERT_TRUE(display.DestroyLayer(2));
+  HwcLayer::LayerProperties retry_device_props{};
+  retry_device_props.composition_type = CompositionType::kDevice;
+  display.get_layer(1)->SetLayerProperties(retry_device_props);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kNightLightCtm);
+}
+
+TEST_F(HwcDisplayTest, MixedClientWithDeviceLayerCompositionPreservesCrtcCtm) {
+  constexpr uint32_t kOverlayPlaneId = 390;
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  fake_device->AddPlane(
+      std::make_unique<FakeDrmPlane>(*fake_device, DRM_PLANE_TYPE_OVERLAY,
+                                     /*is_valid=*/true, kOverlayPlaneId));
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+
+  ASSERT_TRUE(display.CreateLayer(1));
+  ASSERT_TRUE(display.CreateLayer(2));
+  auto client_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId));
+  client_props.composition_type = CompositionType::kClient;
+  client_props.z_order = 0;
+  display.get_layer(1)->SetLayerProperties(client_props);
+  auto device_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId + 1));
+  device_props.z_order = 1;
+  display.get_layer(2)->SetLayerProperties(device_props);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kNightLightCtm);
+}
+
+TEST_F(HwcDisplayTest, ClientPlusSolidColorLayerCompositionPreservesCrtcCtm) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+
+  ASSERT_TRUE(display.CreateLayer(1));
+  ASSERT_TRUE(display.CreateLayer(2));
+  display.get_layer(1)->SetValidatedType(CompositionType::kClient);
+  display.get_layer(2)->SetValidatedType(CompositionType::kSolidColor);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  SharedFd present_fence;
+  std::vector<HwcDisplay::ReleaseFence> release_fences;
+  EXPECT_TRUE(display.PresentStagedComposition(std::nullopt, present_fence,
+                                               release_fences));
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kNightLightCtm);
+}
+
+TEST_F(HwcDisplayTest,
+       AllClientCompositionWithHardwareColorTransformPreservesCrtcCtm) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  pipeline->capabilities = std::make_unique<FakeCtmDisplayCapabilities>(
+      /*has_hw_ctm=*/true);
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+  ASSERT_TRUE(display.HasHardwareColorTransform());
+
+  ASSERT_TRUE(display.CreateLayer(1));
+  auto client_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId));
+  client_props.composition_type = CompositionType::kClient;
+  display.get_layer(1)->SetLayerProperties(client_props);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kNightLightCtm);
+}
+
+TEST_F(HwcDisplayTest,
+       SameResolutionModesetDuringFlattenedClientCompositionResetsCrtcCtm) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")});
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  display.SetPipeline(pipeline);
+  display.GetClientLayer().SetLayerProperties(
+      CreateFullScreenFhdLayerProperties(
+          std::make_shared<FakeFbIdHandle>(kTestFbId)));
+  display.SetColorTransformMatrix(kNightLightCtm);
+
+  ASSERT_TRUE(display.CreateLayer(1));
+  auto client_props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId));
+  client_props.composition_type = CompositionType::kClient;
+  display.get_layer(1)->SetLayerProperties(client_props);
+  ValidateAcceptAndPresent(display);
+
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const auto configs = display.GetDisplayConfigs();
+  const ConfigId fhd_120_id = (configs[0].id == initial_id) ? configs[1].id
+                                                            : configs[0].id;
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  EXPECT_EQ(display.SetConfig(fhd_120_id), HwcDisplay::ConfigError::kNone);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& modeset_args = sink->GetCommitHistory().back().front();
+  ASSERT_NE(modeset_args.color_matrix, nullptr);
+  EXPECT_EQ(*modeset_args.color_matrix, kIdentityMatrix);
+}
+
 }  // namespace android::drm_hwcomposer

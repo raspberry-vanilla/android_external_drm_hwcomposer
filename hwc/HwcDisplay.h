@@ -330,6 +330,8 @@ class HwcDisplay : public ICompositorDisplay {
 
   bool HasHardwareColorTransform() const;
 
+  bool SkipsClientColorTransform() const;
+
   const std::map<CompositionAttributes, CompositionStats> &comp_stats() const {
     return comp_stats_;
   }
@@ -453,6 +455,11 @@ class HwcDisplay : public ICompositorDisplay {
   // Seamless-tests all configs against the active config for future seamless
   // transitions and update the config groups.
   void SetConfigGroupsForActiveConfig();
+
+  bool AllLayersClientComposited() const;
+  bool AllLayersClientComposited(
+      const CompositionPlanner::CompositionTypeMap &composition_types) const;
+  bool ShouldApplyClientCtm(bool all_client_layers) const;
 
   void UpdateColorTransformMatrix();
 

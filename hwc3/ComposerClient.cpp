@@ -80,7 +80,6 @@
 #include "stats/StatsPoller.h"
 #include "utils/fd.h"
 #include "utils/log.h"
-#include "utils/properties.h"
 
 using ::android::drm_hwcomposer::DisplayHandle;
 using ::android::drm_hwcomposer::GrallocBufferCache;
@@ -426,9 +425,7 @@ ndk::ScopedAStatus ComposerClient::getDisplayCapabilities(
 
   // Skip color transform altogether if device/drm cannot support it, or if
   // hardware can fully process it.
-  if (display->HasHardwareColorTransform() ||
-      hwc_->GetResMan().GetCtmHandling() ==
-          ::android::drm_hwcomposer::CtmHandling::kDrmOrIgnore) {
+  if (display->SkipsClientColorTransform()) {
     caps->emplace_back(DisplayCapability::SKIP_CLIENT_COLOR_TRANSFORM);
   }
   if (display->HasBacklight()) {

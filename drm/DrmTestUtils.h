@@ -71,6 +71,7 @@ constexpr uint32_t kFakeCrtcOutFencePropId = 22;
 constexpr uint32_t kFakeCrtcCtmPropId = 23;
 constexpr uint32_t kFakeCrtcGammaLutPropId = 24;
 constexpr uint32_t kFakeCrtcGammaLutSizePropId = 25;
+constexpr uint32_t kFakeCrtcCtmOffsetPropId = 26;
 constexpr uint64_t kFakeGammaLutSize = 256;
 constexpr uint32_t kFakePlaneBaseId = 300;
 constexpr uint32_t kFakePlaneCrtcPropId = 30;
@@ -726,6 +727,17 @@ class FakeDrmCrtc : public DrmCrtc {
     if (supported) {
       InitFakeDrmProperty(ctm_property_, id_, kFakeCrtcCtmPropId, "CTM",
                           DRM_MODE_PROP_BLOB, 0);
+    } else {
+      ctm_property_ = DrmProperty{};
+    }
+  }
+
+  void SetCtmOffsetPropertySupported(bool supported) {
+    if (supported) {
+      InitFakeDrmProperty(ctm_offset_property_, id_, kFakeCrtcCtmOffsetPropId,
+                          "CTM_OFFSET", DRM_MODE_PROP_BLOB, 0);
+    } else {
+      ctm_offset_property_ = DrmProperty{};
     }
   }
 

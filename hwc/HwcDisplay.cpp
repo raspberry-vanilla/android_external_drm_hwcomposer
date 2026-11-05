@@ -1666,6 +1666,13 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.hdr_headroom = hdr_headroom_;
   args.color_mode = color_mode_;
 
+  // When all layers are client composited and SKIP_CLIENT_COLOR_TRANSFORM is
+  // not advertised, GetExistingModesetLayerData() reuses client_layer_ which
+  // already has the client CTM baked in by RenderEngine.
+  if (!ShouldApplyClientCtm(AllLayersClientComposited())) {
+    args.color_matrix = render_intent_matrix_;
+  }
+
   std::vector<LayerData> composition_layers;
   if (modeset_layer) {
     composition_layers.emplace_back(modeset_layer.value());
@@ -1877,19 +1884,11 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     return std::nullopt;
   }
 
-  const bool all_client_layers = a_args.composition->client_z_order &&
-                                 a_args.composition->plan.size() == 1;
-  // When client CTM will be applied by the GPU, only apply render intent CTM
-  // via DRM.
-  if (all_client_layers && CtmByGpu() &&
-      hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrGpu) {
-    a_args.color_matrix = render_intent_matrix_;
-  }
-
-  // Client CTM with offset cannot be processed by CTM prop. Only apply render
-  // intent CTM which will never have offset.
-  if (client_ctm_has_offset_ && !(HasHardwareColorTransform() ||
-                                  hwc_->GetResMan().ForceCtmHandlesOffset())) {
+  const bool all_client_layers = a_args.composition->client_z_order
+                                     .has_value() &&
+                                 AllLayersClientComposited(
+                                     composition.composition_types);
+  if (!ShouldApplyClientCtm(all_client_layers)) {
     a_args.color_matrix = render_intent_matrix_;
   }
 
@@ -2123,6 +2122,51 @@ bool HwcDisplay::HasHardwareColorTransform() const {
   return UseColorPipeline() && GetPipe().crtc && GetPipe().crtc->Get() &&
          GetPipe().crtc->Get()->GetCtmProperty() &&
          GetPipe().crtc->Get()->GetCtmOffsetProperty();
+}
+
+bool HwcDisplay::SkipsClientColorTransform() const {
+  return HasHardwareColorTransform() ||
+         hwc_->GetResMan().GetCtmHandling() == CtmHandling::kDrmOrIgnore;
+}
+
+bool HwcDisplay::AllLayersClientComposited() const {
+  return std::all_of(layers_.begin(), layers_.end(), [](const auto &pair) {
+    const CompositionType type = pair.second.GetValidatedType();
+    return type == CompositionType::kClient ||
+           type == CompositionType::kDeviceOccluded;
+  });
+}
+
+bool HwcDisplay::AllLayersClientComposited(
+    const CompositionPlanner::CompositionTypeMap &composition_types) const {
+  return std::all_of(layers_.begin(), layers_.end(),
+                     [&composition_types](const auto &pair) {
+                       auto it = composition_types.find(&pair.second);
+                       if (it == composition_types.end()) {
+                         return false;
+                       }
+                       return it->second == CompositionType::kClient ||
+                              it->second == CompositionType::kDeviceOccluded;
+                     });
+}
+
+bool HwcDisplay::ShouldApplyClientCtm(bool all_client_layers) const {
+  // When all layers are client composited and SKIP_CLIENT_COLOR_TRANSFORM is
+  // not advertised (!SkipsClientColorTransform()), SurfaceFlinger sets
+  // usesDeviceComposition = false and RenderEngine bakes the client CTM into
+  // client_layer_ on the GPU.
+  if (all_client_layers && !SkipsClientColorTransform()) {
+    return false;
+  }
+
+  // Client CTM with offset cannot be processed by CTM prop. Only apply render
+  // intent CTM which will never have offset.
+  if (client_ctm_has_offset_ && !(HasHardwareColorTransform() ||
+                                  hwc_->GetResMan().ForceCtmHandlesOffset())) {
+    return false;
+  }
+
+  return true;
 }
 
 bool HwcDisplay::CtmByGpu() const {
