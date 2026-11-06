@@ -216,6 +216,7 @@ cc_binary {
 
 cc_test {
     name: "drm_hwcomposer_sdm_device_tests",
+    team: "trendy_team_desktop_display",
     defaults: [
         "hwcomposer.drm_defaults",
         "sdm_backend",
