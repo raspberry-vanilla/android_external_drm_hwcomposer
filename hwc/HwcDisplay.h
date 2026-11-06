@@ -99,6 +99,7 @@ class HwcDisplay : public ICompositorDisplay {
 
   enum ConfigError {
     kNone,
+    kBadDisplay,
     kBadConfig,
     kSeamlessNotAllowed,
     kSeamlessNotPossible,
@@ -155,9 +156,13 @@ class HwcDisplay : public ICompositorDisplay {
   auto GetDisplayConfigs() const -> std::vector<HwcDisplayConfig>;
   bool RefreshConfigsFromConnector();
   bool OnLinkTrainingFailed();
+  bool IsCommitDeferredUntilPowerOn() const {
+    return defer_commits_until_power_on_;
+  }
+  bool IsSeamlessConfigAllowed(const HwcDisplayConfig &new_config) const;
   bool HasStagedPowerModeOn() const {
     return staged_power_mode_ == PowerMode::kOn &&
-           !defer_modeset_until_power_on_;
+           !defer_commits_until_power_on_;
   }
 
   // Get the config representing the mode that has been committed to KMS.
@@ -491,7 +496,7 @@ class HwcDisplay : public ICompositorDisplay {
   std::optional<PowerMode> staged_power_mode_{};
   bool link_recovery_modeset_required_ = false;
   bool requires_reprobe_on_power_on_ = false;
-  bool defer_modeset_until_power_on_ = false;
+  bool defer_commits_until_power_on_ = false;
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 

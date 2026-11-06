@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -31,6 +32,8 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "drm/AtomicStateManager.h"
+#include "drm/CommitStatus.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmDevice.h"
 #include "drm/DrmDisplayPipeline.h"
@@ -465,6 +468,108 @@ void DrmHwc::LogRefreshRateChanges() {
 
   if (refresh_rates_reporter_)
     refresh_rates_reporter_->UpdateRefreshRates(refresh_rates);
+}
+
+HwcDisplay::ConfigError DrmHwc::SetActiveConfigs(
+    const std::vector<DesiredDisplayConfig> &desired_configs) {
+  if (desired_configs.empty()) {
+    return HwcDisplay::ConfigError::kBadConfig;
+  }
+
+  for (const auto &desired_config : desired_configs) {
+    HwcDisplay *display = GetDisplay(desired_config.display_id);
+    if (display == nullptr) {
+      return HwcDisplay::ConfigError::kBadDisplay;
+    }
+    const HwcDisplayConfig *new_config = display->GetConfig(
+        desired_config.config_id);
+    if (new_config == nullptr) {
+      return HwcDisplay::ConfigError::kBadConfig;
+    }
+    if (desired_config.seamless &&
+        !display->IsSeamlessConfigAllowed(*new_config)) {
+      return HwcDisplay::ConfigError::kSeamlessNotAllowed;
+    }
+  }
+
+  // Queue a config change to the next present if possible for one display.
+  // In a future world seamless modeset will come alongside the composition, but
+  // for now to avoid janking and "stealing" the non-blocking commit, if we can
+  // do a seamless modeset we only queue it.
+  if (desired_configs.size() == 1) {
+    HwcDisplay *first_display = GetDisplay(desired_configs[0].display_id);
+    if (!first_display->IsInHeadlessMode()) {
+      QueuedConfigTiming unused_timing{};
+      HwcDisplay::ConfigError
+          error = first_display
+                      ->QueueConfig(desired_configs[0].config_id,
+                                    ResourceManager::GetTimeMonotonicNs(),
+                                    &unused_timing);
+
+      if (error == HwcDisplay::ConfigError::kNone) {
+        return HwcDisplay::ConfigError::kNone;
+      }
+      // Fall back to non-QueueConfig path if seamless wasn't allowed.
+      if (error != HwcDisplay::ConfigError::kSeamlessNotAllowed) {
+        // The only other failure possible for queue config is bad config.
+        return HwcDisplay::ConfigError::kBadConfig;
+      }
+    }
+  }
+
+  std::vector<std::pair<AtomicStateManager *, AtomicCommitArgs>> commit_args;
+  std::vector<HwcDisplay *> committed_displays;
+  std::vector<std::pair<HwcDisplay *, ConfigId>> staged_only_configs;
+
+  for (const auto &desired_config : desired_configs) {
+    HwcDisplay *display = GetDisplay(desired_config.display_id);
+    // Headless displays and powered-off / deferred displays must not be added
+    // to the KMS modeset commit batch; stage their requested config in memory
+    // only after any active displays in the batch commit successfully.
+    if (display->IsInHeadlessMode() ||
+        display->IsCommitDeferredUntilPowerOn()) {
+      staged_only_configs.emplace_back(display, desired_config.config_id);
+      continue;
+    }
+
+    auto display_args = display->CreateModesetCommit(desired_config.config_id);
+    if (!display_args) {
+      return HwcDisplay::ConfigError::kBadConfig;
+    }
+    display_args->seamless = desired_config.seamless;
+    display_args->blocking = !desired_config.seamless;
+    commit_args.emplace_back(display->GetPipe().atomic_state_manager.get(),
+                             *display_args);
+    committed_displays.push_back(display);
+  }
+
+  if (!commit_args.empty()) {
+    auto &atomic_commit_sink = committed_displays.front()
+                                   ->GetPipe()
+                                   .device->GetAtomicCommitSink();
+
+    auto status_or_result = atomic_commit_sink.ExecuteAtomicCommit(commit_args);
+    const auto &result = status_or_result.GetValue();
+    if (!status_or_result.IsSuccess() || !result.has_value() ||
+        result.value().size() != commit_args.size()) {
+      ALOGE("Invalid desired modes");
+      return HwcDisplay::ConfigError::kConfigFailed;
+    }
+    const auto &results = result.value();
+    for (size_t i = 0; i < commit_args.size(); i++) {
+      if (results[i].first != commit_args[i].first) {
+        ALOGE("Commit results don't match request");
+        return HwcDisplay::ConfigError::kConfigFailed;
+      }
+      committed_displays[i]->ApplyCommitChanges(commit_args[i].second);
+    }
+    LogRefreshRateChanges();
+  }
+
+  for (const auto &[display, config_id] : staged_only_configs) {
+    display->SetConfig(config_id);
+  }
+  return HwcDisplay::ConfigError::kNone;
 }
 
 void DrmHwc::HotplugEventQueue::Add(DisplayHandle display_handle,

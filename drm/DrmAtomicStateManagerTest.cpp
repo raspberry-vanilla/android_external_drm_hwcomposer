@@ -1575,4 +1575,61 @@ TEST_F(
   EXPECT_EQ(state_manager->GetAtomicModeReqForArgs(null_conn_args), nullptr);
 }
 
+TEST_F(DrmAtomicStateManagerTest,
+       PowerOffWithoutTeardownPreservesConnectorCrtcModeBinding) {
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = false;
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  auto* prop_set = AsDrmRequest(off_req)->property_set.get();
+  const uint32_t conn_id = pipeline->connector->Get()->GetId();
+  const uint32_t crtc_id = pipeline->crtc->Get()->GetId();
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, crtc_id, kFakeCrtcActivePropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kFakeConnectorCrtcPropId),
+            crtc_id);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, crtc_id, kFakeCrtcModePropId),
+            std::nullopt);
+}
+
+TEST_F(DrmAtomicStateManagerTest, PowerOffWithoutTeardownDisablesActivePlanes) {
+  AtomicCommitArgs modeset_args{};
+  modeset_args.blocking = true;
+  modeset_args.power_mode = PowerMode::kOn;
+  modeset_args.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                                kTestVRefresh);
+  modeset_args.composition = CreateSinglePlanePlan();
+  auto on_req = state_manager->GetAtomicModeReqForArgs(modeset_args);
+  ASSERT_NE(on_req, nullptr);
+  state_manager->FinishPendingRequest(modeset_args, std::move(on_req));
+
+  AtomicCommitArgs off_args{};
+  off_args.blocking = true;
+  off_args.power_mode = PowerMode::kOff;
+  off_args.teardown = false;
+  auto off_req = state_manager->GetAtomicModeReqForArgs(off_args);
+  ASSERT_NE(off_req, nullptr);
+  auto* prop_set = AsDrmRequest(off_req)->property_set.get();
+  const uint32_t primary_plane_id = pipeline->primary_plane->Get()->GetId();
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, primary_plane_id,
+                                      kFakePlaneCrtcPropId),
+            0ULL);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, primary_plane_id,
+                                      kFakePlaneFbPropId),
+            0ULL);
+}
+
 }  // namespace android::drm_hwcomposer

@@ -99,7 +99,8 @@ class RecordingDrmHwc : public DrmHwc {
   void SendVsyncPeriodTimingChangedEventToClient(
       DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
   }
-  void SendRefreshEventToClient(DisplayHandle /*display_handle*/) override {
+  void SendRefreshEventToClient(DisplayHandle display_handle) override {
+    refresh_events.push_back(display_handle);
   }
   void SendHotplugEventToClient(DisplayHandle display_handle,
                                 DisplayStatus display_status) override {
@@ -110,6 +111,7 @@ class RecordingDrmHwc : public DrmHwc {
       std::optional<HdcpContentType> /*current_hdcp_level*/) override {
   }
 
+  std::vector<DisplayHandle> refresh_events;
   std::vector<std::pair<DisplayHandle, DisplayStatus>> hotplug_events;
 };
 
@@ -2949,6 +2951,376 @@ TEST_F(DrmHwcTest, RefreshConnectorsAssignsDistinctPortsWhenMstPathBlobIsZero) {
   ASSERT_NE(mst_302, nullptr);
   EXPECT_EQ(mst_301->GetIndexInResArray(), 2U);
   EXPECT_EQ(mst_302->GetIndexInResArray(), 3U);
+}
+
+TEST_F(DrmHwcTest, SetActiveConfigsBatchCommitIsBlocking) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  auto ext_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(ext_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  EXPECT_EQ(external->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(hwc.SetActiveConfigs(
+                {{.display_id = kPrimaryDisplay,
+                  .config_id = primary->GetDisplayConfigs()[1].id,
+                  .seamless = false},
+                 {.display_id = 1,
+                  .config_id = external->GetDisplayConfigs()[1].id,
+                  .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  ASSERT_EQ(sink->GetCommitHistory()[0].size(), 2U);
+  EXPECT_TRUE(sink->GetCommitHistory()[0][0].blocking);
+  EXPECT_TRUE(sink->GetCommitHistory()[0][1].blocking);
+}
+
+TEST_F(DrmHwcTest, SetActiveConfigsOnPoweredOffDisplayIssuesNoCommit) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_EQ(primary->GetDisplayConfigs().size(), 2U);
+  const ConfigId target_config = primary->GetDisplayConfigs()[1].id;
+
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  ASSERT_TRUE(primary->IsCommitDeferredUntilPowerOn());
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(hwc.SetActiveConfigs({{.display_id = kPrimaryDisplay,
+                                   .config_id = target_config,
+                                   .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  EXPECT_TRUE(primary->IsCommitDeferredUntilPowerOn());
+  EXPECT_FALSE(primary_pipe->atomic_state_manager->IsActive());
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(primary->GetCurrentConfig()->id, target_config);
+}
+
+TEST_F(DrmHwcTest, SetActiveConfigsOnPoweredOffDisplaySendsNoRefresh) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(primary_pipe, nullptr);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_EQ(primary->GetDisplayConfigs().size(), 2U);
+  const ConfigId target_config = primary->GetDisplayConfigs()[1].id;
+
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  hwc.refresh_events.clear();
+
+  EXPECT_EQ(hwc.SetActiveConfigs({{.display_id = kPrimaryDisplay,
+                                   .config_id = target_config,
+                                   .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_TRUE(hwc.refresh_events.empty());
+}
+
+TEST_F(DrmHwcTest, SetActiveConfigsMixedPowerBatchCommitsOnlyActiveDisplay) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  auto ext_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(ext_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  ASSERT_TRUE(primary->IsCommitDeferredUntilPowerOn());
+  EXPECT_EQ(external->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(hwc.SetActiveConfigs(
+                {{.display_id = kPrimaryDisplay,
+                  .config_id = primary->GetDisplayConfigs()[1].id,
+                  .seamless = false},
+                 {.display_id = 1,
+                  .config_id = external->GetDisplayConfigs()[1].id,
+                  .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_EQ(sink->GetCommitHistory().size(), 1U);
+  EXPECT_EQ(sink->GetCommitHistory()[0].size(), 1U);
+  EXPECT_TRUE(primary->IsCommitDeferredUntilPowerOn());
+  EXPECT_FALSE(primary_pipe->atomic_state_manager->IsActive());
+  EXPECT_TRUE(ext_pipe->atomic_state_manager->IsActive());
+}
+
+TEST_F(DrmHwcTest, SetActiveConfigsBatchWithHeadlessDisplaySucceeds) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  auto ext_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(ext_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* headless_primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(headless_primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  ASSERT_TRUE(headless_primary->SetPipeline(nullptr));
+  ASSERT_TRUE(headless_primary->IsInHeadlessMode());
+  EXPECT_EQ(external->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  EXPECT_EQ(hwc.SetActiveConfigs(
+                {{.display_id = kPrimaryDisplay,
+                  .config_id = headless_primary->GetDisplayConfigs()[0].id,
+                  .seamless = false},
+                 {.display_id = 1,
+                  .config_id = external->GetDisplayConfigs()[1].id,
+                  .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(external->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(external->GetCurrentConfig()->id,
+            external->GetDisplayConfigs()[1].id);
+}
+
+TEST_F(DrmHwcTest,
+       SetActiveConfigsSeamlessOnPoweredOffDisplayReturnsSeamlessNotAllowed) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  const ConfigId initial_config = primary->GetDisplayConfigs()[0].id;
+  const ConfigId second_config = primary->GetDisplayConfigs()[1].id;
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(hwc.SetActiveConfigs({{.display_id = kPrimaryDisplay,
+                                   .config_id = second_config,
+                                   .seamless = true}}),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(primary->GetCurrentConfig()->id, initial_config);
+}
+
+TEST_F(DrmHwcTest,
+       SetActiveConfigsFailedBatchCommitDoesNotStagePoweredOffDisplay) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  auto ext_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(ext_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  const ConfigId initial_primary_config = primary->GetDisplayConfigs()[0].id;
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOff),
+            HwcDisplay::Error::kNone);
+  EXPECT_EQ(external->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-EINVAL));
+  EXPECT_EQ(hwc.SetActiveConfigs(
+                {{.display_id = kPrimaryDisplay,
+                  .config_id = primary->GetDisplayConfigs()[1].id,
+                  .seamless = false},
+                 {.display_id = 1,
+                  .config_id = external->GetDisplayConfigs()[1].id,
+                  .seamless = false}}),
+            HwcDisplay::ConfigError::kConfigFailed);
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(primary->GetCurrentConfig()->id, initial_primary_config);
+}
+
+TEST_F(
+    DrmHwcTest,
+    SetActiveConfigsBatchSeamlessDuringLinkRecoveryReturnsSeamlessNotAllowed) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  auto ext_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(ext_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  EXPECT_EQ(primary->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+  EXPECT_EQ(external->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  ASSERT_TRUE(primary->OnLinkTrainingFailed());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+
+  EXPECT_EQ(hwc.SetActiveConfigs(
+                {{.display_id = kPrimaryDisplay,
+                  .config_id = primary->GetDisplayConfigs()[1].id,
+                  .seamless = true},
+                 {.display_id = 1,
+                  .config_id = external->GetDisplayConfigs()[0].id,
+                  .seamless = false}}),
+            HwcDisplay::ConfigError::kSeamlessNotAllowed);
+  EXPECT_EQ(sink->GetExecuteCommitCount(), 0U);
+}
+
+TEST_F(DrmHwcTest,
+       SetActiveConfigsSingleHeadlessDisplayAppliesImmediatelyWithoutQueueing) {
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_TRUE(primary->SetPipeline(nullptr));
+  ASSERT_TRUE(primary->IsInHeadlessMode());
+
+  const ConfigId target_config_id = primary->GetDisplayConfigs()[0].id;
+  EXPECT_EQ(hwc.SetActiveConfigs({{.display_id = kPrimaryDisplay,
+                                   .config_id = target_config_id,
+                                   .seamless = false}}),
+            HwcDisplay::ConfigError::kNone);
+  EXPECT_FALSE(primary->IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  EXPECT_EQ(primary->GetCurrentConfig()->id, target_config_id);
+}
+
+TEST_F(DrmHwcTest,
+       SetActiveConfigsSingleActiveDisplayFailedModesetPreservesStagedConfig) {
+  constexpr uint16_t kHdWidth = 1280;
+  constexpr uint16_t kHdHeight = 720;
+  fake_device->GetFakeAtomicCommitSink()->SetTestCommitHook(
+      [](const auto& args) -> CommitStatus {
+        for (const auto& [_, commit_args] : args) {
+          if (commit_args.seamless && commit_args.display_mode.has_value() &&
+              commit_args.display_mode->GetRawMode().hdisplay !=
+                  kFakeDefaultModeWidth) {
+            return CommitStatus::Failure(-EINVAL);
+          }
+        }
+        return CommitStatus::Success();
+      });
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh120Hz, 0, "1080p120"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kTestRefresh60Hz, 0, "720p60")},
+      /*is_external=*/false);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_EQ(primary->GetDisplayConfigs().size(), 3U);
+  const ConfigId config_120 = primary->GetDisplayConfigs()[1].id;
+  const ConfigId config_720 = primary->GetDisplayConfigs()[2].id;
+
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(primary->QueueConfig(config_120, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_NE(primary->GetLastRequestedConfig(), nullptr);
+  ASSERT_EQ(primary->GetLastRequestedConfig()->id, config_120);
+
+  fake_device->GetFakeAtomicCommitSink()->SetNextExecuteStatus(
+      CommitStatus::Failure(-EINVAL));
+  EXPECT_EQ(hwc.SetActiveConfigs({{.display_id = kPrimaryDisplay,
+                                   .config_id = config_720,
+                                   .seamless = false}}),
+            HwcDisplay::ConfigError::kConfigFailed);
+  ASSERT_NE(primary->GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(primary->GetLastRequestedConfig()->id, config_120);
 }
 
 }  // namespace android::drm_hwcomposer

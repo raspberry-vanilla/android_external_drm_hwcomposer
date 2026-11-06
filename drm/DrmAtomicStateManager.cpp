@@ -617,7 +617,12 @@ bool DrmAtomicStateManager::SetMinBpcIfNeeded(const AtomicCommitArgs &args,
 
 bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
                                                    DrmAtomicRequest &request) {
-  if (!args.composition && !args.teardown) {
+  // Disable active planes and unpin scanout framebuffers on both DPMS
+  // power-off (teardown = false) and full teardown even when args.composition
+  // is null.
+  const bool disable_planes = args.teardown ||
+                              args.power_mode == PowerMode::kOff;
+  if (!args.composition && !disable_planes) {
     return true;
   }
 

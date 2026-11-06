@@ -29,6 +29,7 @@
 #include "compositor/DisplayInfo.h"
 #include "drm/ResourceManager.h"
 #include "hwc/HwcDisplay.h"
+#include "hwc/HwcDisplayConfigs.h"
 #include "stats/DisplayRefreshRatesChangedAtomReporter.h"
 #include "stats/Stats.h"
 
@@ -123,6 +124,15 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
 
   // Should be done for all successful modesets (full and seamless).
   void LogRefreshRateChanges();
+
+  struct DesiredDisplayConfig {
+    DisplayHandle display_id;
+    ConfigId config_id;
+    bool seamless;
+  };
+
+  HwcDisplay::ConfigError SetActiveConfigs(
+      const std::vector<DesiredDisplayConfig> &desired_configs);
 
   bool InitEarlyBootAnimation(HwcDisplay *display);
   void AbortEarlyBootAnimation();
