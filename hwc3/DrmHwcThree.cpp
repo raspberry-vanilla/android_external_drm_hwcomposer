@@ -23,6 +23,7 @@
 #include <aidl/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -45,6 +46,7 @@ auto DrmHwcThree::GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
 }
 
 DrmHwcThree::~DrmHwcThree() {
+  StopEarlyBootAnimation();
   /* Display deinit routine is handled by resource manager */
   if (GetResMan().IsInitialized()) {
     GetResMan().DeInit();
@@ -57,20 +59,53 @@ void DrmHwcThree::DeinitDisplays() {
   const std::scoped_lock lock(display_state_lock_);
   must_validate_.clear();
   connected_displays_.clear();
+  pending_hdcp_levels_.clear();
+  delivered_hdcp_levels_.clear();
+}
+
+std::shared_ptr<IComposerCallback> DrmHwcThree::GetCallback() const {
+  const std::scoped_lock lock(callback_lock_);
+  return composer_callback_;
 }
 
 void DrmHwcThree::SetCallback(std::shared_ptr<IComposerCallback> callback) {
+  if (!callback) {
+    // Clear composer_callback_ under callback_lock_ before resetting display
+    // state so worker threads snapshot nullptr instead of racing on reset.
+    bool had_callback = false;
+    {
+      const std::scoped_lock lock(callback_lock_);
+      had_callback = composer_callback_ != nullptr;
+      composer_callback_.reset();
+    }
+    DetachClient(had_callback);
+    const std::scoped_lock lock(display_state_lock_);
+    must_validate_.clear();
+    connected_displays_.clear();
+    pending_hdcp_levels_.clear();
+    delivered_hdcp_levels_.clear();
+    return;
+  }
+
+  const bool reattached = AttachClient();
   {
     const std::scoped_lock lock(display_state_lock_);
+    if (reattached) {
+      must_validate_.clear();
+    }
     connected_displays_.clear();
+    pending_hdcp_levels_.clear();
+    delivered_hdcp_levels_.clear();
   }
+  const std::scoped_lock lock(callback_lock_);
   composer_callback_ = std::move(callback);
 }
 
 void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle,
     int64_t timestamp) const {
-  if (!composer_callback_) {
+  auto callback = GetCallback();
+  if (!callback) {
     return;
   }
   VsyncPeriodChangeTimeline timeline;
@@ -78,9 +113,8 @@ void DrmHwcThree::SendVsyncPeriodTimingChangedEventToClient(
   timeline.refreshRequired = false;
   timeline.refreshTimeNanos = 0;
 
-  composer_callback_->onVsyncPeriodTimingChanged(static_cast<int64_t>(
-                                                     display_handle),
-                                                 timeline);
+  callback->onVsyncPeriodTimingChanged(static_cast<int64_t>(display_handle),
+                                       timeline);
 }
 
 void DrmHwcThree::SendRefreshEventToClient(
@@ -89,7 +123,8 @@ void DrmHwcThree::SendRefreshEventToClient(
     const std::scoped_lock lock(display_state_lock_);
     must_validate_.insert(display_handle);
   }
-  if (!composer_callback_) {
+  auto callback = GetCallback();
+  if (!callback) {
     return;
   }
   {
@@ -101,17 +136,18 @@ void DrmHwcThree::SendRefreshEventToClient(
       return;
     }
   }
-  composer_callback_->onRefresh(static_cast<int64_t>(display_handle));
+  callback->onRefresh(static_cast<int64_t>(display_handle));
 }
 
 void DrmHwcThree::SendVsyncEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle, int64_t timestamp,
     uint32_t vsync_period) const {
-  if (!composer_callback_) {
+  auto callback = GetCallback();
+  if (!callback) {
     return;
   }
-  composer_callback_->onVsync(static_cast<int64_t>(display_handle), timestamp,
-                              static_cast<int32_t>(vsync_period));
+  callback->onVsync(static_cast<int64_t>(display_handle), timestamp,
+                    static_cast<int32_t>(vsync_period));
 }
 
 void DrmHwcThree::SendHotplugEventToClient(
@@ -138,18 +174,31 @@ void DrmHwcThree::SendHotplugEventToClient(
     // Clearing before sending the event is intentional so that subsequent
     // refresh events are dropped immediately.
     connected_displays_.erase(display_handle);
+    pending_hdcp_levels_.erase(display_handle);
+    delivered_hdcp_levels_.erase(display_handle);
   }
-  if (!composer_callback_) {
+  auto callback = GetCallback();
+  if (!callback) {
     return;
   }
-  composer_callback_->onHotplugEvent(static_cast<int64_t>(display_handle),
-                                     event);
+  callback->onHotplugEvent(static_cast<int64_t>(display_handle), event);
+  std::optional<drm::HdcpLevels> deferred_hdcp;
   if (event == common::DisplayHotplugEvent::CONNECTED) {
     const std::scoped_lock lock(display_state_lock_);
     // Populating connected_displays_ after the callback is fired is intentional
-    // so that the client has processed the hotplug event before any refresh
-    // callbacks are delivered.
+    // so that the client has processed the hotplug event before any refresh or
+    // HDCP callbacks are delivered.
     connected_displays_.insert(display_handle);
+    if (auto it = pending_hdcp_levels_.find(display_handle);
+        it != pending_hdcp_levels_.end()) {
+      deferred_hdcp = it->second;
+      pending_hdcp_levels_.erase(it);
+      delivered_hdcp_levels_[display_handle] = *deferred_hdcp;
+    }
+  }
+  if (deferred_hdcp.has_value()) {
+    callback->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
+                                  *deferred_hdcp);
   }
 }
 
@@ -157,7 +206,8 @@ void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle,
     std::optional<enum ::android::drm_hwcomposer::HdcpContentType>
         current_hdcp_level) {
-  if (!composer_callback_) {
+  auto callback = GetCallback();
+  if (!callback) {
     return;
   }
   drm::HdcpLevels hdcplevel;
@@ -166,30 +216,57 @@ void DrmHwcThree::SendHdcpLevelsChangedEventToClient(
 
   if (!current_hdcp_level.has_value()) {
     hdcplevel.connectedLevel = drm::HdcpLevel::HDCP_NONE;
-    composer_callback_->onHdcpLevelsChanged(static_cast<int64_t>(
-                                                display_handle),
-                                            hdcplevel);
-    return;
+  } else {
+    switch (current_hdcp_level.value()) {
+      case ::android::drm_hwcomposer::HdcpContentType::kType0:
+        hdcplevel.connectedLevel = drm::HdcpLevel::HDCP_V1;
+        break;
+      case ::android::drm_hwcomposer::HdcpContentType::kType1:
+        hdcplevel.connectedLevel = drm::HdcpLevel::HDCP_V2_2;
+        break;
+    }
   }
-  switch (current_hdcp_level.value()) {
-    case ::android::drm_hwcomposer::HdcpContentType::kType0:
-      hdcplevel.connectedLevel = drm::HdcpLevel::HDCP_V1;
-      break;
-    case ::android::drm_hwcomposer::HdcpContentType::kType1:
-      hdcplevel.connectedLevel = drm::HdcpLevel::HDCP_V2_2;
-      break;
+  {
+    const std::scoped_lock lock(display_state_lock_);
+    // Defer notifications arriving before onHotplugEvent(CONNECTED) and
+    // suppress duplicates when ReplayHotplugHdcpStatus() races with ThreadFn.
+    if (connected_displays_.count(display_handle) == 0) {
+      pending_hdcp_levels_[display_handle] = hdcplevel;
+      return;
+    }
+    if (auto it = delivered_hdcp_levels_.find(display_handle);
+        it != delivered_hdcp_levels_.end() &&
+        it->second.connectedLevel == hdcplevel.connectedLevel &&
+        it->second.maxLevel == hdcplevel.maxLevel) {
+      return;
+    }
+    delivered_hdcp_levels_[display_handle] = hdcplevel;
   }
-  composer_callback_->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
-                                          hdcplevel);
+  callback->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
+                                hdcplevel);
+}
+
+void DrmHwcThree::PrepareExplicitHdcpStart(
+    ::android::drm_hwcomposer::DisplayHandle display_handle) {
+  const std::scoped_lock lock(display_state_lock_);
+  delivered_hdcp_levels_.erase(display_handle);
 }
 
 void DrmHwcThree::NotifyHdcpErrorToClient(
     ::android::drm_hwcomposer::DisplayHandle display_handle) {
+  auto callback = GetCallback();
+  if (!callback) {
+    return;
+  }
+  {
+    const std::scoped_lock lock(display_state_lock_);
+    delivered_hdcp_levels_.erase(display_handle);
+  }
   constexpr drm::HdcpLevels kErrorHdcp =
       {.connectedLevel = drm::HdcpLevel::HDCP_UNKNOWN,
        .maxLevel = drm::HdcpLevel::HDCP_UNKNOWN};
-  composer_callback_->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
-                                          kErrorHdcp);
+  callback->onHdcpLevelsChanged(static_cast<int64_t>(display_handle),
+                                kErrorHdcp);
 }
 
 auto DrmHwcThree::GetMustValidateDisplay(

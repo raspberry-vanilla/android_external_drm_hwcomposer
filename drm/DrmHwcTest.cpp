@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -64,6 +65,7 @@
 #include "early_animation/EarlyBootAnimation.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
+#include "hwc3/ClientDestroySync.h"
 #include "utils/TestUtils.h"
 #include "utils/UEvent.h"
 #include "utils/fd.h"
@@ -100,19 +102,58 @@ class RecordingDrmHwc : public DrmHwc {
       DisplayHandle /*display_handle*/, int64_t /*timestamp*/) const override {
   }
   void SendRefreshEventToClient(DisplayHandle display_handle) override {
-    refresh_events.push_back(display_handle);
+    {
+      std::lock_guard<std::mutex> lock(callback_mutex);
+      refresh_events.push_back(display_handle);
+    }
+    callback_cv.notify_all();
   }
   void SendHotplugEventToClient(DisplayHandle display_handle,
                                 DisplayStatus display_status) override {
     hotplug_events.emplace_back(display_handle, display_status);
   }
   void SendHdcpLevelsChangedEventToClient(
-      DisplayHandle /*display_handle*/,
-      std::optional<HdcpContentType> /*current_hdcp_level*/) override {
+      DisplayHandle display_handle,
+      std::optional<HdcpContentType> current_hdcp_level) override {
+    {
+      std::lock_guard<std::mutex> lock(callback_mutex);
+      hdcp_events.emplace_back(display_handle, current_hdcp_level);
+    }
+    callback_cv.notify_all();
+  }
+
+  bool WaitForRefreshEventCount(size_t expected_count) {
+    constexpr auto kWaitTimeout = std::chrono::milliseconds(2000);
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    return callback_cv.wait_for(lock, kWaitTimeout, [this, expected_count]() {
+      return refresh_events.size() >= expected_count;
+    });
+  }
+
+  bool WaitForHdcpEventCount(size_t expected_count) {
+    constexpr auto kWaitTimeout = std::chrono::milliseconds(2000);
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    return callback_cv.wait_for(lock, kWaitTimeout, [this, expected_count]() {
+      return hdcp_events.size() >= expected_count;
+    });
+  }
+
+  void ClearRefreshEvents() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    refresh_events.clear();
+  }
+
+  void ClearHdcpEvents() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    hdcp_events.clear();
   }
 
   std::vector<DisplayHandle> refresh_events;
   std::vector<std::pair<DisplayHandle, DisplayStatus>> hotplug_events;
+  std::vector<std::pair<DisplayHandle, std::optional<HdcpContentType>>>
+      hdcp_events;
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
 };
 
 }  // namespace
@@ -3534,6 +3575,303 @@ TEST_F(DrmHwcTest, BackendHotplugDispatchedDuringInitBindsDisplay) {
   InitResManForTest();
   ASSERT_NE(hwc.GetDisplay(kPrimaryDisplay), nullptr);
   EXPECT_FALSE(hwc.GetDisplay(kPrimaryDisplay)->IsInHeadlessMode());
+  DeInitResManForTest();
+}
+
+TEST(ClientDestroySyncTest,
+     ReturnsFalseWhenActiveClientRemainsHeldPastGracePeriod) {
+  auto sync = std::make_shared<ClientDestroySync>();
+  sync->client_alive = true;
+  constexpr auto kShortTimeout = std::chrono::milliseconds(10);
+
+  std::unique_lock lock(sync->mutex);
+  EXPECT_FALSE(sync->WaitForDestroyedLocked(
+      lock, []() { return false; }, kShortTimeout, kShortTimeout));
+}
+
+TEST(ClientDestroySyncTest, WaitsUntilNotifyClientDestroyedCompletes) {
+  auto sync = std::make_shared<ClientDestroySync>();
+  sync->client_alive = true;
+  constexpr auto kGraceTimeout = std::chrono::milliseconds(10);
+  constexpr auto kDestroyTimeout = std::chrono::milliseconds(1000);
+
+  std::thread notifier([sync]() {
+    constexpr int kNotifyDelayMs = 20;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kNotifyDelayMs));
+    ClientDestroySync::NotifyClientDestroyed(sync);
+  });
+
+  std::unique_lock lock(sync->mutex);
+  EXPECT_TRUE(sync->WaitForDestroyedLocked(
+      lock, []() { return true; }, kGraceTimeout, kDestroyTimeout));
+  EXPECT_FALSE(sync->client_alive);
+  lock.unlock();
+  notifier.join();
+}
+
+TEST(ClientDestroySyncTest,
+     WaitsForClientExpirationWithinGracePeriodThenDestroyed) {
+  auto sync = std::make_shared<ClientDestroySync>();
+  sync->client_alive = true;
+  std::atomic<bool> expired{false};
+  constexpr auto kGraceTimeout = std::chrono::milliseconds(200);
+  constexpr auto kDestroyTimeout = std::chrono::milliseconds(1000);
+
+  std::thread notifier([sync, &expired]() {
+    constexpr int kExpireDelayMs = 20;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kExpireDelayMs));
+    expired.store(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(kExpireDelayMs));
+    ClientDestroySync::NotifyClientDestroyed(sync);
+  });
+
+  std::unique_lock lock(sync->mutex);
+  EXPECT_TRUE(sync->WaitForDestroyedLocked(
+      lock, [&expired]() { return expired.load(); }, kGraceTimeout,
+      kDestroyTimeout));
+  EXPECT_FALSE(sync->client_alive);
+  lock.unlock();
+  notifier.join();
+}
+
+TEST(ClientDestroySyncTest,
+     ReturnsFalseWhenDestroyTimeoutExpiresWhileClientAlive) {
+  auto sync = std::make_shared<ClientDestroySync>();
+  sync->client_alive = true;
+  constexpr auto kShortTimeout = std::chrono::milliseconds(10);
+
+  std::unique_lock lock(sync->mutex);
+  EXPECT_FALSE(sync->WaitForDestroyedLocked(
+      lock, []() { return true; }, kShortTimeout, kShortTimeout));
+}
+
+TEST_F(DrmHwcTest, FirstClientAttachPreservesInitialLinkTrainingFailureOrder) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  fake_device->SetResourceConnectorIds({int_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed);
+
+  EXPECT_FALSE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, UnregisteredClientDetachPreservesInitialBootHotplugOrder) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  fake_device->SetResourceConnectorIds({int_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  hwc.ScheduleHotplugEvent(kPrimaryDisplay,
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed);
+  hwc.DetachClient(/*had_callback=*/false);
+
+  EXPECT_FALSE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 2U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, DetachClientDestroysVirtualDisplaysWithoutHotplugEvents) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  ASSERT_NE(int_conn, nullptr);
+  AddFakeWritebackPipelineResources();
+  fake_device->SetResourceConnectorIds({int_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  EXPECT_FALSE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  auto virt_handle = hwc.CreateVirtualDisplay(kFakeDefaultModeWidth,
+                                              kFakeDefaultModeHeight);
+  ASSERT_TRUE(virt_handle.has_value());
+  hwc.DetachClient(/*had_callback=*/true);
+  EXPECT_EQ(hwc.GetDisplay(virt_handle.value_or(0)), nullptr);
+
+  EXPECT_TRUE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+  ASSERT_EQ(hwc.hotplug_events.size(), 1U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, DetachClientClearsPhysicalDisplayLayers) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  ASSERT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(external, nullptr);
+  ASSERT_TRUE(primary->CreateLayer(1));
+  ASSERT_TRUE(external->CreateLayer(1));
+
+  hwc.DetachClient(/*had_callback=*/true);
+
+  EXPECT_TRUE(primary->layers().empty());
+  EXPECT_TRUE(external->layers().empty());
+}
+
+TEST_F(DrmHwcTest, DetachClientResetsClientInitiatedHdcp) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* int_conn = static_cast<FakeDrmConnector*>(
+      primary_pipe->connector->Get());
+  int_conn->SetContentProtectionPropertySupported(true);
+  int_conn->SetHdcpContentTypePropertySupported(true);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_TRUE(primary->StartHdcp());
+  ASSERT_EQ(primary->GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
+
+  hwc.DetachClient(/*had_callback=*/true);
+
+  EXPECT_EQ(primary->GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+}
+
+TEST_F(DrmHwcTest, ReplayHotplugHdcpStatusNotifiesReattachedClient) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(int_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetContentProtectionPropertySupported(true);
+  ext_conn->SetHdcpContentTypePropertySupported(true);
+  ext_conn->SetContentProtectionEnabled(true);
+  fake_device->SetResourceConnectorIds({int_conn->GetId(), ext_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(external, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  auto* hdcp = const_cast<HdcpController*>(external->GetHdcpController());
+  ASSERT_NE(hdcp, nullptr);
+  hdcp->Requested();
+  ASSERT_TRUE(hwc.WaitForHdcpEventCount(1U));
+  ASSERT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kEnabled);
+
+  hwc.DetachClient(/*had_callback=*/true);
+  hwc.ClearHdcpEvents();
+  EXPECT_TRUE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+  hwc.ReplayHotplugHdcpStatus();
+
+  ASSERT_EQ(hwc.hdcp_events.size(), 1U);
+  EXPECT_EQ(hwc.hdcp_events[0],
+            std::make_pair(DisplayHandle{1}, std::optional<HdcpContentType>{
+                                                 HdcpContentType::kType1}));
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, ReplayHotplugHdcpStatusTriggersRefreshDuringRetry) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(int_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetContentProtectionPropertySupported(true);
+  ext_conn->SetHdcpContentTypePropertySupported(true);
+  ext_conn->SetContentProtectionEnabled(false);
+  fake_device->SetResourceConnectorIds({int_conn->GetId(), ext_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  HwcDisplay* external = hwc.GetDisplay(1);
+  ASSERT_NE(external, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  auto* hdcp = const_cast<HdcpController*>(external->GetHdcpController());
+  ASSERT_NE(hdcp, nullptr);
+  hwc.ClearRefreshEvents();
+  hdcp->Requested();
+  hdcp->ExpireRequestTimeoutForTesting();
+  ASSERT_TRUE(hwc.WaitForRefreshEventCount(1U));
+  ASSERT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kRetry);
+
+  hwc.DetachClient(/*had_callback=*/true);
+  hwc.ClearRefreshEvents();
+  EXPECT_TRUE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+  hwc.ReplayHotplugHdcpStatus();
+
+  ASSERT_EQ(hwc.refresh_events.size(), 1U);
+  EXPECT_EQ(hwc.refresh_events[0], DisplayHandle{1});
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest,
+       ReattachClientReplaysPrimaryBeforeSecondaryWithPendingLinkFailure) {
+  const ScopedTestProperty device_prop("vendor.hwc.drm.device",
+                                       "/nonexistent_drm_device");
+  auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(int_conn, nullptr);
+  ASSERT_NE(ext_conn, nullptr);
+  fake_device->SetResourceConnectorIds({int_conn->GetId(), ext_conn->GetId()});
+
+  AddDeviceToResMan(std::move(fake_device));
+  InitResManForTest();
+  EXPECT_FALSE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+  hwc.hotplug_events.clear();
+
+  hwc.DetachClient(/*had_callback=*/true);
+  hwc.ScheduleHotplugEvent(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed);
+
+  EXPECT_TRUE(hwc.AttachClient());
+  hwc.FlushHotplugEvents();
+
+  ASSERT_EQ(hwc.hotplug_events.size(), 3U);
+  EXPECT_EQ(hwc.hotplug_events[0],
+            std::make_pair(DisplayHandle{kPrimaryDisplay},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[1],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kConnected));
+  EXPECT_EQ(hwc.hotplug_events[2],
+            std::make_pair(DisplayHandle{1},
+                           DrmHwc::DisplayStatus::kLinkTrainingFailed));
   DeInitResManForTest();
 }
 

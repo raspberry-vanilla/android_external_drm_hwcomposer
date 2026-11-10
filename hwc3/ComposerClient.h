@@ -60,6 +60,7 @@
 
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcLayer.h"
+#include "hwc3/ClientDestroySync.h"
 
 using AidlPixelFormat = aidl::android::hardware::graphics::common::PixelFormat;
 using AidlNativeHandle = aidl::android::hardware::common::NativeHandle;
@@ -85,7 +86,10 @@ class DrmHwcThree;
 
 class ComposerClient : public BnComposerClient {
  public:
-  explicit ComposerClient(std::shared_ptr<DrmHwcThree> hwc);
+  explicit ComposerClient(
+      std::shared_ptr<DrmHwcThree> hwc,
+      std::weak_ptr<::android::drm_hwcomposer::ClientDestroySync>
+          client_destroy_sync = {});
   ~ComposerClient() override;
 
   void Init();
@@ -220,6 +224,8 @@ class ComposerClient : public BnComposerClient {
   ::android::drm_hwcomposer::HwcDisplay* GetDisplay(int64_t display_handle);
 
   std::shared_ptr<DrmHwcThree> hwc_;
+  std::weak_ptr<::android::drm_hwcomposer::ClientDestroySync>
+      client_destroy_sync_;
 
   std::unique_ptr<::android::drm_hwcomposer::StatsPoller> stats_poller_;
 };

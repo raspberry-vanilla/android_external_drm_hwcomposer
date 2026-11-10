@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "compositor/DisplayInfo.h"
+#include "compositor/HdcpController.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmConnector.h"
@@ -334,6 +335,97 @@ void DrmHwc::RequestHdcpNegotiation(DisplayHandle display_handle) {
   }
 }
 
+bool DrmHwc::IsHotplugHdcpDisplay(const HwcDisplay &display) const {
+  if (!hdcp_on_hotplug_enabled_ || display.IsInHeadlessMode()) {
+    return false;
+  }
+  const auto &pipeline = display.GetPipe();
+  return pipeline.connector != nullptr &&
+         pipeline.connector->Get() != nullptr &&
+         !pipeline.connector->Get()->IsInternal() &&
+         !pipeline.connector->Get()->IsMst();
+}
+
+void DrmHwc::DetachClient(bool had_callback) {
+  if (had_callback) {
+    needs_hotplug_replay_ = true;
+  }
+  needs_hdcp_replay_ = false;
+
+  std::vector<DisplayHandle> virtual_handles;
+  for (const auto &[handle, display] : displays_) {
+    if (display->GetDisplayType() == HwcDisplay::DisplayType::kVirtual) {
+      virtual_handles.push_back(handle);
+    }
+  }
+  for (DisplayHandle handle : virtual_handles) {
+    DestroyVirtualDisplay(handle);
+  }
+
+  for (auto &[_, display] : displays_) {
+    display->ResetClientState(!IsHotplugHdcpDisplay(*display));
+  }
+}
+
+bool DrmHwc::AttachClient() {
+  // Only replay connected displays after a prior client detached from this
+  // live DrmHwc instance; the initial client consumes the boot queue from
+  // ResourceManager::Init() directly so link-status error ordering is
+  // preserved.
+  if (!needs_hotplug_replay_) {
+    return false;
+  }
+  needs_hotplug_replay_ = false;
+  if (!resource_manager_.IsInitialized()) {
+    return true;
+  }
+  needs_hdcp_replay_ = true;
+  std::vector<DisplayHandle> connected_handles;
+  for (const auto &[handle, display] : displays_) {
+    if (display->GetDisplayType() != HwcDisplay::DisplayType::kVirtual &&
+        (!display->IsInHeadlessMode() || handle == kPrimaryDisplay)) {
+      connected_handles.push_back(handle);
+    }
+  }
+  hotplug_event_queue_.PrependConnected(connected_handles);
+  return true;
+}
+
+void DrmHwc::ReplayHotplugHdcpStatus() {
+  if (!HasCallback()) {
+    return;
+  }
+  std::vector<std::pair<DisplayHandle, std::optional<HdcpContentType>>>
+      notifications;
+  std::vector<DisplayHandle> retry_refresh_handles;
+  {
+    std::scoped_lock lock(resource_manager_.GetMainLock());
+    if (!needs_hdcp_replay_) {
+      return;
+    }
+    needs_hdcp_replay_ = false;
+    for (const auto &[handle, display] : displays_) {
+      if (!IsHotplugHdcpDisplay(*display) ||
+          display->GetHdcpController() == nullptr) {
+        continue;
+      }
+      const auto *hdcp = display->GetHdcpController();
+      std::optional<HdcpContentType> level;
+      if (hdcp->GetSettledNotification(&level)) {
+        notifications.emplace_back(handle, level);
+      } else if (hdcp->GetHdcpState() == HdcpController::HdcpState::kRetry) {
+        retry_refresh_handles.push_back(handle);
+      }
+    }
+  }
+  for (const auto &[handle, level] : notifications) {
+    SendHdcpLevelsChangedEventToClient(handle, level);
+  }
+  for (DisplayHandle handle : retry_refresh_handles) {
+    SendRefreshEventToClient(handle);
+  }
+}
+
 std::optional<DisplayHandle> DrmHwc::CreateVirtualDisplay(uint32_t width,
                                                           uint32_t height) {
   ALOGI("Creating virtual display %dx%d", width, height);
@@ -456,6 +548,8 @@ void DrmHwc::DeinitDisplays() {
   display_handles_.clear();
   displays_for_removal_list_.clear();
   last_display_handle_ = kPrimaryDisplay;
+  needs_hotplug_replay_ = false;
+  needs_hdcp_replay_ = false;
   hotplug_event_queue_.RetrieveAndFlush();
 }
 
@@ -605,6 +699,30 @@ void DrmHwc::HotplugEventQueue::Add(DisplayHandle display_handle,
     }
   }
   events_.emplace_back(display_handle, display_status);
+}
+
+void DrmHwc::HotplugEventQueue::PrependConnected(
+    const std::vector<DisplayHandle> &handles) {
+  if (handles.empty()) {
+    return;
+  }
+  std::scoped_lock lock(mutex_);
+  events_.erase(std::remove_if(events_.begin(), events_.end(),
+                               [&handles](const auto &event) {
+                                 return event.second ==
+                                            DisplayStatus::kConnected &&
+                                        std::find(handles.begin(),
+                                                  handles.end(),
+                                                  event.first) != handles.end();
+                               }),
+                events_.end());
+  Events connected_events;
+  connected_events.reserve(handles.size());
+  for (DisplayHandle handle : handles) {
+    connected_events.emplace_back(handle, DisplayStatus::kConnected);
+  }
+  events_.insert(events_.begin(), connected_events.begin(),
+                 connected_events.end());
 }
 
 DrmHwc::HotplugEventQueue::Events DrmHwc::HotplugEventQueue::RetrieveAndFlush() {
