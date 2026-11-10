@@ -194,7 +194,7 @@ auto Properties::EnableTiledDisplays() -> bool {
 }
 
 auto Properties::EnableHdcpOnHotplug() -> bool {
-  return (property_get_bool("vendor.hwc.drm.enable_hdcp_on_hotplug", 1) != 0);
+  return (property_get_bool("vendor.hwc.drm.enable_hdcp_on_hotplug", 0) != 0);
 }
 
 auto Properties::ForcedHolePunchingEnabled() -> bool {

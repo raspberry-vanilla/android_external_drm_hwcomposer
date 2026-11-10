@@ -5206,7 +5206,7 @@ TEST_F(HwcDisplayTest, InitFlushesInheritedKmsContentProtectionOnFirstPowerOn) {
 TEST_F(HwcDisplayTest,
        InitFlushesInheritedKmsContentProtectionBeforeHotplugHdcpRequest) {
   constexpr DisplayHandle kExternalHandle = 1;
-  ScopedTestProperty hotplug_hdcp_prop("vendor.hwc.enable_hdcp_on_hotplug",
+  ScopedTestProperty hotplug_hdcp_prop("vendor.hwc.drm.enable_hdcp_on_hotplug",
                                        "1");
   TestDrmHwc hotplug_hwc;
   auto internal_pipeline = CreatePipelineWithModes(
