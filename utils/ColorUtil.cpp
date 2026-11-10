@@ -222,7 +222,7 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
   Lut1D<T> lut(lut_size);
   for (size_t i = 0; i < lut_size; ++i) {
     double signal = static_cast<double>(i) * scaled_step;
-    if (!is_degamma && ColorUtil::NeedsTonemapping(tf)) {
+    if (!is_degamma) {
       signal *= std::clamp(lut_scale, kSignalMin, kSignalMax);
     }
 
@@ -525,7 +525,7 @@ std::shared_ptr<T> ColorUtil::GamutAdjustIfNeeded(
 Lut1D<drm_color_lut32> ColorUtil::CreateDegammaLut(
     TransferFunction tf, const size_t lut_size,
     const std::optional<float> layer_brightness) {
-  float lut_scale = CalculateDegammaScale(layer_brightness);
+  float lut_scale = CalculateDegammaScale(tf, layer_brightness);
   return CreateLut<drm_color_lut32>(tf, lut_size, lut_scale,
                                     /*is_degamma=*/true);
 }
@@ -534,7 +534,7 @@ Lut1D<drm_color_lut> ColorUtil::CreateGammaLut(
     TransferFunction tf, const size_t lut_size,
     const std::optional<float> display_brightness,
     const std::optional<float> hdr_headroom) {
-  float lut_scale = CalculateGammaScale(display_brightness, hdr_headroom);
+  float lut_scale = CalculateGammaScale(tf, display_brightness, hdr_headroom);
   return CreateLut<drm_color_lut>(tf, lut_size, lut_scale,
                                   /*is_degamma=*/false);
 }
@@ -587,7 +587,7 @@ std::vector<drm_color_lut32> ColorUtil::GetLogGammaLut(
     lut[idx].reserved = 0;
   };
 
-  float lut_scale = CalculateGammaScale(display_brightness, hdr_headroom);
+  float lut_scale = CalculateGammaScale(tf, display_brightness, hdr_headroom);
 
   // First two discrete points: 0.0 and 1 / 2^24
   set_lut_entry(0, 0.0);

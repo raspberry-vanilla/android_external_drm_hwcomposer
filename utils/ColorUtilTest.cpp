@@ -587,22 +587,37 @@ TEST(ColorUtilTest, CreateGammaLutHdrScaleRangeCalculatesExpectedScale) {
 }
 
 TEST(ColorUtilTest, CalculateDegammaScale) {
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(std::nullopt), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(0.0F), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(1.0F), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(-0.5F), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(1.5F), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(0.42F), 0.42F);
+  for (auto tf : {TransferFunction::kPq, TransferFunction::kHlg}) {
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, std::nullopt), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 0.0F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 1.0F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, -0.5F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 1.5F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 0.42F), 0.42F);
+  }
+  for (auto tf : {TransferFunction::kSrgb, TransferFunction::kSmpte170M,
+                  TransferFunction::kUnknown}) {
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, std::nullopt), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 0.42F), 1.0F);
+  }
 }
 
 TEST(ColorUtilTest, CalculateGammaScale) {
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(std::nullopt, std::nullopt),
-                  1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.0F, 1.0F), 0.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 1.0F), 0.5F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 0.8F), 0.4F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(1.0F, 1.0F), 1.0F);
-  EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(0.5F, 1.5F), 0.5F);
+  for (auto tf : {TransferFunction::kPq, TransferFunction::kHlg}) {
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, std::nullopt,
+                                                   std::nullopt),
+                    1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.0F, 1.0F), 0.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.5F, 1.0F), 0.5F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.5F, 0.8F), 0.4F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 1.0F, 1.0F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.5F, 1.5F), 0.5F);
+  }
+  for (auto tf : {TransferFunction::kSrgb, TransferFunction::kSmpte170M,
+                  TransferFunction::kUnknown}) {
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.0F, 1.0F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateGammaScale(tf, 0.5F, 0.8F), 1.0F);
+  }
 }
 
 TEST(ColorUtilTest, ToColorGamutMappings) {
@@ -869,6 +884,55 @@ TEST(ColorUtilTest, GetLogGammaLutBoostRegistersEncoding) {
   EXPECT_GT(lut_hlg[510].red, 0U);
   EXPECT_GT(lut_hlg[511].red, lut_hlg[510].red);
   EXPECT_GT(lut_hlg[512].red, lut_hlg[511].red);
+}
+
+TEST(ColorUtilTest, CreateGammaLutIgnoresScaleWhenNotTonemapped) {
+  constexpr size_t kLutSize = 256;
+  for (auto tf : {TransferFunction::kSrgb, TransferFunction::kSmpte170M,
+                  TransferFunction::kUnknown}) {
+    const auto unscaled = ColorUtil::CreateGammaLut(tf, kLutSize);
+    const auto scaled = ColorUtil::CreateGammaLut(tf, kLutSize, 0.15F, 0.8F);
+    ASSERT_EQ(unscaled.size(), kLutSize);
+    ASSERT_EQ(scaled.size(), unscaled.size());
+
+    for (size_t i = 0; i < unscaled.size(); ++i) {
+      EXPECT_EQ(scaled[i].red, unscaled[i].red) << "index " << i;
+      EXPECT_EQ(scaled[i].green, unscaled[i].green) << "index " << i;
+      EXPECT_EQ(scaled[i].blue, unscaled[i].blue) << "index " << i;
+    }
+  }
+}
+
+TEST(ColorUtilTest, GetLogGammaLutIgnoresScaleWhenNotTonemapped) {
+  for (auto tf : {TransferFunction::kSrgb, TransferFunction::kSmpte170M,
+                  TransferFunction::kUnknown}) {
+    const auto unscaled = ColorUtil::GetLogGammaLut(tf);
+    const auto scaled = ColorUtil::GetLogGammaLut(tf, 0.15F, 0.8F);
+    ASSERT_EQ(unscaled.size(), 513U);
+    ASSERT_EQ(scaled.size(), unscaled.size());
+
+    for (size_t i = 0; i < unscaled.size(); ++i) {
+      EXPECT_EQ(scaled[i].red, unscaled[i].red) << "index " << i;
+      EXPECT_EQ(scaled[i].green, unscaled[i].green) << "index " << i;
+      EXPECT_EQ(scaled[i].blue, unscaled[i].blue) << "index " << i;
+    }
+
+    EXPECT_EQ(scaled[509].red, 65535U);
+    EXPECT_EQ(scaled[510].red, 65536U);
+  }
+}
+
+TEST(ColorUtilTest, GetLogGammaLutAppliesScaleWhenTonemapped) {
+  for (auto tf : {TransferFunction::kPq, TransferFunction::kHlg}) {
+    const auto full = ColorUtil::GetLogGammaLut(tf, 1.0F, 1.0F);
+    const auto dimmed = ColorUtil::GetLogGammaLut(tf, 0.5F, 0.8F);
+    ASSERT_EQ(full.size(), 513U);
+    ASSERT_EQ(dimmed.size(), 513U);
+
+    for (size_t i = 509; i < 513; ++i) {
+      EXPECT_LT(dimmed[i].red, full[i].red) << "index " << i;
+    }
+  }
 }
 
 TEST(ColorUtilTest, UseLogGammaLutSysprop) {
