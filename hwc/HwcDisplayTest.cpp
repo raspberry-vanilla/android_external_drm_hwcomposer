@@ -132,6 +132,7 @@ class TestDrmHwc : public DrmHwc {
   }
   void SendHotplugEventToClient(DisplayHandle /*display_handle*/,
                                 DisplayStatus /*display_status*/) override {
+    ++hotplug_count_;
   }
   void SendHdcpLevelsChangedEventToClient(
       DisplayHandle /*display_handle*/,
@@ -156,6 +157,14 @@ class TestDrmHwc : public DrmHwc {
     return refresh_count_.load();
   }
 
+  void ResetHotplugCount() {
+    hotplug_count_.store(0);
+  }
+
+  int GetHotplugCount() const {
+    return hotplug_count_.load();
+  }
+
   // NOLINTBEGIN(cppcoreguidelines-non-private-member-variables-in-classes)
   std::optional<HdcpContentType> last_hdcp_level;
   int hdcp_callback_count = 0;
@@ -164,6 +173,7 @@ class TestDrmHwc : public DrmHwc {
  private:
   mutable std::atomic<int> vsync_count_{0};
   std::atomic<int> refresh_count_{0};
+  std::atomic<int> hotplug_count_{0};
 };
 
 HwcLayer::LayerProperties CreateFullScreenFhdLayerProperties(
@@ -4740,6 +4750,30 @@ TEST_F(HwcDisplayTest, CreateModesetCommitReturnsNulloptWhilePoweredOff) {
   EXPECT_TRUE(display.IsCommitDeferredUntilPowerOn());
   EXPECT_FALSE(display.GetDisplayEnabled());
   EXPECT_FALSE(display.CreateModesetCommit(second_config_id).has_value());
+}
+
+TEST_F(HwcDisplayTest, VirtualDisplaySetPipelineSkipsHotplugScheduling) {
+  fake_device->AddPipelineResources(/*is_external=*/true);
+  fake_device->AddWritebackConnector(
+      fake_device->GetEncoders().back()->GetId());
+  DrmConnector* wb_conn = fake_device->GetWritebackConnectors().back().get();
+  ASSERT_NE(wb_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      virtual_pipeline = DrmDisplayPipeline::CreatePipeline(*wb_conn);
+  ASSERT_NE(virtual_pipeline, nullptr);
+
+  hwc.FlushHotplugEvents();
+  hwc.ResetHotplugCount();
+
+  HwcDisplay display(DisplayHandle{1}, /*is_virtual=*/true, &hwc);
+  display.SetVirtualDisplayResolution(kFhdWidth, kFhdHeight);
+  ASSERT_TRUE(display.SetPipeline(virtual_pipeline));
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(hwc.GetHotplugCount(), 0);
+
+  ASSERT_TRUE(display.SetPipeline(nullptr));
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(hwc.GetHotplugCount(), 0);
 }
 
 }  // namespace android::drm_hwcomposer

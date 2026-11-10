@@ -1086,14 +1086,20 @@ bool HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
       }
       return false;
     }
-    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+    // Virtual displays are managed synchronously by the client and must not
+    // emit hotplug events.
+    if (!is_virtual_) {
+      hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+    }
     if (pipeline_) {
       LogModesOnHotplug();
     }
     return true;
   }
 
-  hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  if (!is_virtual_) {
+    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  }
   return true;
 }
 
