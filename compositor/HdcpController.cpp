@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -92,10 +93,12 @@ void HdcpController::Requested() {
 
   if (hdcp_state_ == HdcpState::kEnabled ||
       hdcp_state_ == HdcpState::kUndesired ||
-      hdcp_state_ == HdcpState::kInfeasible) {
+      hdcp_state_ == HdcpState::kInfeasible ||
+      hdcp_state_ == HdcpState::kThreadExit) {
     return;
   }
 
+  ++request_generation_;
   was_retry_ = (hdcp_state_ == HdcpState::kRetry);
   hdcp_state_ = HdcpState::kRequested;
 
@@ -103,7 +106,8 @@ void HdcpController::Requested() {
   cv_.notify_all();
 }
 
-void HdcpController::SetContentProtectionStatus() {
+void HdcpController::SetContentProtectionStatus(uint64_t expected_generation,
+                                                bool only_if_enabled) {
   auto* connector = pipeline_->connector->Get();
 
   // Use QueryContentProtectionEnabled() instead of UpdateContentProtection()
@@ -111,20 +115,22 @@ void HdcpController::SetContentProtectionStatus() {
   // state from the HDCP worker thread. Query outside the controller lock to
   // avoid blocking while holding the mutex.
   const bool cp_enabled = connector->QueryContentProtectionEnabled();
+  if (!cp_enabled && only_if_enabled) {
+    return;
+  }
 
   // Decide new state and which callbacks to invoke, updating internal state
   // while holding the lock. Do not call callbacks while holding the lock.
   std::optional<HdcpContentType> notify_type;
   bool trigger_retry = false;
 
-  // check if we're in the requested state and capture transient
-  // variables under lock. We will release the lock to query the connector
-  // and call callbacks to avoid holding the mutex during potentially
-  // blocking operations.
+  // Verify the request generation still matches so an unlocked connector query
+  // from a detached/terminated request cannot mutate a newer client request.
   bool should_notify_hdcp_status = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (hdcp_state_ == HdcpState::kRequested) {
+    if (hdcp_state_ == HdcpState::kRequested &&
+        request_generation_ == expected_generation) {
       if (cp_enabled) {
         hdcp_state_ = HdcpState::kEnabled;
         should_notify_hdcp_status = true;
@@ -164,11 +170,58 @@ HdcpController::HdcpState HdcpController::GetHdcpState() const {
   return hdcp_state_;
 }
 
+bool HdcpController::GetSettledNotification(
+    std::optional<HdcpContentType>* out_level) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (hdcp_state_ == HdcpState::kEnabled) {
+    *out_level = enabled_content_type_;
+    return true;
+  }
+  if (hdcp_state_ == HdcpState::kInfeasible) {
+    *out_level = std::nullopt;
+    return true;
+  }
+  return false;
+}
+
 void HdcpController::Terminate() {
-  auto lock = std::lock_guard<std::mutex>(mutex_);
-  hdcp_state_ = HdcpState::kUndesired;
-  enabled_content_type_ = std::nullopt;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (hdcp_state_ == HdcpState::kThreadExit) {
+      return;
+    }
+    ++request_generation_;
+    hdcp_state_ = HdcpState::kUndesired;
+    was_retry_ = false;
+    enabled_content_type_ = std::nullopt;
+  }
   cbks_.notify_hdcp_status(std::nullopt);
+  cv_.notify_all();
+}
+
+void HdcpController::Reset() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Preserve kInfeasible across client resets: infeasibility reflects a
+    // physical sink/link limitation and only resets when the pipeline is torn
+    // down on display disconnect.
+    if (hdcp_state_ == HdcpState::kThreadExit ||
+        hdcp_state_ == HdcpState::kInfeasible) {
+      return;
+    }
+    ++request_generation_;
+    hdcp_state_ = HdcpState::kUndesired;
+    was_retry_ = false;
+    enabled_content_type_ = std::nullopt;
+  }
+  cv_.notify_all();
+}
+
+void HdcpController::ExpireRequestTimeoutForTesting() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sleep_until_ = std::chrono::system_clock::now();
+  }
   cv_.notify_all();
 }
 
@@ -176,6 +229,7 @@ void HdcpController::ThreadFn() {
   for (;;) {
     bool fire_callback = false;
     bool early_check = false;
+    uint64_t expected_generation = 0;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       base::ScopedLockAssertion lock_assertion(mutex_);
@@ -190,6 +244,7 @@ void HdcpController::ThreadFn() {
           // If the timeout has expired, we will fire the callback to check the
           // HDCP status.
           fire_callback = true;
+          expected_generation = request_generation_;
         } else {
           ALOGV("Wait_until");
           // Wait for kEarlyCheckInterval or until sleep_until_, whichever is earlier,
@@ -203,6 +258,7 @@ void HdcpController::ThreadFn() {
           // hdcp_state_ again.
           if (hdcp_state_ == HdcpState::kRequested) {
             early_check = true;
+            expected_generation = request_generation_;
           }
         }
       } else {
@@ -216,14 +272,13 @@ void HdcpController::ThreadFn() {
     // This needs to happen outside of the lock to avoid blocking other
     // operations while potentially performing I/O or other long-running tasks.
     if (early_check) {
-      if (pipeline_->connector->Get()->QueryContentProtectionEnabled()) {
-        SetContentProtectionStatus();
-      }
+      SetContentProtectionStatus(expected_generation, /*only_if_enabled=*/true);
     } else if (fire_callback) {
       // Call the function that checks the CP prop value and call appropriate
       // onHdcPlevelsChanged
       ALOGV("Timeout. Sending an event to compositor");
-      SetContentProtectionStatus();
+      SetContentProtectionStatus(expected_generation,
+                                 /*only_if_enabled=*/false);
     }
   }
 }

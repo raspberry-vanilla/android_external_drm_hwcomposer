@@ -151,6 +151,7 @@ class HwcLayer {
   bool has_buffer_set_ = false;
 
  public:
+  void Reset();
   void InvalidateBuffer();
   bool IsLayerUsableAsDevice() const;
 };

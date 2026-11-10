@@ -352,6 +352,7 @@ class HwcDisplay : public ICompositorDisplay {
   }
 
   void Deinit();
+  void ResetClientState(bool reset_hdcp = true);
 
   const FlatteningController *GetFlatCon() const override {
     return flatcon_.get();
@@ -416,6 +417,7 @@ class HwcDisplay : public ICompositorDisplay {
   void InitWcgSupported();
   void InitHdrSupported();
   void InitForcedColorMode();
+  ColorMode GetDefaultColorMode() const;
 
   // Before CreateFrameUpdateCommit() can be called, it must be ensured that
   // the composition's internal states are up to date and ready to create an
@@ -497,6 +499,8 @@ class HwcDisplay : public ICompositorDisplay {
   bool link_recovery_modeset_required_ = false;
   bool requires_reprobe_on_power_on_ = false;
   bool defer_commits_until_power_on_ = false;
+  bool clear_hdcp_on_next_commit_ = false;
+  bool hdcp_desired_in_kms_ = false;
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 

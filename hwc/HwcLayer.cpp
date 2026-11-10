@@ -111,6 +111,22 @@ void HwcLayer::PopulateLayerData() {
   }
 }
 
+void HwcLayer::Reset() {
+  sf_type_ = CompositionType::kInvalid;
+  validated_type_ = CompositionType::kInvalid;
+  z_order_ = 0;
+  layer_data_ = {};
+  color_encoding_ = {};
+  sample_range_ = {};
+  blend_mode_ = {};
+  colorspace_ = {};
+  transfer_func_ = {};
+  brightness_.reset();
+  prior_buffer_scanout_flag_ = false;
+  frontend_private_data_.reset();
+  has_buffer_set_ = false;
+}
+
 void HwcLayer::InvalidateBuffer() {
   has_buffer_set_ = false;
 }

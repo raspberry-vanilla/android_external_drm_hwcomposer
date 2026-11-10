@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -71,25 +72,14 @@ class HdcpController {
   // hardware to complete authentication.
   void Requested();
 
-  // Verifies the HDCP status on the connector and manages state transitions.
-  //
-  // This function is typically invoked after a timeout during the HDCP
-  // enablement process. It checks if the hardware has successfully enabled
-  // content protection.
-  //
-  // State transitions:
-  // - Success: Transitions to kEnabled. Notifies client with kType1 (or kType0
-  // if retrying).
-  // - Failure:
-  //   - If first attempt: Transitions to kRetry and triggers a retry frame
-  //   (fallback to Type 0).
-  //   - If retry attempt: Transitions to kUndesired and notifies client of
-  //   failure.
-
   // Retrieves the current HDCP state in a thread-safe manner.
   //
   // Returns the current state of the HDCP state machine.
   HdcpState GetHdcpState() const;
+
+  // Returns true and populates |out_level| when the controller has settled in
+  // kEnabled or kInfeasible so a newly attached client can be notified.
+  bool GetSettledNotification(std::optional<HdcpContentType>* out_level) const;
 
   // Terminates the HDCP session.
   //
@@ -97,22 +87,30 @@ class HdcpController {
   // notifies the client that HDCP is disabled. This is thread-safe.
   void Terminate();
 
+  // Resets ongoing or completed HDCP state to kUndesired without firing client
+  // callbacks (used when detaching a disconnected client session), while
+  // preserving terminal kInfeasible hardware/link state until pipeline Deinit.
+  void Reset();
+
+  void ExpireRequestTimeoutForTesting();
+
  private:
   // Verifies the HDCP status on the connector and manages state transitions.
   //
-  // This function is typically invoked after a timeout during the HDCP
-  // enablement process. It checks if the hardware has successfully enabled
-  // content protection.
+  // This function is typically invoked after a timeout or early check during
+  // the HDCP enablement process. It checks if the hardware has successfully
+  // enabled content protection for |expected_generation|.
   //
   // State transitions:
   // - Success: Transitions to kEnabled. Notifies client with kType1 (or kType0
   // if retrying).
-  // - Failure:
+  // - Failure (when !only_if_enabled):
   //   - If first attempt: Transitions to kRetry and triggers a retry frame
   //   (fallback to Type 0).
-  //   - If retry attempt: Transitions to kUndesired and notifies client of
+  //   - If retry attempt: Transitions to kInfeasible and notifies client of
   //   failure.
-  void SetContentProtectionStatus() EXCLUDES(mutex_);
+  void SetContentProtectionStatus(uint64_t expected_generation,
+                                  bool only_if_enabled) EXCLUDES(mutex_);
 
   // Stop the helper thread
   void StopThread();
@@ -125,6 +123,7 @@ class HdcpController {
   std::condition_variable cv_;
 
   HdcpState hdcp_state_ GUARDED_BY(mutex_) = HdcpState::kUndesired;
+  uint64_t request_generation_ GUARDED_BY(mutex_) = 0;
 
   bool was_retry_ GUARDED_BY(mutex_) = false;
   std::optional<HdcpContentType> enabled_content_type_ GUARDED_BY(mutex_) =
