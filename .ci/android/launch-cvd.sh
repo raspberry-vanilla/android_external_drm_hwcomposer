@@ -6,10 +6,33 @@ set -e
 EXIT_CODE=1
 
 : "${CI_PROJECT_DIR:=/}"
+CI_PROJECT_DIR="$(realpath "${CI_PROJECT_DIR}")"
 
 source "${FDO_CI_BASH_HELPERS}"
 
-: "${RESULTS_DIR:=./results}"
+: "${RESULTS_DIR:=${CI_PROJECT_DIR}/results}"
+RESULTS_DIR="$(realpath -m "${RESULTS_DIR}")"
+: "${CI_JOB_ID:=$$}"
+: "${CUTTLEFISH_TARBALL:=cuttlefish.tar.xz}"
+: "${ANDROID_TOOLS_TARBALL:=android_tools.tar.xz}"
+: "${TOOLS_DIR:=android-tools}"
+: "${BINARIES_DIR:=android-binaries}"
+
+# Place unpacked Cuttlefish/CTS trees and VM disk images on the runner's
+# /builds volume (keeping path length short for Cuttlefish UNIX domain sockets)
+# rather than /, which lives in Podman's container RW overlay layer (#132).
+if [ -z "${CVD_WORK_BASE:-}" ]; then
+  BUILDS_MOUNT="$(df --output=target "${CI_PROJECT_DIR}" 2>/dev/null | tail -n 1 || true)"
+  if [ -n "${BUILDS_MOUNT}" ] && [ "${BUILDS_MOUNT}" != "/" ] && [ "${#BUILDS_MOUNT}" -le 20 ]; then
+    CVD_WORK_BASE="${BUILDS_MOUNT}"
+  else
+    CVD_WORK_BASE="/tmp"
+  fi
+fi
+export CVD_WORK_DIR="${CVD_WORK_BASE}/.c${CI_JOB_ID}"
+export CVD_DIR="${CVD_WORK_DIR}/cuttlefish"
+export TOOLS_ROOT="${CVD_WORK_DIR}/${TOOLS_DIR}"
+export CVD_TMP_DIR="${CVD_WORK_DIR}/tmp"
 
 set -u
 
@@ -20,17 +43,29 @@ function my_atexit()
   # shellcheck disable=SC2317
   local status=$?
   # shellcheck disable=SC2317
+  set +e
+  # shellcheck disable=SC2317
   if [ "$status" -eq 124 ]; then
     EXIT_CODE=124
   fi
   # shellcheck disable=SC2317
-  cp /cuttlefish/cuttlefish/instances/cvd-1/logs/logcat "${RESULTS_DIR}" || true
+  cp "${CVD_DIR}/cuttlefish/instances/cvd-1/logs/logcat" "${RESULTS_DIR}" 2>/dev/null || true
   # shellcheck disable=SC2317
-  cp /cuttlefish/cuttlefish/instances/cvd-1/kernel.log "${RESULTS_DIR}" || true
+  cp "${CVD_DIR}/cuttlefish/instances/cvd-1/kernel.log" "${RESULTS_DIR}" 2>/dev/null || true
   # shellcheck disable=SC2317
-  cp /cuttlefish/cuttlefish/instances/cvd-1/logs/launcher.log "${RESULTS_DIR}" || true
+  cp "${CVD_DIR}/cuttlefish/instances/cvd-1/logs/launcher.log" "${RESULTS_DIR}" 2>/dev/null || true
+  # Stop daemonized Cuttlefish processes before unlinking CVD_WORK_DIR so open
+  # image file descriptors release allocated blocks immediately.
   # shellcheck disable=SC2317
-  exit $EXIT_CODE
+  if [ -n "${CVD_DIR:-}" ] && [ -x "${CVD_DIR}/bin/stop_cvd" ]; then
+    HOME="${CVD_DIR}" timeout -k 5s 20s "${CVD_DIR}/bin/stop_cvd" >/dev/null 2>&1 || true
+  fi
+  # shellcheck disable=SC2317
+  if [ -n "${CVD_WORK_DIR:-}" ]; then
+    rm -rf --preserve-root "${CVD_WORK_DIR}" || true
+  fi
+  # shellcheck disable=SC2317
+  exit "$EXIT_CODE"
 }
 
 # safe_adb [-t <timeout_seconds>] [-d <delay_seconds>] <adb_args...>
@@ -127,29 +162,48 @@ function check_expected_assumption_failures() {
 
 export -f check_expected_assumption_failures
 
-fdo_log_section_start_collapsed get_cuttlefish "get_cuttlefish"
-tar xf "/${CUTTLEFISH_TARBALL}" -C /
-fdo_log_section_end get_cuttlefish
-
-fdo_log_section_start_collapsed get_tools "get_tools"
-tar xf "/${ANDROID_TOOLS_TARBALL}" -C /
-mv "/${BINARIES_DIR}/apexer" "/${TOOLS_DIR}/build-tools"
-fdo_log_section_end get_tools
-
-export PATH=/cuttlefish/bin:/android-tools/android-cts/jdk/bin/:/android-tools/build-tools:$PATH
-
-[ -e /dev/kvm ] || echo "Warning: /dev/kvm is not available"
 trap my_atexit EXIT
 trap 'exit 2' HUP INT PIPE TERM
 
+find "${CVD_WORK_BASE}" -maxdepth 1 -name '.c[0-9]*' -mmin +120 -exec rm -rf {} + 2>/dev/null || true
+rm -rf --preserve-root "${CVD_WORK_DIR}"
+mkdir -p "${CVD_WORK_DIR}" "${CVD_TMP_DIR}"
+export TMPDIR="${CVD_TMP_DIR}"
+
+fdo_log_section_start_collapsed get_cuttlefish "get_cuttlefish"
+tar xf "/${CUTTLEFISH_TARBALL}" -C "${CVD_WORK_DIR}"
+fdo_log_section_end get_cuttlefish
+
+fdo_log_section_start_collapsed get_tools "get_tools"
+if [ "${NEED_ANDROID_CTS:-0}" = "1" ]; then
+  tar xf "/${ANDROID_TOOLS_TARBALL}" -C "${CVD_WORK_DIR}" \
+    --exclude="${TOOLS_DIR}/cuttlefish-*.deb"
+else
+  # Non-CTS VTS/VKMS jobs only need build-tools and JDK to repack and sign the
+  # test APEX; skip decompressing the ~650 MB CTS testcases payload.
+  tar xf "/${ANDROID_TOOLS_TARBALL}" -C "${CVD_WORK_DIR}" \
+    "${TOOLS_DIR}/build-tools" \
+    "${TOOLS_DIR}/android-cts/jdk"
+fi
+cp "/${BINARIES_DIR}/apexer" "${TOOLS_ROOT}/build-tools/"
+fdo_log_section_end get_tools
+
+export PATH="${CVD_DIR}/bin:${TOOLS_ROOT}/android-cts/jdk/bin:${TOOLS_ROOT}/build-tools:${PATH}"
+
+[ -e /dev/kvm ] || echo "Warning: /dev/kvm is not available"
+
 fdo_log_section_start_collapsed launch_cvd "launch_cvd"
-pushd /cuttlefish
+pushd "${CVD_DIR}"
 
 VSOCK_BASE=10000 # greater than all the default vsock ports
 VSOCK_CID=$((VSOCK_BASE + (CI_JOB_ID & 0xfff)))
 
 ulimit -S unlimited
-HOME=/cuttlefish timeout -k 30s 15m launch_cvd \
+# Cap blank userdata (8 GiB) and sdcard (2 GiB) images instead of 64 GiB each;
+# userdata size also bounds Cuttlefish's composite disk qcow2 overlay.img,
+# shrinking apparent per-VM image size from ~193 GB to ~21 GB. Disable unused
+# Wi-Fi (OpenWRT VM + ap_overlay.img) and modem simulator daemons.
+HOME="${CVD_DIR}" timeout -k 30s 15m launch_cvd \
   -daemon \
   -verbosity=VERBOSE \
   -file_verbosity=VERBOSE \
@@ -158,13 +212,14 @@ HOME=/cuttlefish timeout -k 30s 15m launch_cvd \
   -report_anonymous_usage_stats=no \
   -gpu_mode="guest_swiftshader" \
   -hwcomposer="drm" \
-  -memory_mb 32768 \
-  -blank_sdcard_image_mb 65536 \
+  -memory_mb 8192 \
+  -blank_sdcard_image_mb 2048 \
   -data_policy=always_create \
-  -blank_data_image_mb 65536 \
+  -blank_data_image_mb 8192 \
   -enable_audio=false \
+  -enable_wifi=false \
+  -enable_modem_simulator=false \
   -enable-sandbox=false \
-  -enable_modem_simulator=true \
   -vsock_guest_cid=$VSOCK_CID \
   -cpus="${FDO_CI_CONCURRENT:-4}" \
   -extra_bootconfig_args="androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer"
@@ -186,68 +241,70 @@ popd
 fdo_log_section_end launch_cvd
 
 fdo_log_section_start_collapsed push_new_apex "push_new_apex"
+pushd "${CVD_WORK_DIR}"
 
-mkdir /old_apex
+mkdir -p "${CVD_WORK_DIR}/old_apex"
 safe_adb root
-safe_adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex /old_apex
+safe_adb pull /vendor/apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex "${CVD_WORK_DIR}/old_apex"
 
 # Unzip it to get apex_build_info.pb which has all the build parameters normally passed to apexer
-unzip /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex -d /old_apex
+unzip "${CVD_WORK_DIR}/old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex" -d "${CVD_WORK_DIR}/old_apex"
 
 # Extract all the apex pieces that can be reused
 deapexer \
-  --fsckerofs_path /cuttlefish/bin/fsck.erofs \
-  --debugfs_path /cuttlefish/bin/debugfs_static \
+  --fsckerofs_path "${CVD_DIR}/bin/fsck.erofs" \
+  --debugfs_path "${CVD_DIR}/bin/debugfs_static" \
   extract \
-  /old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
-  /old_apex
+  "${CVD_WORK_DIR}/old_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex" \
+  "${CVD_WORK_DIR}/old_apex"
 
 # Dynamically locate the HWC3 service binary built earlier in the pipeline
 # (installed under bin/hw/ or vendor/bin/hw/ depending on container setup)
 HWC3_BINARY="$(find "${CI_PROJECT_DIR}/install/x86_64" -name "android.hardware.composer.hwc3-service.drm" | head -n 1)"
-mkdir -p /new_image/bin/hw
-cp "${HWC3_BINARY}" "/new_image/bin/hw"
+mkdir -p "${CVD_WORK_DIR}/new_image/bin/hw"
+cp "${HWC3_BINARY}" "${CVD_WORK_DIR}/new_image/bin/hw"
 
-cp -r /old_apex/etc /new_image/etc
-cp -r /old_apex/lib64 /new_image/lib64
+cp -r "${CVD_WORK_DIR}/old_apex/etc" "${CVD_WORK_DIR}/new_image/etc"
+cp -r "${CVD_WORK_DIR}/old_apex/lib64" "${CVD_WORK_DIR}/new_image/lib64"
 
 # Overlay updated VINTF manifest and shared libraries from build artifacts
-find /new_image/etc -name "hwc3-drm.xml" -exec cp "${CI_PROJECT_DIR}/hwc3/hwc3-drm.xml" {} \;
-find "${CI_PROJECT_DIR}/install/x86_64" -name "*.so" -exec cp {} /new_image/lib64/ \; 2>/dev/null || true
+find "${CVD_WORK_DIR}/new_image/etc" -name "hwc3-drm.xml" -exec cp "${CI_PROJECT_DIR}/hwc3/hwc3-drm.xml" {} \;
+find "${CI_PROJECT_DIR}/install/x86_64" -name "*.so" -exec cp {} "${CVD_WORK_DIR}/new_image/lib64/" \; 2>/dev/null || true
 
-mkdir /new_apex
-cp /old_apex/apex_manifest.pb /new_apex/
-cp /old_apex/apex_build_info.pb /new_apex/
+mkdir -p "${CVD_WORK_DIR}/new_apex"
+cp "${CVD_WORK_DIR}/old_apex/apex_manifest.pb" "${CVD_WORK_DIR}/new_apex/"
+cp "${CVD_WORK_DIR}/old_apex/apex_build_info.pb" "${CVD_WORK_DIR}/new_apex/"
 
-mkdir -p "${PWD}"/prebuilts/sdk/current/public/
-cp "/${BINARIES_DIR}/android.jar" "${PWD}"/prebuilts/sdk/current/public/
+mkdir -p "${CVD_WORK_DIR}/prebuilts/sdk/current/public"
+cp "/${BINARIES_DIR}/android.jar" "${CVD_WORK_DIR}/prebuilts/sdk/current/public/"
 
 apexer \
-  --build_info /new_apex/apex_build_info.pb \
+  --build_info "${CVD_WORK_DIR}/new_apex/apex_build_info.pb" \
   --apexer_tool_path "${PATH}" \
-  --manifest /new_apex/apex_manifest.pb \
+  --manifest "${CVD_WORK_DIR}/new_apex/apex_manifest.pb" \
   --force \
-  --key /cuttlefish/com.android.hardware.pem \
-  --pubkey /cuttlefish/com.android.hardware.avbpubkey \
-  /new_image \
-  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+  --key "${CVD_DIR}/com.android.hardware.pem" \
+  --pubkey "${CVD_DIR}/com.android.hardware.avbpubkey" \
+  "${CVD_WORK_DIR}/new_image" \
+  "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex"
 
 java \
- -Djava.library.path=/cuttlefish/lib64 \
-  -jar /cuttlefish/framework/signapk.jar \
+  -Djava.library.path="${CVD_DIR}/lib64" \
+  -jar "${CVD_DIR}/framework/signapk.jar" \
   -a 4096 --align-file-size \
-  /cuttlefish/com.android.hardware.x509.pem \
-  /cuttlefish/com.android.hardware.pk8 \
-  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
-  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex
+  "${CVD_DIR}/com.android.hardware.x509.pem" \
+  "${CVD_DIR}/com.android.hardware.pk8" \
+  "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex" \
+  "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex"
 
-mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex \
-  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex_unsigned
+mv "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex" \
+  "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex_unsigned"
 
-mv /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex \
-  /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+mv "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.signed.apex" \
+  "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex"
 
-safe_adb -t 90 install --force-non-staged /new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex
+safe_adb -t 90 install --force-non-staged "${CVD_WORK_DIR}/new_apex/com.android.hardware.graphics.composer.drm_hwcomposer.apex"
+popd
 
 # Reboot and wait for drmhwc to start up again with new apex. Bound
 # wait-for-device with a 3-minute timeout so a wedged Cuttlefish vsock/adbd

@@ -278,7 +278,7 @@ auto Properties::MaxRefreshRate() -> std::optional<int> {
 }
 
 auto Properties::ExternalHdrEnabled() -> bool {
-  constexpr int kDefault = 1;
+  constexpr int kDefault = 0;
   return (property_get_bool("vendor.hwc.drm.external_hdr_enabled", kDefault) !=
           0);
 }

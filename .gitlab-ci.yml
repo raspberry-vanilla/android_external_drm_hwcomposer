@@ -1,6 +1,8 @@
 # Personal forks lack FDO container registry push permissions (issues/540) and
 # upstream KVM runners, so only run pipelines on MRs or the upstream namespace.
 workflow:
+  auto_cancel:
+    on_new_commit: interruptible
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PROJECT_NAMESPACE == "drm-hwcomposer" && $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
@@ -43,6 +45,9 @@ stages:
 # timeouts, or Cuttlefish boot/reboot timeout exits (exit code 124) without
 # masking genuine build/lint/test failures (exit code 1).
 default:
+  # Allow GitLab to auto-cancel superseded in-flight MR pipelines on force-push
+  # so stale Cuttlefish VM jobs release shared runner slots immediately.
+  interruptible: true
   retry:
     max: 2
     exit_codes: 124

@@ -9,27 +9,41 @@ if [[ -z ${CI_PROJECT_DIR} ]]; then
     CI_PROJECT_DIR="$(dirname "${0}")/../.."
 fi
 
+export NEED_ANDROID_CTS=1
 source "${CI_PROJECT_DIR}/.ci/android/launch-cvd.sh"
 
 fdo_log_section_start_collapsed run_android_cts "run_android_cts"
 
 INCLUDE_FILE="${CI_PROJECT_DIR}/.ci/android/cts-includes.txt"
-# shellcheck disable=SC2086 # keep word splitting
-INCLUDE_FILTERS="$(grep -v -E "(^#|^[[:space:]]*$)" "$INCLUDE_FILE" | sed -e 's/\s*$//g' -e 's/.*/--include-filter "\0" /g')"
+CTS_FILTER_ARGS=()
+while IFS= read -r filter; do
+  CTS_FILTER_ARGS+=(--include-filter "$filter")
+done < <(grep -v -E "(^#|^[[:space:]]*$)" "$INCLUDE_FILE" | sed -e 's/[[:space:]]*$//')
 
 EXCLUDE_FILE="${CI_PROJECT_DIR}/.ci/android/cts-excludes.txt"
-EXCLUDE_FILTERS=""
 if [ -e "$EXCLUDE_FILE" ]; then
-  EXCLUDE_FILTERS="$(grep -v -E "(^#|^[[:space:]]*$)" "$EXCLUDE_FILE" | sed -e 's/\s*$//g' -e 's/.*/--exclude-filter "\0" /g')"
+  while IFS= read -r filter; do
+    CTS_FILTER_ARGS+=(--exclude-filter "$filter")
+  done < <(grep -v -E "(^#|^[[:space:]]*$)" "$EXCLUDE_FILE" | sed -e 's/[[:space:]]*$//')
 fi
 
 set +e
-# shellcheck disable=SC2086 # keep word splitting
-eval /android-tools/android-cts/tools/cts-tradefed run commandAndExit cts-dev \
-  $INCLUDE_FILTERS $EXCLUDE_FILTERS --log-level-display ASSERT
+# Bound cts-tradefed to 25m (normal 387-test run is ~7m) so an init/shutdown
+# deadlock (e.g. LowDiskSpaceException in CommandScheduler, job #115382266)
+# cannot hold the Cuttlefish container open for 48m, and point java.io.tmpdir
+# into CVD_TMP_DIR so Tradefed/OLC temp files stay out of container /tmp.
+JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=${CVD_TMP_DIR}" \
+  timeout -k 30s 25m "${TOOLS_ROOT}/android-cts/tools/cts-tradefed" \
+  run commandAndExit cts-dev \
+  "${CTS_FILTER_ARGS[@]}" --log-level-display ASSERT
+CTS_STATUS=$?
+if [ "${CTS_STATUS}" -eq 124 ]; then
+  EXIT_CODE=124
+  exit 124
+fi
 
-cp -r "/android-tools/android-cts/results/latest"/* "${RESULTS_DIR}"
-cp -r "/android-tools/android-cts/logs/latest"/* "${RESULTS_DIR}"
+cp -r "${TOOLS_ROOT}/android-cts/results/latest"/* "${RESULTS_DIR}" 2>/dev/null || true
+cp -r "${TOOLS_ROOT}/android-cts/logs/latest"/* "${RESULTS_DIR}" 2>/dev/null || true
 
 ACTUAL_ASSUMPTION_FAILURES_FILE="${RESULTS_DIR}/cts_results_actual_assumption_failures.txt"
 awk '

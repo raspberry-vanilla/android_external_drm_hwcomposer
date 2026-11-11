@@ -5,6 +5,7 @@
 
 .container:
   stage: container
+  interruptible: false
   extends:
     - .incorporate-templates-commit
   variables:
