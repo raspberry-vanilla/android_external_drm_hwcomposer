@@ -167,7 +167,7 @@ void ResourceManager::ReloadProperties() {
 
 auto ResourceManager::GetConnectorTileGroupKey(DrmConnector *conn)
     -> std::optional<TileGroupKey> {
-  if (conn == nullptr) {
+  if (conn == nullptr || !Properties::EnableTiledDisplays()) {
     return std::nullopt;
   }
   auto tile_info = conn->GetTileInfo();

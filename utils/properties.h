@@ -34,6 +34,7 @@ class Properties {
   static auto ScaleWithGpu() -> bool;
   static auto EnableVirtualDisplay() -> bool;
   static auto EnableExternalDisplays() -> bool;
+  static auto EnableTiledDisplays() -> bool;
   static auto EnableHdcpOnHotplug() -> bool;
   static auto GetCtmHandling() -> CtmHandling;
   static auto BugfixCursorCtmOffset() -> bool;

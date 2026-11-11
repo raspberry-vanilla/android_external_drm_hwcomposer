@@ -189,6 +189,10 @@ auto Properties::EnableExternalDisplays() -> bool {
   return (property_get_bool("vendor.hwc.drm.enable_external_displays", 1) != 0);
 }
 
+auto Properties::EnableTiledDisplays() -> bool {
+  return (property_get_bool("vendor.hwc.drm.enable_tiled_displays", 1) != 0);
+}
+
 auto Properties::EnableHdcpOnHotplug() -> bool {
   return (property_get_bool("vendor.hwc.drm.enable_hdcp_on_hotplug", 1) != 0);
 }
