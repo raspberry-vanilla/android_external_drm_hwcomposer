@@ -19,6 +19,7 @@
 #include <android-base/strings.h>
 #include <sys/stat.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -197,7 +198,16 @@ auto ResourceManager::FindAttachedSiblingTileConnector(DrmConnector *conn) const
   return nullptr;
 }
 
+auto ResourceManager::CreateDrmDevice(const std::string &path, uint32_t index)
+    -> std::unique_ptr<DrmDevice> {
+  if (device_factory_hook_) {
+    return device_factory_hook_(path, index);
+  }
+  return DrmDevice::CreateInstance(path, this, index);
+}
+
 void ResourceManager::Init() {
+  std::scoped_lock init_lock(init_mutex_);
   if (initialized_) {
     ALOGE("Already initialized");
     return;
@@ -207,11 +217,16 @@ void ResourceManager::Init() {
   // used.
   BackendManager::GetInstance().InitializeBackends();
 
-  color_pipeline_enabled_ = Properties::UseColorPipeline();
-  force_ctm_handles_offset_ = Properties::ForceCtmHandlesOffset();
-  force_color_mode_ = Properties::ForceColorMode();
-  persistent_hdr_enabled_ = Properties::PersistentHdrEnabled();
-  external_hdr_enabled_ = Properties::ExternalHdrEnabled();
+  const bool color_pipeline_enabled = Properties::UseColorPipeline();
+  const bool force_ctm_handles_offset = Properties::ForceCtmHandlesOffset();
+  const int force_color_mode = Properties::ForceColorMode();
+  const bool persistent_hdr_enabled = Properties::PersistentHdrEnabled();
+  const bool external_hdr_enabled = Properties::ExternalHdrEnabled();
+  const bool scale_with_gpu = Properties::ScaleWithGpu();
+  const auto ctm_handling = Properties::GetCtmHandling();
+
+  auto display_str = Properties::InternalDisplayNames();
+  auto display_names = base::Tokenize(display_str, ",");
 
   // Could be a valid path or it can have at the end of it the wildcard %
   // which means that it will try open all devices until an error is met.
@@ -219,10 +234,33 @@ void ResourceManager::Init() {
   if (path_pattern.empty()) {
     path_pattern = "/dev/dri/card%";
   }
+
+  size_t base_drm_index = 0;
+  DrmDevice *first_drm = nullptr;
+  bool needs_buffer_info_getter = false;
+  {
+    std::scoped_lock lock(hotplug_mutex_, GetMainLock());
+    base_drm_index = drms_.size();
+    if (!drms_.empty()) {
+      first_drm = drms_[0].get();
+    }
+    needs_buffer_info_getter = (BufferInfoGetter::GetInstance() == nullptr);
+    color_pipeline_enabled_ = color_pipeline_enabled;
+    force_ctm_handles_offset_ = force_ctm_handles_offset;
+    force_color_mode_ = force_color_mode;
+    persistent_hdr_enabled_ = persistent_hdr_enabled;
+    external_hdr_enabled_ = external_hdr_enabled;
+    scale_with_gpu_ = scale_with_gpu;
+    ctm_handling_ = ctm_handling;
+    displays_.insert(display_names.begin(), display_names.end());
+  }
+
+  std::vector<std::unique_ptr<DrmDevice>> new_drms;
   if (path_pattern.back() != '%') {
-    auto dev = DrmDevice::CreateInstance(path_pattern, this, 0);
+    auto dev = CreateDrmDevice(path_pattern,
+                               static_cast<uint32_t>(base_drm_index));
     if (dev) {
-      drms_.emplace_back(std::move(dev));
+      new_drms.emplace_back(std::move(dev));
     }
   } else {
     path_pattern.resize(path_pattern.size() - 1);
@@ -234,50 +272,89 @@ void ResourceManager::Init() {
       if (stat(path.str().c_str(), &buf) != 0)
         break;
 
-      // Use drms_.size() rather than the raw card<idx> number so non-KMS nodes
-      // (e.g. vgem/ivpu on card0) do not shift KMS device port prefixes.
-      auto dev = DrmDevice::CreateInstance(path.str(), this,
-                                           static_cast<uint32_t>(drms_.size()));
+      // Use base_drm_index + new_drms.size() rather than raw card<idx> so
+      // pre-seeded test devices and non-KMS nodes (e.g. vgem/ivpu on card0)
+      // do not shift KMS device port prefixes.
+      auto dev = CreateDrmDevice(path.str(),
+                                 static_cast<uint32_t>(base_drm_index +
+                                                       new_drms.size()));
       if (dev) {
-        drms_.emplace_back(std::move(dev));
+        new_drms.emplace_back(std::move(dev));
       }
     }
   }
-  ALOGE_IF(drms_.empty(), "No DRM devices available.");
+  ALOGE_IF(base_drm_index == 0 && new_drms.empty(),
+           "No DRM devices available.");
 
-  auto display_str = Properties::InternalDisplayNames();
-  auto display_names = base::Tokenize(display_str, ",");
-  displays_.insert(display_names.begin(), display_names.end());
-
-  scale_with_gpu_ = Properties::ScaleWithGpu();
-  ctm_handling_ = Properties::GetCtmHandling();
-
-  if (BufferInfoGetter::GetInstance() == nullptr) {
-    std::unique_ptr<BufferInfoGetter> buffer_info_getter;
-    if (!drms_.empty()) {
-      buffer_info_getter = drms_[0]->GetBackend().CreateBufferInfoGetter();
+  std::unique_ptr<BufferInfoGetter> buffer_info_getter;
+  if (needs_buffer_info_getter) {
+    if (first_drm == nullptr && !new_drms.empty()) {
+      first_drm = new_drms[0].get();
     }
-    if (!buffer_info_getter) {
+    if (first_drm != nullptr) {
+      buffer_info_getter = first_drm->GetBackend().CreateBufferInfoGetter();
+    }
+    if (buffer_info_getter == nullptr) {
       ALOGE(
           "Failed to create BufferInfoGetter from backend, falling back to "
           "BufferInfoMapperMetadata.");
       buffer_info_getter = BufferInfoMapperMetadata::CreateInstance();
     }
-    BufferInfoGetter::Init(std::move(buffer_info_getter));
   }
 
-  for (auto &drm : drms_) {
+  for (auto &drm : new_drms) {
     if (!drm->GetBackend().UseBackendHotplug()) {
       drm->ResetConnectorsAndCrtcs();
     }
   }
 
   bool use_backend_hotplug = false;
-  for (auto &drm : drms_) {
-    if (drm->GetBackend().UseBackendHotplug()) {
-      use_backend_hotplug = true;
-      break;
+  {
+    std::scoped_lock lock(hotplug_mutex_, GetMainLock());
+
+    for (size_t i = 0; i < base_drm_index; ++i) {
+      if (!drms_[i]->GetBackend().UseBackendHotplug()) {
+        drms_[i]->ResetConnectorsAndCrtcs();
+      }
     }
+
+    for (auto &drm : new_drms) {
+      drms_.emplace_back(std::move(drm));
+    }
+
+    if (buffer_info_getter != nullptr &&
+        BufferInfoGetter::GetInstance() == nullptr) {
+      BufferInfoGetter::Init(std::move(buffer_info_getter));
+    }
+
+    for (const auto &drm : drms_) {
+      if (drm->GetBackend().UseBackendHotplug()) {
+        use_backend_hotplug = true;
+        break;
+      }
+    }
+
+    if (!use_backend_hotplug) {
+      StartUEventListener();
+
+      for (auto &drm : drms_) {
+        auto stale_connectors = drm->RefreshConnectors();
+        DetachStalePipelines(stale_connectors);
+        // Connectors created in DrmDevice::Init() or RefreshConnectors()
+        // already populated modes_ from their initial drmModeGetConnector()
+        // call in DrmConnector::Init(); only re-probe connectors whose mode
+        // list is still empty.
+        for (const auto &conn : drm->GetConnectors()) {
+          if (conn->GetModes().empty()) {
+            conn->UpdateModesAndProperties();
+          }
+        }
+      }
+      UpdateFrontendDisplays(/*update_modes=*/false);
+      MaybeScheduleDelayedEdidRecovery();
+    }
+
+    initialized_ = true;
   }
 
   if (use_backend_hotplug) {
@@ -327,39 +404,19 @@ void ResourceManager::Init() {
       drm->GetBackend().SetHotplugHandler(std::move(hotplug_handler));
     }
   } else {
-    {
-      std::scoped_lock lock(hotplug_mutex_, GetMainLock());
-      StartUEventListener();
-
-      for (auto &drm : drms_) {
-        auto stale_connectors = drm->RefreshConnectors();
-        DetachStalePipelines(stale_connectors);
-        // Connectors created in DrmDevice::Init() or RefreshConnectors()
-        // already populated modes_ from their initial drmModeGetConnector()
-        // call in DrmConnector::Init(); only re-probe connectors whose mode
-        // list is still empty.
-        for (const auto &conn : drm->GetConnectors()) {
-          if (conn->GetModes().empty()) {
-            conn->UpdateModesAndProperties();
-          }
-        }
-      }
-      UpdateFrontendDisplays(/*update_modes=*/false);
-      MaybeScheduleDelayedEdidRecovery();
-    }
     frontend_interface_->FlushHotplugEvents();
   }
-
-  initialized_ = true;
 }
 
 void ResourceManager::DeInit() {
+  std::scoped_lock init_lock(init_mutex_);
+  if (!initialized_) {
+    ALOGE("Not initialized");
+    return;
+  }
+
   {
     std::scoped_lock lock(hotplug_mutex_, GetMainLock());
-    if (!initialized_) {
-      ALOGE("Not initialized");
-      return;
-    }
     initialized_ = false;
     deinitializing_ = true;
   }
@@ -371,12 +428,9 @@ void ResourceManager::DeInit() {
   CancelDeferredHotplugSettle();
 
   uevent_listener_.reset();
-  {
-    std::scoped_lock hotplug_lock(hotplug_mutex_);
-    deferred_bootanim_hotplug_.reset();
-  }
 
   std::scoped_lock teardown_lock(hotplug_mutex_, GetMainLock());
+  deferred_bootanim_hotplug_.reset();
   DetachAllFrontendDisplays();
   drms_.clear();
   displays_.clear();

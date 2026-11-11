@@ -293,6 +293,13 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().DeInit();
   }
 
+  static void SetDeviceFactoryHook(
+      ResourceManager& res_man,
+      std::function<std::unique_ptr<DrmDevice>(const std::string&, uint32_t)>
+          hook) {
+    res_man.device_factory_hook_ = std::move(hook);
+  }
+
   static constexpr uint32_t kDefaultEdpConnId = 100;
   static constexpr uint32_t kDefaultDpConnId = 101;
 
@@ -4041,6 +4048,114 @@ TEST_F(DrmHwcTest, ConcurrentDumpStateAndStatsPullsWithDisplayMutations) {
 
   std::string dump = hwc.DumpState();
   EXPECT_NE(dump.find("-- drm_hwcomposer --"), std::string::npos);
+}
+
+TEST_F(DrmHwcTest, ResourceManagerExposesPropertiesDuringDeviceCreation) {
+  const ScopedTestProperty dev_prop("vendor.hwc.drm.device",
+                                    "/tmp/nonexistent_drm_card");
+  const ScopedTestProperty cp_prop("vendor.hwc.drm.enable_color_pipeline",
+                                   "true");
+
+  bool hook_called = false;
+  SetDeviceFactoryHook(
+      hwc.GetResMan(),
+      [this, &hook_called](const std::string& /*path*/,
+                           uint32_t index) -> std::unique_ptr<DrmDevice> {
+        hook_called = true;
+        EXPECT_TRUE(hwc.GetResMan().UseColorPipeline());
+        auto dev = std::make_unique<FakeDrmDevice>(&hwc.GetResMan(), index);
+        dev->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+        auto res = dev->AddPipelineResourcesTyped({CreateFakeDrmMode()},
+                                                  /*is_external=*/false);
+        EXPECT_NE(res.primary_plane, nullptr);
+        if (res.primary_plane != nullptr) {
+          res.primary_plane->SetColorPipelinePropertySupported(true);
+        }
+        return dev;
+      });
+
+  InitResManForTest();
+  SetDeviceFactoryHook(hwc.GetResMan(), nullptr);
+  EXPECT_TRUE(hook_called);
+  DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, ConcurrentInitAndDeInit) {
+  const ScopedTestProperty dev_prop("vendor.hwc.drm.device",
+                                    "/tmp/nonexistent_drm_card");
+
+  RecordingDrmHwc local_hwc;
+  SetDeviceFactoryHook(local_hwc.GetResMan(),
+                       [&local_hwc](const std::string& /*path*/, uint32_t index)
+                           -> std::unique_ptr<DrmDevice> {
+                         auto dev = std::make_unique<
+                             FakeDrmDevice>(&local_hwc.GetResMan(), index);
+                         dev->GetFakeAtomicCommitSink()->SetDriveStateManager(
+                             true);
+                         dev->AddPipelineResources(/*is_external=*/false);
+                         constexpr uint32_t kDefaultWbConnId = 205;
+                         dev->AddTypedConnector(kDefaultWbConnId,
+                                                DRM_MODE_CONNECTOR_WRITEBACK, 1,
+                                                /*is_external=*/true, 1);
+                         return dev;
+                       });
+
+  std::atomic<bool> stop{false};
+  auto reader = [&]() {
+    while (!stop) {
+      bool initialized = false;
+      uint32_t wb_count = 0;
+      {
+        const std::scoped_lock lock(local_hwc.GetResMan().GetMainLock());
+        initialized = local_hwc.GetResMan().IsInitialized();
+        if (initialized) {
+          wb_count = local_hwc.GetResMan().GetWritebackConnectorsCount();
+          EXPECT_EQ(wb_count, 1U);
+        }
+      }
+
+      auto dump = local_hwc.GetResMan().DumpBackends();
+      if (dump.has_value()) {
+        EXPECT_NE(dump.value().find("<start "), std::string::npos);
+      }
+
+      std::string hwc_dump = local_hwc.DumpState();
+      EXPECT_NE(hwc_dump.find("-- drm_hwcomposer --"), std::string::npos);
+    }
+  };
+
+  auto writer = [&]() {
+    constexpr int kNumIterations = 50;
+    for (int i = 0; i < kNumIterations; ++i) {
+      local_hwc.GetResMan().Init();
+      local_hwc.GetResMan().DeInit();
+    }
+  };
+
+  constexpr int kNumReaderThreads = 4;
+  std::vector<std::thread> readers;
+  readers.reserve(kNumReaderThreads);
+  for (int i = 0; i < kNumReaderThreads; ++i) {
+    readers.emplace_back(reader);
+  }
+
+  std::thread writer_thread(writer);
+  writer();
+  writer_thread.join();
+
+  stop = true;
+  for (auto& t : readers) {
+    t.join();
+  }
+
+  local_hwc.GetResMan().Init();
+  EXPECT_TRUE(local_hwc.GetResMan().IsInitialized());
+  {
+    const std::scoped_lock lock(local_hwc.GetResMan().GetMainLock());
+    EXPECT_EQ(local_hwc.GetResMan().GetWritebackConnectorsCount(), 1U);
+  }
+  local_hwc.GetResMan().DeInit();
+  EXPECT_FALSE(local_hwc.GetResMan().IsInitialized());
 }
 
 }  // namespace android::drm_hwcomposer

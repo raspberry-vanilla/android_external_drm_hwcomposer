@@ -29,6 +29,10 @@ HOST_CXXFLAGS := -std=$(STD) -Wall -Wextra -Werror -Wno-missing-designated-field
 HOST_CXXFLAGS += -DHWC2_USE_CPP11 -DHWC2_INCLUDE_STRINGIFICATION -DHAS_LZ4 -DHAS_LIBDISPLAY_INFO=1 -D__INTRODUCED_IN\(x\)=
 HOST_CXXFLAGS += $(HOST_INCLUDES)
 
+# Pre-include C++ <atomic> before AOSP <cutils/trace.h> includes C11
+# <stdatomic.h>, whose atomic_* macros break GNU libstdc++ <atomic>.
+HOST_CXXFLAGS += -include atomic
+
 HOST_OUT_DIR := $(OUT_DIR)/host_unittests
 
 UNITTEST_SRCS := \
