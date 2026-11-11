@@ -614,31 +614,33 @@ struct SdmBackendTest : public ::testing::Test {
 // display configs and color modes, transitions between power modes, and
 // produces non-empty diagnostic state dumps.
 TEST_F(SdmBackendTest, PrimaryDisplayInitializationAndPowerModes) {
-  std::scoped_lock lock(hwc->GetResMan().GetMainLock());
+  {
+    std::scoped_lock lock(hwc->GetResMan().GetMainLock());
 
-  EXPECT_TRUE(primary_display->GetDisplayEnabled());
-  EXPECT_EQ(primary_display->GetDisplayType(),
-            HwcDisplay::DisplayType::kInternal);
+    EXPECT_TRUE(primary_display->GetDisplayEnabled());
+    EXPECT_EQ(primary_display->GetDisplayType(),
+              HwcDisplay::DisplayType::kInternal);
 
-  const auto configs = primary_display->GetDisplayConfigs();
-  EXPECT_FALSE(configs.empty());
+    const auto configs = primary_display->GetDisplayConfigs();
+    EXPECT_FALSE(configs.empty());
 
-  const auto color_modes = primary_display->GetColorModes();
-  EXPECT_FALSE(color_modes.empty());
-  EXPECT_NE(std::find(color_modes.begin(), color_modes.end(),
-                      ColorMode::kNative),
-            color_modes.end());
+    const auto color_modes = primary_display->GetColorModes();
+    EXPECT_FALSE(color_modes.empty());
+    EXPECT_NE(std::find(color_modes.begin(), color_modes.end(),
+                        ColorMode::kNative),
+              color_modes.end());
 
-  EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kOff),
-            HwcDisplay::Error::kNone);
-  EXPECT_FALSE(primary_display->GetDisplayEnabled());
+    EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kOff),
+              HwcDisplay::Error::kNone);
+    EXPECT_FALSE(primary_display->GetDisplayEnabled());
 
-  EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kOn),
-            HwcDisplay::Error::kNone);
-  EXPECT_TRUE(primary_display->GetDisplayEnabled());
+    EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kOn),
+              HwcDisplay::Error::kNone);
+    EXPECT_TRUE(primary_display->GetDisplayEnabled());
 
-  EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kDoze),
-            HwcDisplay::Error::kUnsupported);
+    EXPECT_EQ(primary_display->SetPowerMode(PowerMode::kDoze),
+              HwcDisplay::Error::kUnsupported);
+  }
 
   EXPECT_FALSE(hwc->DumpState().empty());
   const auto backend_dump = hwc->GetResMan().DumpBackends();

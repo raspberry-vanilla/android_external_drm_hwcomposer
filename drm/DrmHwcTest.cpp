@@ -54,6 +54,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "compositor/DisplayInfo.h"
 #include "compositor/HdcpController.h"
+#include "compositor/LayerData.h"
 #include "drm/AtomicStateManager.h"
 #include "drm/CommitStatus.h"
 #include "drm/DrmAtomicStateManager.h"
@@ -65,6 +66,7 @@
 #include "early_animation/EarlyBootAnimation.h"
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
+#include "hwc/HwcLayer.h"
 #include "hwc3/ClientDestroySync.h"
 #include "utils/TestUtils.h"
 #include "utils/UEvent.h"
@@ -3952,6 +3954,93 @@ TEST_F(DrmHwcTest,
             std::make_pair(DisplayHandle{1},
                            DrmHwc::DisplayStatus::kLinkTrainingFailed));
   DeInitResManForTest();
+}
+
+TEST_F(DrmHwcTest, ConcurrentDumpStateAndStatsPullsWithDisplayMutations) {
+  fake_device->GetFakeAtomicCommitSink()->SetDriveStateManager(true);
+  auto primary_pipe = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFakeDefaultModeWidth, kFakeDefaultModeHeight,
+                         kTestRefresh60Hz, DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_TRUE(hwc.BindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+
+  BufferInfo bo{};
+  bo.width = kFakeDefaultModeWidth;
+  bo.height = kFakeDefaultModeHeight;
+  bo.format = DRM_FORMAT_ARGB8888;
+  bo.pitches[0] = kFakeDefaultModeWidth * kTestBytesPerPixel;
+  bo.prime_fds[0] = 1;
+
+  HwcLayer::LayerProperties client_props{};
+  client_props.buffer = HwcLayer::Buffer{
+      .bi = bo,
+      .fb = std::make_shared<FakeFbIdHandle>(1),
+      .fence = {},
+  };
+  client_props.display_frame = DstRectInfo{
+      .i_rect = IRect{.left = 0,
+                      .top = 0,
+                      .right = static_cast<int32_t>(kFakeDefaultModeWidth),
+                      .bottom = static_cast<int32_t>(kFakeDefaultModeHeight)}};
+  client_props.source_crop = SrcRectInfo{
+      .f_rect = FRect{.left = 0.0F,
+                      .top = 0.0F,
+                      .right = static_cast<float>(kFakeDefaultModeWidth),
+                      .bottom = static_cast<float>(kFakeDefaultModeHeight)}};
+
+  {
+    const std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    primary->GetClientLayer().SetLayerProperties(client_props);
+    (void)primary->ValidateStagedComposition();
+    primary->AcceptValidatedComposition();
+    SharedFd present_fence;
+    std::vector<HwcDisplay::ReleaseFence> release_fences;
+    (void)primary->PresentStagedComposition(std::nullopt, present_fence,
+                                            release_fences);
+  }
+  ASSERT_FALSE(hwc.PullCompositionStats().empty());
+
+  std::atomic<bool> stop{false};
+  auto reader = [&]() {
+    while (!stop) {
+      (void)hwc.DumpState();
+      (void)hwc.PullCompositionStats();
+      (void)hwc.PullActiveDisplayCounts();
+      (void)hwc.GetResMan().DumpBackends();
+    }
+  };
+
+  constexpr int kNumReaderThreads = 4;
+  std::vector<std::thread> readers;
+  readers.reserve(kNumReaderThreads);
+  for (int i = 0; i < kNumReaderThreads; ++i) {
+    readers.emplace_back(reader);
+  }
+
+  constexpr int kNumIterations = 50;
+  for (int i = 0; i < kNumIterations; ++i) {
+    const std::scoped_lock lock(hwc.GetResMan().GetMainLock());
+    primary->SetPowerMode(HwcDisplay::PowerMode::kOff);
+    primary->SetPowerMode(HwcDisplay::PowerMode::kOn);
+    (void)primary->ValidateStagedComposition();
+    primary->AcceptValidatedComposition();
+    SharedFd iteration_fence;
+    std::vector<HwcDisplay::ReleaseFence> iteration_release_fences;
+    (void)primary->PresentStagedComposition(std::nullopt, iteration_fence,
+                                            iteration_release_fences);
+  }
+
+  stop = true;
+  for (auto& t : readers) {
+    t.join();
+  }
+
+  std::string dump = hwc.DumpState();
+  EXPECT_NE(dump.find("-- drm_hwcomposer --"), std::string::npos);
 }
 
 }  // namespace android::drm_hwcomposer

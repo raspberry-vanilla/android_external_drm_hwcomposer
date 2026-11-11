@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <android-base/thread_annotations.h>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -175,7 +176,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   bool IsHotplugHdcpDisplay(const HwcDisplay &display) const;
 
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
-  StatsTracker dump_stats_tracker_;
+  // Outer lock acquired before GetMainLock() (dump_mutex_ -> GetMainLock()).
+  std::mutex dump_mutex_;
+  StatsTracker dump_stats_tracker_ GUARDED_BY(dump_mutex_);
 
   std::unique_ptr<DisplayRefreshRatesChangedAtomReporter>
       refresh_rates_reporter_;

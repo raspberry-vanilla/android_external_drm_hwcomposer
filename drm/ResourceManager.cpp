@@ -888,6 +888,7 @@ auto ResourceManager::GetWritebackConnectorsCount() -> uint32_t {
 }
 
 std::optional<std::string> ResourceManager::DumpBackends() {
+  std::scoped_lock lock(GetMainLock());
   std::stringstream output;
   for (auto &drm : drms_) {
     auto dump = drm->GetBackend().Dump();
