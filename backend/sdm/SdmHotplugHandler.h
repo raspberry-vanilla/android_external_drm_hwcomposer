@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -35,7 +37,12 @@ class SdmHotplugHandler {
     bool connected{false};
   };
 
-  SdmHotplugHandler() = default;
+  static constexpr auto kDefaultHotplugDelay = std::chrono::milliseconds(200);
+
+  explicit SdmHotplugHandler(
+      std::chrono::milliseconds hotplug_delay = kDefaultHotplugDelay)
+      : hotplug_delay_(hotplug_delay) {
+  }
   ~SdmHotplugHandler() = default;
 
   // Set (or clear if handler is null) the hotplug callback. Drains any pending
@@ -48,10 +55,17 @@ class SdmHotplugHandler {
   // thread to process it.
   void HandleHotplugEvent(uint32_t connector_id, bool connected);
 
+  // Waits until DispatchLoop() has dequeued all queued events and entered the
+  // pre-dispatch delay or callback execution. Used by unit tests to synchronize
+  // deterministically without arbitrary sleeps.
+  bool WaitForDispatchStartedForTesting(std::chrono::milliseconds timeout);
+
  private:
   void DispatchLoop();
 
+  std::chrono::milliseconds hotplug_delay_{kDefaultHotplugDelay};
   mutable std::mutex mutex_;
+  std::condition_variable cv_;
   HotplugHandler handler_{nullptr};
   std::vector<HotplugEvent> pending_events_;
   bool is_dispatching_{false};

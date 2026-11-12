@@ -99,7 +99,9 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
     hotplug_event_queue_.Add(display_handle, display_status);
   }
 
-  void DeinitDisplays();
+  void DetachClient(bool had_callback);
+  bool AttachClient();
+  void ReplayHotplugHdcpStatus();
 
   // PipelineToFrontendBindingInterface
   bool BindDisplay(std::shared_ptr<DrmDisplayPipeline> pipeline) override;
@@ -108,6 +110,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
       std::shared_ptr<DrmDisplayPipeline> old_pipeline,
       std::shared_ptr<DrmDisplayPipeline> new_pipeline) override;
   void FinalizeDisplayBinding() override;
+  void DeinitDisplays() override;
   void FlushHotplugEvents() override;
   [[nodiscard]] bool IsEarlyBootAnimationActive() const override;
 
@@ -151,6 +154,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
     using Events = std::vector<std::pair<DisplayHandle, DisplayStatus>>;
 
     void Add(DisplayHandle display_handle, DisplayStatus display_status);
+    void PrependConnected(const std::vector<DisplayHandle> &handles);
     Events RetrieveAndFlush();
 
    private:
@@ -166,6 +170,7 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   std::vector<DisplayHandle> displays_for_removal_list_;
 
   void RequestHdcpNegotiation(DisplayHandle display_handle);
+  bool IsHotplugHdcpDisplay(const HwcDisplay &display) const;
 
   DisplayHandle last_display_handle_ = kPrimaryDisplay;
   StatsTracker dump_stats_tracker_;
@@ -174,8 +179,10 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
       refresh_rates_reporter_;
 
   bool hdcp_on_hotplug_enabled_{};
+  bool needs_hotplug_replay_ = false;
+  bool needs_hdcp_replay_ = false;
   std::unique_ptr<EarlyBootAnimation> boot_animation_;
-  HwcDisplay *boot_animation_display_ = nullptr;
+  std::atomic<HwcDisplay *> boot_animation_display_{nullptr};
   std::atomic<bool> early_boot_animation_active_{false};
 };
 

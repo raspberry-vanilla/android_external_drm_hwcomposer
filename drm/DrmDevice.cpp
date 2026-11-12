@@ -50,6 +50,7 @@
 #include "backend/BackendManager.h"
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
+#include "compositor/DisplayInfo.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmEncoder.h"
@@ -772,7 +773,7 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
   }
 
   std::set<uint32_t> crtcs_to_skip;
-  static const bool kSkipInternalReset = Properties::SkipInternalDisplayReset();
+  const bool skip_internal_reset = Properties::SkipInternalDisplayReset();
   auto is_non_internal_virtual_connector = [](const DrmConnector &conn) {
     return conn.GetConnectorType() == DRM_MODE_CONNECTOR_VIRTUAL &&
            !conn.DrmConnector::IsInternal();
@@ -790,7 +791,7 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
       }
       continue;
     }
-    if (kSkipInternalReset && conn->IsInternal()) {
+    if (skip_internal_reset && conn->IsInternal()) {
       auto crtc_id = conn->GetCrtcIdProperty().GetValue();
       if (crtc_id && *crtc_id != 0) {
         crtcs_to_skip.insert(*crtc_id);
@@ -800,6 +801,16 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
     if (!conn->GetCrtcIdProperty().AtomicSet(*pset.get(), 0)) {
       ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
       return;
+    }
+    if (conn->GetHdrOutputMetadataProperty() &&
+        !conn->GetHdrOutputMetadataProperty().AtomicSet(*pset.get(), 0)) {
+      ALOGW("Failed to clear HDR_OUTPUT_METADATA for Conn = %d", conn->GetId());
+    }
+    if (conn->GetContentProtectionProperty() &&
+        !conn->GetContentProtectionProperty()
+             .AtomicSet(*pset.get(),
+                        static_cast<uint64_t>(ContentProtection::kUndesired))) {
+      ALOGW("Failed to clear Content Protection for Conn = %d", conn->GetId());
     }
     reset_connectors.push_back(conn.get());
   }
@@ -816,6 +827,18 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
             conn->GetId());
       return;
     }
+    if (conn->GetHdrOutputMetadataProperty() &&
+        !conn->GetHdrOutputMetadataProperty().AtomicSet(*pset.get(), 0)) {
+      ALOGW("Failed to clear HDR_OUTPUT_METADATA for Ignored Conn = %d",
+            conn->GetId());
+    }
+    if (conn->GetContentProtectionProperty() &&
+        !conn->GetContentProtectionProperty()
+             .AtomicSet(*pset.get(),
+                        static_cast<uint64_t>(ContentProtection::kUndesired))) {
+      ALOGW("Failed to clear Content Protection for Ignored Conn = %d",
+            conn->GetId());
+    }
     reset_connectors.push_back(conn.get());
   }
   for (const auto &crtc : crtcs_) {
@@ -829,6 +852,19 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
           "%d",
           crtc->GetId());
       return;
+    }
+    if ((crtc->GetCtmProperty() &&
+         !crtc->GetCtmProperty().AtomicSet(*pset.get(), 0)) ||
+        (crtc->GetCtmOffsetProperty() &&
+         !crtc->GetCtmOffsetProperty().AtomicSet(*pset.get(), 0)) ||
+        (crtc->GetDegammaLutProperty() &&
+         !crtc->GetDegammaLutProperty().AtomicSet(*pset.get(), 0)) ||
+        (crtc->GetGammaLutProperty() &&
+         !crtc->GetGammaLutProperty().AtomicSet(*pset.get(), 0)) ||
+        (crtc->GetLogGammaLutProperty() &&
+         !crtc->GetLogGammaLutProperty().AtomicSet(*pset.get(), 0))) {
+      ALOGW("Failed to clear color LUT/CTM properties for CRTC = %d",
+            crtc->GetId());
     }
     reset_crtcs.push_back(crtc.get());
   }
@@ -857,6 +893,14 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
   }
   for (auto *conn : reset_connectors) {
     conn->GetCrtcIdProperty().UpdateValue(0);
+    // Re-read Content Protection from the kernel rather than assuming
+    // UNDESIRED: drivers such as i915/xe force Content Protection to DESIRED
+    // when unbinding a connector whose prior state was ENABLED.
+    if (conn->GetContentProtectionProperty() &&
+        !conn->UpdateContentProtection()) {
+      conn->GetContentProtectionProperty().UpdateValue(
+          static_cast<uint64_t>(ContentProtection::kUndesired));
+    }
   }
   for (auto *crtc : reset_crtcs) {
     crtc->GetModeProperty().UpdateValue(0);

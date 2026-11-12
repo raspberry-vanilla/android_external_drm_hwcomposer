@@ -77,10 +77,15 @@ std::optional<uint64_t> DrmProperty::GetValue() const {
     return value_;
 
   if ((flags_ & DRM_MODE_PROP_ENUM) != 0) {
-    if (value_ >= enums_.size())
-      return {};
-
-    return enums_[value_].value;
+    // Kernel DRM_MODE_PROP_ENUM properties store the raw enum value (which may
+    // be non-contiguous, e.g. COLOR_PIPELINE colorop object IDs) rather than an
+    // index into enums_.
+    for (const auto &it : enums_) {
+      if (it.value == value_) {
+        return value_;
+      }
+    }
+    return {};
   }
 
   if ((flags_ & DRM_MODE_PROP_OBJECT) != 0)
@@ -98,7 +103,8 @@ std::vector<uint64_t> DrmProperty::GetEnumValues() const {
     return {};
   }
 
-  std::vector<uint64_t> enums(enums_.size());
+  std::vector<uint64_t> enums;
+  enums.reserve(enums_.size());
   for (const auto &it : enums_) {
     enums.emplace_back(it.value);
   }

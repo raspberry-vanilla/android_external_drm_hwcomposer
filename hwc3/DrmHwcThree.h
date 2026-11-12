@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <aidl/android/hardware/drm/HdcpLevels.h>
 #include <aidl/android/hardware/graphics/composer3/IComposerCallback.h>
 #include <android-base/thread_annotations.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,8 +55,9 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   void SetCallback(std::shared_ptr<IComposerCallback> callback);
 
   // DrmHwcInterface
+  void DeinitDisplays() override;
   [[nodiscard]] bool HasCallback() const override {
-    return composer_callback_ != nullptr;
+    return GetCallback() != nullptr;
   }
   void SendVsyncEventToClient(
       ::android::drm_hwcomposer::DisplayHandle display_handle,
@@ -74,6 +77,8 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
 
   void NotifyHdcpErrorToClient(
       ::android::drm_hwcomposer::DisplayHandle display_handle);
+  void PrepareExplicitHdcpStart(
+      ::android::drm_hwcomposer::DisplayHandle display_handle);
 
   static auto GetHwc3Display(::android::drm_hwcomposer::HwcDisplay& display)
       -> std::shared_ptr<Hwc3Display>;
@@ -88,13 +93,23 @@ class DrmHwcThree : public ::android::drm_hwcomposer::DrmHwc {
   }
 
  private:
-  std::shared_ptr<IComposerCallback> composer_callback_;
+  [[nodiscard]] std::shared_ptr<IComposerCallback> GetCallback() const;
+
+  mutable std::mutex callback_lock_;
+  std::shared_ptr<IComposerCallback> composer_callback_
+      GUARDED_BY(callback_lock_);
 
   std::mutex display_state_lock_;
   std::set<::android::drm_hwcomposer::DisplayHandle> must_validate_
       GUARDED_BY(display_state_lock_);
   std::set<::android::drm_hwcomposer::DisplayHandle> connected_displays_
       GUARDED_BY(display_state_lock_);
+  std::map<::android::drm_hwcomposer::DisplayHandle,
+           ::aidl::android::hardware::drm::HdcpLevels>
+      pending_hdcp_levels_ GUARDED_BY(display_state_lock_);
+  std::map<::android::drm_hwcomposer::DisplayHandle,
+           ::aidl::android::hardware::drm::HdcpLevels>
+      delivered_hdcp_levels_ GUARDED_BY(display_state_lock_);
 };
 
 }  // namespace aidl::android::hardware::graphics::composer3::impl

@@ -67,7 +67,7 @@
 #include "utils/properties.h"
 
 namespace android::drm_hwcomposer {
-constexpr int kMaxRetries = 20;
+constexpr int kMaxRetries = 100;
 constexpr int kRetryDelayMs = 20;
 
 namespace {
@@ -132,6 +132,7 @@ class TestDrmHwc : public DrmHwc {
   }
   void SendHotplugEventToClient(DisplayHandle /*display_handle*/,
                                 DisplayStatus /*display_status*/) override {
+    ++hotplug_count_;
   }
   void SendHdcpLevelsChangedEventToClient(
       DisplayHandle /*display_handle*/,
@@ -156,6 +157,14 @@ class TestDrmHwc : public DrmHwc {
     return refresh_count_.load();
   }
 
+  void ResetHotplugCount() {
+    hotplug_count_.store(0);
+  }
+
+  int GetHotplugCount() const {
+    return hotplug_count_.load();
+  }
+
   // NOLINTBEGIN(cppcoreguidelines-non-private-member-variables-in-classes)
   std::optional<HdcpContentType> last_hdcp_level;
   int hdcp_callback_count = 0;
@@ -164,6 +173,7 @@ class TestDrmHwc : public DrmHwc {
  private:
   mutable std::atomic<int> vsync_count_{0};
   std::atomic<int> refresh_count_{0};
+  std::atomic<int> hotplug_count_{0};
 };
 
 HwcLayer::LayerProperties CreateFullScreenFhdLayerProperties(
@@ -4740,6 +4750,573 @@ TEST_F(HwcDisplayTest, CreateModesetCommitReturnsNulloptWhilePoweredOff) {
   EXPECT_TRUE(display.IsCommitDeferredUntilPowerOn());
   EXPECT_FALSE(display.GetDisplayEnabled());
   EXPECT_FALSE(display.CreateModesetCommit(second_config_id).has_value());
+}
+
+TEST_F(HwcDisplayTest, VirtualDisplaySetPipelineSkipsHotplugScheduling) {
+  fake_device->AddPipelineResources(/*is_external=*/true);
+  fake_device->AddWritebackConnector(
+      fake_device->GetEncoders().back()->GetId());
+  DrmConnector* wb_conn = fake_device->GetWritebackConnectors().back().get();
+  ASSERT_NE(wb_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      virtual_pipeline = DrmDisplayPipeline::CreatePipeline(*wb_conn);
+  ASSERT_NE(virtual_pipeline, nullptr);
+
+  hwc.FlushHotplugEvents();
+  hwc.ResetHotplugCount();
+
+  HwcDisplay display(DisplayHandle{1}, /*is_virtual=*/true, &hwc);
+  display.SetVirtualDisplayResolution(kFhdWidth, kFhdHeight);
+  ASSERT_TRUE(display.SetPipeline(virtual_pipeline));
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(hwc.GetHotplugCount(), 0);
+
+  ASSERT_TRUE(display.SetPipeline(nullptr));
+  hwc.FlushHotplugEvents();
+  EXPECT_EQ(hwc.GetHotplugCount(), 0);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateClearsLayers) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  StageSingleDeviceLayer(display, /*layer_id=*/1);
+  display.SetFrontendPrivateData(std::make_shared<FrontendDisplayBase>());
+  ASSERT_FALSE(display.layers().empty());
+  ASSERT_NE(display.GetFrontendPrivateData(), nullptr);
+
+  display.ResetClientState();
+
+  EXPECT_TRUE(display.layers().empty());
+  EXPECT_EQ(display.GetFrontendPrivateData(), nullptr);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateResetsClientTargetLayer) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  auto props = CreateFullScreenFhdLayerProperties(
+      std::make_shared<FakeFbIdHandle>(kTestFbId));
+  props.blend_mode = BufferBlendMode::kCoverage;
+  display.GetClientLayer().SetLayerProperties(props);
+  display.GetClientLayer().SetFrontendPrivateData(
+      std::make_shared<FrontendLayerBase>());
+  ASSERT_TRUE(display.GetClientLayer().IsLayerUsableAsDevice());
+
+  display.ResetClientState();
+
+  EXPECT_FALSE(display.GetClientLayer().IsLayerUsableAsDevice());
+  EXPECT_EQ(display.GetClientLayer().GetFrontendPrivateData(), nullptr);
+  // Populate a buffer without specifying blend_mode to verify ResetClientState
+  // restored Init()'s default kPreMult blend mode on client_layer_.
+  HwcLayer::LayerProperties new_buf_props{};
+  new_buf_props.buffer = props.buffer;
+  display.GetClientLayer().SetLayerProperties(new_buf_props);
+  const auto& bi = display.GetClientLayer().GetLayerData().bi;
+  if (!bi.has_value()) {
+    ADD_FAILURE() << "Expected BufferInfo on client layer";
+    return;
+  }
+  EXPECT_EQ(bi->blend_mode, BufferBlendMode::kPreMult);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateRestoresDefaultColorSettings) {
+  auto pipeline = CreateLegacyCrtcCtmPipeline();
+  pipeline->capabilities = std::make_unique<FakeDisplayCapabilities>(
+      std::vector<ColorMode>{ColorMode::kNative, ColorMode::kDisplayP3});
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  display.SetColorMode(ColorMode::kDisplayP3, kVendorBoostedRenderIntent);
+  display.SetColorTransformMatrix(kNightLightCtm);
+  display.SetContentType(ContentType::kGame);
+
+  display.ResetClientState();
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(args.color_mode, ColorMode::kNative);
+  ASSERT_NE(args.color_matrix, nullptr);
+  EXPECT_EQ(*args.color_matrix, kIdentityMatrix);
+  EXPECT_EQ(args.content_type, ContentType::kNoData);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateResetsBrightness) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.SetBrightness(kHalfBrightness));
+
+  display.ResetClientState();
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& args = sink->GetCommitHistory().back().front();
+  if (!args.brightness.has_value()) {
+    ADD_FAILURE() << "Expected brightness in commit args";
+    return;
+  }
+  EXPECT_FLOAT_EQ(*args.brightness, kBrightnessUnset);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateClearsStagedModeConfig) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh120Hz, 0, "1080p120")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  const ConfigId initial_id = display.GetCurrentConfig()->id;
+  const ConfigId next_id = display.GetDisplayConfigs()[1].id;
+
+  QueuedConfigTiming timing{};
+  ASSERT_EQ(display.QueueConfig(next_id, /*desired_time=*/0, &timing),
+            HwcDisplay::ConfigError::kNone);
+  ASSERT_TRUE(display.IsVsyncTimestampTrackingEnabled());
+
+  display.ResetClientState();
+
+  EXPECT_FALSE(display.IsVsyncTimestampTrackingEnabled());
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, initial_id);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateDisablesVsyncCallbacks) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  display.SetVsyncCallbacksEnabled(true);
+
+  display.ResetClientState();
+  // Power cycle to verify vsync_event_en_ was also cleared rather than
+  // re-arming VSyncWorker on power-on, and drain any in-flight callback first.
+  ASSERT_EQ(display.SetPowerMode(PowerMode::kOff), HwcDisplay::Error::kNone);
+  ASSERT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  hwc.ResetVsyncCount();
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kVsyncObservationWindowMs));
+  EXPECT_EQ(hwc.GetVsyncCount(), 0);
+}
+
+TEST_F(HwcDisplayTest,
+       ResetClientStatePreservesFallbackConfigDuringLinkRecovery) {
+  auto* fake_conn = fake_device->AddPipelineResourcesWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_NE(fake_conn, nullptr);
+  std::shared_ptr<DrmDisplayPipeline>
+      pipeline = fake_device->GetBackend().CreatePipeline(*fake_conn);
+  ASSERT_NE(pipeline, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  fake_conn->SetModes({CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz,
+                                         DRM_MODE_TYPE_PREFERRED, "720p60")});
+  ASSERT_TRUE(display.OnLinkTrainingFailed());
+  ASSERT_EQ(display.GetCurrentConfig(), nullptr);
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  const ConfigId fallback_id = display.GetLastRequestedConfig()->id;
+
+  display.ResetClientState();
+
+  ASSERT_NE(display.GetLastRequestedConfig(), nullptr);
+  EXPECT_EQ(display.GetLastRequestedConfig()->id, fallback_id);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateResetsWriteback) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  fake_device->AddWritebackConnector(pipeline->encoder->Get()->GetId());
+  DrmConnector* wb_conn = pipeline->FindWritebackConnectorForPipeline();
+  ASSERT_NE(wb_conn, nullptr);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(
+      display.SetWritebackBuffer(CreateWritebackTestBuffer(kTestFbId + 1)));
+  ASSERT_NE(display.GetWriteback(), nullptr);
+  ASSERT_EQ(wb_conn->GetPipeline(), pipeline.get());
+
+  display.ResetClientState();
+
+  EXPECT_EQ(display.GetWriteback(), nullptr);
+  EXPECT_EQ(wb_conn->GetPipeline(), nullptr);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateTerminatesClientInitiatedHdcp) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.StartHdcp());
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+  ASSERT_NE(display.GetHdcpController(), nullptr);
+  ASSERT_NE(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateClearsDesiredHdcpOnNextCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.StartHdcp());
+  ASSERT_NE(display.GetHdcpController(), nullptr);
+  ASSERT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+}
+
+TEST_F(HwcDisplayTest,
+       ResetClientStatePreservesInfeasibleHdcpWhileClearingKmsDesired) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+  fake_conn->SetContentProtectionEnabled(false);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.StartHdcp());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  auto* hdcp = const_cast<HdcpController*>(display.GetHdcpController());
+  ASSERT_NE(hdcp, nullptr);
+
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+  hdcp->ExpireRequestTimeoutForTesting();
+  for (int i = 0; i < kMaxRetries &&
+                  hdcp->GetHdcpState() != HdcpController::HdcpState::kRetry;
+       ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+  ASSERT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kRetry);
+
+  ValidateAcceptAndPresent(display);
+  hdcp->ExpireRequestTimeoutForTesting();
+  for (int i = 0; i < kMaxRetries && hdcp->GetHdcpState() !=
+                                         HdcpController::HdcpState::kInfeasible;
+       ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+  ASSERT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kInfeasible);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+  EXPECT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kInfeasible);
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+}
+
+TEST_F(HwcDisplayTest,
+       ResetClientStateFlushesUndesiredBeforeNewClientDesiredRequest) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.StartHdcp());
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+  ASSERT_TRUE(display.StartHdcp());
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  hwc.ResetRefreshCount();
+  ValidateAcceptAndPresent(display);
+
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(hwc.GetRefreshCount(), 1);
+
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& second_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(second_args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(second_args.hdcp_content_type, HdcpContentType::kType1);
+}
+
+TEST_F(HwcDisplayTest,
+       ResetClientStateClearsKmsDesiredAfterStopHdcpTermination) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+  fake_conn->SetContentProtectionEnabled(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.StartHdcp());
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+  for (int i = 0;
+       i < kMaxRetries && display.GetHdcpController()->GetHdcpState() !=
+                              HdcpController::HdcpState::kEnabled;
+       ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+  }
+  ASSERT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kEnabled);
+
+  ASSERT_TRUE(display.StopHdcp());
+  ASSERT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+  display.ResetClientState(/*reset_hdcp=*/true);
+
+  StageSingleDeviceLayer(display);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+}
+
+TEST_F(HwcDisplayTest, InitFlushesInheritedKmsContentProtectionOnFirstPowerOn) {
+  constexpr DisplayHandle kExternalHandle = 1;
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertyValue(
+      DRM_MODE_CONTENT_PROTECTION_DESIRED);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kExternalHandle, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  EXPECT_EQ(display.SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+  EXPECT_EQ(sink->GetCommitHistory().back().front().hdcp_content_type,
+            HdcpContentType::kType0);
+}
+
+TEST_F(HwcDisplayTest,
+       InitFlushesInheritedKmsContentProtectionBeforeHotplugHdcpRequest) {
+  constexpr DisplayHandle kExternalHandle = 1;
+  ScopedTestProperty hotplug_hdcp_prop("vendor.hwc.enable_hdcp_on_hotplug",
+                                       "1");
+  TestDrmHwc hotplug_hwc;
+  auto internal_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  auto external_pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(internal_pipeline, nullptr);
+  ASSERT_NE(external_pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(
+      external_pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertyValue(
+      DRM_MODE_CONTENT_PROTECTION_DESIRED);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  ASSERT_TRUE(hotplug_hwc.BindDisplay(internal_pipeline));
+  ASSERT_TRUE(hotplug_hwc.BindDisplay(external_pipeline));
+  hotplug_hwc.FinalizeDisplayBinding();
+  HwcDisplay* display = hotplug_hwc.GetDisplay(kExternalHandle);
+  ASSERT_NE(display, nullptr);
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ASSERT_EQ(display->SetPowerMode(HwcDisplay::PowerMode::kOn),
+            HwcDisplay::Error::kNone);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+
+  StageSingleDeviceLayer(*display);
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(*display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kDesired);
+  EXPECT_EQ(sink->GetCommitHistory().back().front().hdcp_content_type,
+            HdcpContentType::kType1);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStateClearsHdcpOnSubsequentModesetCommit) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60"),
+       CreateFakeDrmMode(kHdWidth, kHdHeight, kRefresh60Hz, 0, "720p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  const ConfigId alt_config_id = display.GetDisplayConfigs()[1].id;
+  ASSERT_TRUE(display.StartHdcp());
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  ASSERT_EQ(display.SetConfig(alt_config_id), HwcDisplay::ConfigError::kNone);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  EXPECT_EQ(sink->GetCommitHistory().back().front().content_protection,
+            ContentProtection::kUndesired);
+}
+
+TEST_F(HwcDisplayTest, ResetClientStatePreservesEarlyBootAnimationBrightness) {
+  TemporaryFile tf;
+  WriteValidRawAnimationFile(tf.fd);
+  constexpr float kExpectedBootAnimNits = 250.0F;
+  ScopedTestProperty enable_prop("vendor.hwc.drm.bootanim.enable", "1");
+  ScopedTestProperty completed_prop("vendor.hwc.bootanim.completed", "0");
+  ScopedTestProperty hold_prop("vendor.hwc.drm.early_boot_hold_ms", "5000");
+  ScopedTestProperty nits_prop("vendor.hwc.drm.bootanim.brightness_nits",
+                               "250");
+  ScopedTestProperty path_prop("ro.vendor.hwc.bootanim.path", tf.path);
+
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/false);
+  ASSERT_TRUE(hwc.BindDisplay(pipeline));
+  hwc.FinalizeDisplayBinding();
+  HwcDisplay* primary = hwc.GetDisplay(kPrimaryDisplay);
+  ASSERT_NE(primary, nullptr);
+
+  hwc.StartEarlyBootAnimation();
+  ASSERT_TRUE(hwc.IsEarlyBootAnimationActive());
+  primary->ResetClientState();
+  hwc.StopEarlyBootAnimation();
+
+  ASSERT_NE(primary->GetCurrentConfig(), nullptr);
+  auto args = primary->CreateModesetCommit(primary->GetCurrentConfig()->id);
+  if (!args.has_value()) {
+    ADD_FAILURE() << "Expected modeset commit args";
+    return;
+  }
+  EXPECT_EQ(args->brightness_nits, kExpectedBootAnimNits);
+  if (!primary->HasBacklight()) {
+    if (!args->brightness.has_value()) {
+      ADD_FAILURE() << "Expected brightness fallback without sysfs backlight";
+      return;
+    }
+    EXPECT_GT(*args->brightness, 0.0F);
+  }
 }
 
 }  // namespace android::drm_hwcomposer

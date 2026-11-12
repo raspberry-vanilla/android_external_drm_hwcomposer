@@ -28,6 +28,8 @@
 #include <thread>
 #include <vector>
 
+#include "hwc3/ClientDestroySync.h"
+
 namespace aidl::android::hardware::graphics::composer3::impl {
 
 class DrmHwcThree;
@@ -48,7 +50,11 @@ class Composer : public BnComposer {
   ::ndk::SpAIBinder createBinder() override;
 
  private:
-  std::mutex client_mutex_;
+  bool WaitForClientDestroyedLocked(std::unique_lock<std::mutex>& lock);
+
+  std::shared_ptr<::android::drm_hwcomposer::ClientDestroySync>
+      client_destroy_sync_ = std::make_shared<
+          ::android::drm_hwcomposer::ClientDestroySync>();
   std::weak_ptr<IComposerClient> client_;
 
   // Holds temporary ownership of DrmHwcThree during early boot so that the

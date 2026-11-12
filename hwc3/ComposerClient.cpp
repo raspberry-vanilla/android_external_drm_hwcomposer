@@ -70,6 +70,7 @@
 #include "hwc/HwcDisplay.h"
 #include "hwc/HwcDisplayConfigs.h"
 #include "hwc/HwcLayer.h"
+#include "hwc3/ClientDestroySync.h"
 #include "hwc3/CommandResultWriter.h"
 #include "hwc3/ComposerClientUtils.h"
 #include "hwc3/DrmHwcThree.h"
@@ -139,8 +140,12 @@ DisplayConfiguration HwcDisplayConfigToAidlConfiguration(
 
 }  // namespace
 
-ComposerClient::ComposerClient(std::shared_ptr<DrmHwcThree> hwc)
-    : hwc_(std::move(hwc)) {
+ComposerClient::ComposerClient(
+    std::shared_ptr<DrmHwcThree> hwc,
+    std::weak_ptr<::android::drm_hwcomposer::ClientDestroySync>
+        client_destroy_sync)
+    : hwc_(std::move(hwc)),
+      client_destroy_sync_(std::move(client_destroy_sync)) {
   DEBUG_FUNC();
 }
 
@@ -168,13 +173,15 @@ ComposerClient::~ComposerClient() {
   if (hwc_) {
     {
       std::scoped_lock lock(hwc_->GetResMan().GetMainLock());
-      hwc_->DeinitDisplays();
+      hwc_->SetCallback(nullptr);
     }
     // hwc_.reset() must be executed outside of GetMainLock(). ~DrmHwcThree()
     // invokes ResourceManager::DeInit(), which acquires GetMainLock(); calling
     // reset() under the lock would cause a self-deadlock.
     hwc_.reset();
   }
+  ::android::drm_hwcomposer::ClientDestroySync::NotifyClientDestroyed(
+      client_destroy_sync_);
   ALOGD("removed composer client");
 }
 
@@ -723,13 +730,16 @@ ndk::ScopedAStatus ComposerClient::registerCallback(
   }
   // For the first client (SurfaceFlinger), ResourceManager was already
   // initialized early in Composer::Composer(). For subsequent clients
-  // (e.g. VTS tests), initialize DRM resources on demand.
+  // (e.g. VTS tests), initialize DRM resources on demand outside GetMainLock()
+  // after SetCallback() so synchronous onHdcpLevelsChanged notifications see a
+  // valid callback.
   if (!hwc_->GetResMan().IsInitialized()) {
     hwc_->GetResMan().Init();
   }
   // Flush queued hotplug events outside GetMainLock to prevent deadlock with
   // synchronous callbacks into the client process.
   hwc_->FlushHotplugEvents();
+  hwc_->ReplayHotplugHdcpStatus();
   return ndk::ScopedAStatus::ok();
 }
 
@@ -1158,6 +1168,7 @@ ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
       return ToBinderStatus(hwc3::Error::kBadDisplay);
     }
 
+    hwc_->PrepareExplicitHdcpStart(display_handle);
     success = display->StartHdcp();
     if (!success) {
       hwc_->NotifyHdcpErrorToClient(display_handle);
@@ -1185,6 +1196,7 @@ ndk::ScopedAStatus ComposerClient::startHdcpNegotiation(
               if (other_base_id.has_value() && other_base_id == base_id) {
                 ALOGI("Propagating HDCP start to MST display with handle: %d",
                       static_cast<int>(handle));
+                hwc_->PrepareExplicitHdcpStart(handle);
                 success &= other_display->StartHdcp();
               }
             }

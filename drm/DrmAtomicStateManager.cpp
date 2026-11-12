@@ -255,9 +255,11 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
     // Skip setting CRTC_ID on a dynamic MST connector that has already been
     // unregistered from the kernel so the atomic commit does not fail with
     // -ENOENT and abort CRTC/plane teardown.
-    if (is_connector_present &&
-        !connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
-      return false;
+    if (is_connector_present) {
+      if (!connector->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
+        return false;
+      }
+      request.RecordPropertyUpdate(connector->GetCrtcIdProperty(), 0);
     }
     if (!crtc->GetModeProperty().AtomicSet(*request.property_set, 0)) {
       return false;
@@ -269,6 +271,7 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
                                                   crtc->GetId())) {
       return false;
     }
+    request.RecordPropertyUpdate(connector->GetCrtcIdProperty(), crtc->GetId());
   }
   // Clear CRTC_ID on any other connector whose cached kernel state still
   // references this CRTC (e.g. after an unclean MST detach or bootloader
@@ -286,6 +289,7 @@ bool DrmAtomicStateManager::SetActiveIfNeeded(const AtomicCommitArgs &args,
         if (!conn->GetCrtcIdProperty().AtomicSet(*request.property_set, 0)) {
           return false;
         }
+        request.RecordPropertyUpdate(conn->GetCrtcIdProperty(), 0);
       }
     }
   }
@@ -411,6 +415,16 @@ bool DrmAtomicStateManager::SetCtmIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
                                              DrmAtomicRequest &request) {
   auto *crtc = pipe_->crtc->Get();
+  const bool full_modeset = args.display_mode.has_value() && !args.seamless;
+  // drm-hwcomposer applies degamma on planes; ensure any residual CRTC
+  // DEGAMMA_LUT left by bootloaders or prior sessions is cleared on full
+  // modeset and teardown.
+  if ((full_modeset || args.teardown) && crtc->GetDegammaLutProperty() &&
+      !crtc->GetDegammaLutProperty().AtomicSet(*request.property_set, 0)) {
+    ALOGW("Failed to clear DEGAMMA_LUT");
+    return false;
+  }
+
   bool use_log_gamma = Properties::UseLogGammaLut();
   auto lut_size = crtc->GetGammaLutSizeProperty().GetValue();
 
@@ -428,8 +442,7 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  // If the pipeline is disabled, clear the gamma LUTs
-  if (!use_color_pipeline_) {
+  auto clear_gamma_luts = [&]() -> bool {
     bool ret = true;
     if (gamma_lut_prop && !gamma_lut_prop.AtomicSet(*request.property_set, 0)) {
       ALOGW("Failed to clear GAMMA_LUT");
@@ -441,6 +454,11 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
       ret = false;
     }
     return ret;
+  };
+
+  // If the color pipeline is disabled or tearing down, clear the gamma LUTs.
+  if (!use_color_pipeline_ || args.teardown) {
+    return clear_gamma_luts();
   }
 
   if (!args.transfer_func) {
@@ -531,8 +549,14 @@ bool DrmAtomicStateManager::SetContentTypeIfNeeded(const AtomicCommitArgs &args,
 bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
     const AtomicCommitArgs &args, DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() ||
-      !args.content_protection.has_value() ||
+  if (connector == nullptr || connector->IsDeleted()) {
+    return true;
+  }
+  // Do not implicitly reset Content Protection on power-off or teardown
+  // commits: kernel drivers rely on Content Protection remaining DESIRED across
+  // DPMS off/on to re-authenticate on wake, while residual state from prior
+  // sessions is reset on startup in DrmDevice::ResetConnectorsAndCrtcs().
+  if (!args.content_protection.has_value() ||
       !args.hdcp_content_type.has_value() ||
       !connector->GetContentProtectionProperty() ||
       !connector->GetHdcpContentTypeProperty()) {
@@ -551,8 +575,15 @@ bool DrmAtomicStateManager::SetContentProtectionIfNeeded(
 bool DrmAtomicStateManager::SetHdrMetadataIfNeeded(const AtomicCommitArgs &args,
                                                    DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() || !args.hdr_metadata ||
+  if (connector == nullptr || connector->IsDeleted() ||
       !connector->GetHdrOutputMetadataProperty()) {
+    return true;
+  }
+  if (args.teardown) {
+    return connector->GetHdrOutputMetadataProperty()
+        .AtomicSet(*request.property_set, 0);
+  }
+  if (!args.hdr_metadata) {
     return true;
   }
 
@@ -658,6 +689,8 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
                                 damage_blob) != 0) {
         return false;
       }
+      request.RecordPropertyUpdate(plane->GetCrtcProperty(), crtc->GetId());
+      request.RecordPropertyUpdate(plane->GetFbProperty(), layer.fb->GetFbId());
       request.used_kms_objects.blobs.emplace_back(std::move(damage_blob));
 
       if (use_color_pipeline_ && plane->HasColorPipeline()) {
@@ -718,21 +751,25 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
 
   // Disable all planes that were used in the previous commit which are no
   // longer being used.
-  if (!std::all_of(unused_planes.begin(), unused_planes.end(),
-                   [&request](auto &plane) {
-                     return plane->Get()->AtomicDisablePlane(
-                                *request.property_set) == 0;
-                   })) {
-    return false;
+  for (auto &plane : unused_planes) {
+    if (plane->Get()->AtomicDisablePlane(*request.property_set) != 0) {
+      return false;
+    }
+    request.RecordPropertyUpdate(plane->Get()->GetCrtcProperty(), 0);
+    request.RecordPropertyUpdate(plane->Get()->GetFbProperty(), 0);
   }
 
-  // On a full modeset, also disable any hardware planes that were left active
-  // on this CRTC prior to DrmAtomicStateManager's tracking (e.g. from
-  // bootloader handover) and are not already in used_planes or unused_planes.
-  if (args.display_mode && !args.seamless && pipe_->device != nullptr) {
+  // On a full modeset or teardown, also disable any hardware planes that were
+  // left active on this CRTC prior to DrmAtomicStateManager's tracking (e.g.
+  // from bootloader handover or a skipped internal reset) and are not already
+  // in used_planes or unused_planes. Only skip planes bound to a different
+  // pipeline so planes bound to pipe_ (such as pipe_->primary_plane during an
+  // empty-plan teardown) are still cleaned up.
+  const bool full_modeset = args.display_mode.has_value() && !args.seamless;
+  if ((full_modeset || args.teardown) && pipe_->device != nullptr) {
     const uint32_t crtc_id = pipe_->crtc->Get()->GetId();
     for (const auto &plane : pipe_->device->GetPlanes()) {
-      if (plane->GetPipeline() != nullptr ||
+      if ((plane->GetPipeline() != nullptr && plane->GetPipeline() != pipe_) ||
           plane->GetCrtcProperty().GetValue().value_or(0) != crtc_id ||
           plane->GetFbProperty().GetValue().value_or(0) == 0) {
         continue;
@@ -752,6 +789,8 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
         if (plane->AtomicDisablePlane(*request.property_set) != 0) {
           return false;
         }
+        request.RecordPropertyUpdate(plane->GetCrtcProperty(), 0);
+        request.RecordPropertyUpdate(plane->GetFbProperty(), 0);
       }
     }
   }
@@ -891,6 +930,9 @@ AtomicCommitResult DrmAtomicStateManager::FinishPendingRequest(
   AtomicCommitResult result;
   result.present_fence = MakeSharedFd(request->out_fence_address);
   committed_frame_state_ = std::move(request->new_frame_state);
+  for (const auto &[prop, value] : request->property_updates) {
+    prop->UpdateValue(value);
+  }
 
   // Store the writeback fence if this operation used writeback
   if (args.writeback) {

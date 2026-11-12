@@ -96,6 +96,7 @@ UNITTEST_SRCS := \
 	drm/DrmMode.cpp \
 	drm/DrmPlane.cpp \
 	drm/DrmProperty.cpp \
+	drm/DrmPropertyTest.cpp \
 	drm/ResourceManager.cpp \
 	drm/UEventListener.cpp \
 	drm/VSyncWorker.cpp \
@@ -128,6 +129,8 @@ UNITTEST_SRCS := \
 	utils/SlruCacheTest.cpp \
 	utils/SysfsBacklightController.cpp \
 	utils/SysfsBacklightControllerTest.cpp \
+	utils/TestUtils.cpp \
+	utils/TestUtilsTest.cpp \
 	utils/fd.cpp \
 	utils/properties.cpp
 

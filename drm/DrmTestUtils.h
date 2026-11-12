@@ -72,6 +72,7 @@ constexpr uint32_t kFakeCrtcCtmPropId = 23;
 constexpr uint32_t kFakeCrtcGammaLutPropId = 24;
 constexpr uint32_t kFakeCrtcGammaLutSizePropId = 25;
 constexpr uint32_t kFakeCrtcCtmOffsetPropId = 26;
+constexpr uint32_t kFakeCrtcDegammaLutPropId = 28;
 constexpr uint64_t kFakeGammaLutSize = 256;
 constexpr uint32_t kFakePlaneBaseId = 300;
 constexpr uint32_t kFakePlaneCrtcPropId = 30;
@@ -84,6 +85,7 @@ constexpr uint32_t kFakePlaneSrcXPropId = 36;
 constexpr uint32_t kFakePlaneSrcYPropId = 37;
 constexpr uint32_t kFakePlaneSrcWPropId = 38;
 constexpr uint32_t kFakePlaneSrcHPropId = 39;
+constexpr uint32_t kFakePlaneColorPipelinePropId = 49;
 constexpr uint32_t kFakeContentProtectionPropId = 40;
 constexpr uint32_t kFakeHdcpContentTypePropId = 41;
 constexpr uint32_t kFakeLinkStatusPropId = 42;
@@ -116,8 +118,8 @@ inline void InitFakeDrmProperty(DrmProperty& prop, uint32_t obj_id,
   uint64_t values[2] = {0, UINT64_MAX};
   raw_prop.count_values = 2;
   raw_prop.values = values;
-  drm_mode_property_enum enums[2] = {{0, "0"}, {1, "1"}};
-  raw_prop.count_enums = 2;
+  drm_mode_property_enum enums[3] = {{0, "0"}, {1, "1"}, {value, "value"}};
+  raw_prop.count_enums = value > 1 ? 3 : 2;
   raw_prop.enums = enums;
   prop.Init(nullptr, obj_id, &raw_prop, value);
 }
@@ -586,9 +588,17 @@ class FakeDrmConnector : public DrmConnector {
 
   void SetContentProtectionPropertySupported(bool supported) {
     if (supported) {
-      InitFakeDrmProperty(content_protection_property_, connector_id_,
-                          kFakeContentProtectionPropId, "Content Protection",
-                          DRM_MODE_PROP_ENUM, 0);
+      SetContentProtectionPropertyValue(0);
+    }
+  }
+
+  void SetContentProtectionPropertyValue(uint64_t value) {
+    InitFakeDrmProperty(content_protection_property_, connector_id_,
+                        kFakeContentProtectionPropId, "Content Protection",
+                        DRM_MODE_PROP_ENUM, value);
+    if (prop_hook_) {
+      prop_hook_(connector_id_, "Content Protection",
+                 kFakeContentProtectionPropId, DRM_MODE_PROP_ENUM, value);
     }
   }
 
@@ -752,6 +762,24 @@ class FakeDrmCrtc : public DrmCrtc {
     }
   }
 
+  void SetGammaLutProperties(uint64_t lut_size, uint64_t initial_blob_id = 0) {
+    InitFakeDrmProperty(gamma_lut_property_, id_, kFakeCrtcGammaLutPropId,
+                        "GAMMA_LUT", DRM_MODE_PROP_BLOB, initial_blob_id);
+    InitFakeDrmProperty(gamma_lut_size_property_, id_,
+                        kFakeCrtcGammaLutSizePropId, "GAMMA_LUT_SIZE",
+                        DRM_MODE_PROP_RANGE, lut_size);
+  }
+
+  void SetDegammaLutProperty(uint64_t initial_blob_id = 0) {
+    InitFakeDrmProperty(degamma_lut_property_, id_, kFakeCrtcDegammaLutPropId,
+                        "DEGAMMA_LUT", DRM_MODE_PROP_BLOB, initial_blob_id);
+  }
+
+  void SetCtmProperty(uint64_t initial_blob_id = 0) {
+    InitFakeDrmProperty(ctm_property_, id_, kFakeCrtcCtmPropId, "CTM",
+                        DRM_MODE_PROP_BLOB, initial_blob_id);
+  }
+
  private:
   const uint32_t id_;
 };
@@ -836,6 +864,17 @@ class FakeDrmPlane : public DrmPlane {
     if (has_color_pipeline) {
       color_pipeline_.color_ops.push_back(std::make_unique<FakeDrmColorOp>());
       color_op_type_enum_map_[0] = ColorOpType::kMatrix3x4;
+    }
+  }
+
+  void SetColorPipelinePropertySupported(bool supported,
+                                         uint64_t initial_value = 0) {
+    if (supported) {
+      InitFakeDrmProperty(color_pipeline_property_, plane_id_,
+                          kFakePlaneColorPipelinePropId, "COLOR_PIPELINE",
+                          DRM_MODE_PROP_ENUM, initial_value);
+    } else {
+      color_pipeline_property_ = DrmProperty{};
     }
   }
 
@@ -1069,6 +1108,10 @@ class FakeDrmDevice : public DrmDevice {
     get_resources_hook_ = std::move(hook);
   }
 
+  void SetResetCommitHook(std::function<void()> hook) {
+    reset_commit_hook_ = std::move(hook);
+  }
+
   std::optional<uint64_t> GetLastResetReqPropertyValue(uint32_t obj_id,
                                                        uint32_t prop_id) const {
     auto it = last_reset_req_values_.find({obj_id, prop_id});
@@ -1255,6 +1298,15 @@ class FakeDrmDevice : public DrmDevice {
     last_reset_req_values_.clear();
     for (const auto& item : GetAtomicReqItems(&pset)) {
       last_reset_req_values_[{item.object_id, item.property_id}] = item.value;
+      if (item.property_id == kFakeContentProtectionPropId) {
+        auto it = fake_properties_.find({item.object_id, "Content Protection"});
+        if (it != fake_properties_.end()) {
+          it->second.value = item.value;
+        }
+      }
+    }
+    if (reset_commit_hook_) {
+      reset_commit_hook_();
     }
     return 0;
   }
@@ -1273,6 +1325,7 @@ class FakeDrmDevice : public DrmDevice {
   std::map<uint32_t, int> get_object_properties_failure_errno_;
   std::function<void(uint32_t)> get_connector_hook_;
   std::function<void()> get_resources_hook_;
+  std::function<void()> reset_commit_hook_;
   std::vector<uint32_t> resource_connector_ids_;
   ConnectorConfigCallback connector_config_callback_;
   std::map<std::pair<uint32_t, uint32_t>, uint64_t> last_reset_req_values_;

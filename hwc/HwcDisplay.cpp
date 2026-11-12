@@ -455,6 +455,10 @@ HwcDisplay::ConfigError HwcDisplay::SetConfig(ConfigId config) {
   staged_power_mode_.reset();
   link_recovery_modeset_required_ = false;
   requires_reprobe_on_power_on_ = false;
+  if (commit_args.content_protection == ContentProtection::kUndesired) {
+    clear_hdcp_on_next_commit_ = false;
+    hdcp_desired_in_kms_ = false;
+  }
   // CreateModesetCommit() may scan out a temporary zero-filled dumb buffer or
   // disable planes when the resolution changes. Invalidate the cached
   // composition and request a client refresh so SurfaceFlinger presents a real
@@ -1013,6 +1017,10 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
   AtomicCommitArgs a_args{};
   a_args.blocking = true;
   a_args.power_mode = mode;
+  if (enabled && clear_hdcp_on_next_commit_) {
+    a_args.content_protection = ContentProtection::kUndesired;
+    a_args.hdcp_content_type = HdcpContentType::kType0;
+  }
   if (!enabled) {
     a_args.teardown = !GetPipe().atomic_state_manager->IsActive();
   }
@@ -1033,6 +1041,17 @@ HwcDisplay::Error HwcDisplay::SetPowerMode(PowerMode mode) {
     return HwcDisplay::Error::kNone;
   }
   staged_power_mode_.reset();
+  if (a_args.content_protection == ContentProtection::kUndesired) {
+    clear_hdcp_on_next_commit_ = false;
+    hdcp_desired_in_kms_ = false;
+    if (hdcpcon_ != nullptr && hwc_ != nullptr) {
+      const auto hdcp_state = hdcpcon_->GetHdcpState();
+      if (hdcp_state == HdcpController::HdcpState::kDesired ||
+          hdcp_state == HdcpController::HdcpState::kRetry) {
+        hwc_->SendRefreshEventToClient(handle_);
+      }
+    }
+  }
   if (enabled) {
     requires_reprobe_on_power_on_ = false;
   } else {
@@ -1089,14 +1108,20 @@ bool HwcDisplay::SetPipeline(std::shared_ptr<DrmDisplayPipeline> pipeline) {
       }
       return false;
     }
-    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+    // Virtual displays are managed synchronously by the client and must not
+    // emit hotplug events.
+    if (!is_virtual_) {
+      hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kConnected);
+    }
     if (pipeline_) {
       LogModesOnHotplug();
     }
     return true;
   }
 
-  hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  if (!is_virtual_) {
+    hwc_->ScheduleHotplugEvent(handle_, DrmHwc::kDisconnected);
+  }
   return true;
 }
 
@@ -1132,10 +1157,101 @@ void HwcDisplay::Deinit() {
   edid_wrapper_.reset();
   link_recovery_modeset_required_ = false;
   defer_commits_until_power_on_ = false;
+  clear_hdcp_on_next_commit_ = false;
+  hdcp_desired_in_kms_ = false;
 
   if (vsync_worker_) {
     vsync_worker_->StopThread();
     vsync_worker_ = {};
+  }
+}
+
+ColorMode HwcDisplay::GetDefaultColorMode() const {
+  // Some backend displays (such as SDR external monitors on Qualcomm SDM) only
+  // advertise ColorMode::kNative in GetColorModeOverrides() and reject kSrgb.
+  ColorMode default_color_mode = ColorMode::kSrgb;
+  if (!IsInHeadlessMode() && GetPipe().capabilities != nullptr) {
+    if (auto overrides = GetPipe().capabilities->GetColorModeOverrides();
+        overrides && !overrides->empty() &&
+        std::find(overrides->begin(), overrides->end(), ColorMode::kSrgb) ==
+            overrides->end()) {
+      default_color_mode = std::find(overrides->begin(), overrides->end(),
+                                     ColorMode::kNative) != overrides->end()
+                               ? ColorMode::kNative
+                               : overrides->front();
+    }
+  }
+  return default_color_mode;
+}
+
+void HwcDisplay::ResetClientState(bool reset_hdcp) {
+  if (!layers_.empty()) {
+    layers_.clear();
+  }
+  frontend_private_data_.reset();
+
+  client_layer_.Reset();
+  HwcLayer::LayerProperties lp;
+  lp.blend_mode = BufferBlendMode::kPreMult;
+  client_layer_.SetLayerProperties(lp);
+
+  SetVsyncCallbacksEnabled(false);
+
+  ClearStagedModeConfig();
+  if (active_config_id_ == 0 && !configs_.hwc_configs.empty()) {
+    staged_mode_config_id_ = configs_.preferred_config_id;
+  }
+
+  validated_composition_.reset();
+  last_presented_composition_.Reset();
+  if (flatcon_) {
+    flatcon_->DisableFlattening();
+  }
+  if (!is_virtual_) {
+    writeback_.reset();
+  }
+
+  if (content_type_ != ContentType::kNoData) {
+    content_type_ = ContentType::kNoData;
+  }
+
+  const ColorMode default_color_mode = GetDefaultColorMode();
+  const bool color_state_dirty = color_mode_ != default_color_mode ||
+                                 client_ctm_has_offset_ ||
+                                 client_color_matrix_ != GetIdentityCtmPtr() ||
+                                 render_intent_matrix_ != GetIdentityCtmPtr() ||
+                                 color_matrix_ != GetIdentityCtmPtr();
+  // Avoid mutating shared_ptr color members when already at defaults so an
+  // active EarlyBootAnimation thread reading CreateModesetCommit() on
+  // kPrimaryDisplay cannot race on unchanged pointers.
+  if (color_state_dirty) {
+    client_color_matrix_ = GetIdentityCtmPtr();
+    client_ctm_has_offset_ = false;
+    SetColorMode(default_color_mode, ui::RenderIntent::COLORIMETRIC);
+  }
+
+  const bool boot_anim_active_on_display = handle_ == kPrimaryDisplay &&
+                                           hwc_ != nullptr &&
+                                           hwc_->IsEarlyBootAnimationActive();
+  if (!boot_anim_active_on_display) {
+    brightness_ = kBrightnessUnset;
+    brightness_nits_.reset();
+    if (!IsInHeadlessMode()) {
+      if (const auto *config = GetLastRequestedConfig(); config != nullptr) {
+        SetOutputType(config->output_type);
+      }
+    }
+  }
+
+  if (reset_hdcp && hdcpcon_ != nullptr) {
+    const auto state = hdcpcon_->GetHdcpState();
+    if (state != HdcpController::HdcpState::kUndesired &&
+        state != HdcpController::HdcpState::kInfeasible) {
+      hdcpcon_->Reset();
+      clear_hdcp_on_next_commit_ = true;
+    } else if (hdcp_desired_in_kms_) {
+      clear_hdcp_on_next_commit_ = true;
+    }
   }
 }
 
@@ -1289,6 +1405,16 @@ bool HwcDisplay::Init() {
 
     if (IsHdcpPropertyPresent()) {
       ALOGI("HDCP properties found on display %d", int(handle_));
+      hdcp_desired_in_kms_ = GetPipe()
+                                 .connector->Get()
+                                 ->GetContentProtectionProperty()
+                                 .GetValue()
+                                 .value_or(0) !=
+                             static_cast<uint64_t>(
+                                 ContentProtection::kUndesired);
+      // Flush any inherited non-UNDESIRED KMS state on the first bound commit
+      // before latching a new HDCP request.
+      clear_hdcp_on_next_commit_ = hdcp_desired_in_kms_;
       auto hdcpconcbks = (struct HdcpConCallbacks){
           .notify_hdcp_status =
               [this](std::optional<HdcpContentType> level) {
@@ -1369,21 +1495,7 @@ bool HwcDisplay::Init() {
   }
   SetBootAnimationState(boot_state);
 
-  // Some backend displays (such as SDR external monitors on Qualcomm SDM) only
-  // advertise ColorMode::kNative in GetColorModeOverrides() and reject kSrgb.
-  ColorMode default_color_mode = ColorMode::kSrgb;
-  if (!IsInHeadlessMode() && GetPipe().capabilities != nullptr) {
-    if (auto overrides = GetPipe().capabilities->GetColorModeOverrides();
-        overrides && !overrides->empty() &&
-        std::find(overrides->begin(), overrides->end(), ColorMode::kSrgb) ==
-            overrides->end()) {
-      default_color_mode = std::find(overrides->begin(), overrides->end(),
-                                     ColorMode::kNative) != overrides->end()
-                               ? ColorMode::kNative
-                               : overrides->front();
-    }
-  }
-  SetColorMode(default_color_mode, ui::RenderIntent::COLORIMETRIC);
+  SetColorMode(GetDefaultColorMode(), ui::RenderIntent::COLORIMETRIC);
 
   ConfigId initial_config_id = configs_.preferred_config_id;
   if (prev_config.has_value()) {
@@ -1705,6 +1817,10 @@ AtomicCommitArgs HwcDisplay::CreateModesetCommit(
   args.display_mode = config->mode;
   args.display_config_id = config->id;
   args.power_mode = PowerMode::kOn;
+  if (clear_hdcp_on_next_commit_) {
+    args.content_protection = ContentProtection::kUndesired;
+    args.hdcp_content_type = HdcpContentType::kType0;
+  }
   args.composition = LayerToPlaneJoiningPlan::
       CreateLayerToPlaneJoiningPlan(GetPipe(), std::move(composition_layers));
   ALOGW_IF(!args.composition, "No composition for blocking modeset");
@@ -1887,11 +2003,16 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
 
   auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
                              : HdcpController::HdcpState::kUndesired;
-  if (hdcp_state == HdcpController::HdcpState::kDesired) {
+  // Flush a pending UNDESIRED transition before any new DESIRED request so the
+  // kernel latches the new HDCP Content Type on UNDESIRED -> DESIRED rather
+  // than reusing an active Type 0 session from the detached client.
+  if (clear_hdcp_on_next_commit_) {
+    a_args.content_protection = ContentProtection::kUndesired;
+    a_args.hdcp_content_type = HdcpContentType::kType0;
+  } else if (hdcp_state == HdcpController::HdcpState::kDesired) {
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType1;
-  }
-  if (hdcp_state == HdcpController::HdcpState::kRetry) {
+  } else if (hdcp_state == HdcpController::HdcpState::kRetry) {
     a_args.content_protection = ContentProtection::kDesired;
     a_args.hdcp_content_type = HdcpContentType::kType0;
   }
@@ -2104,8 +2225,22 @@ void HwcDisplay::ApplyCommitChanges(const AtomicCommitArgs &a_args) {
     }
   }
 
-  if (a_args.hdcp_content_type.has_value() ||
-      a_args.content_protection.has_value()) {
+  if (a_args.content_protection == ContentProtection::kUndesired) {
+    clear_hdcp_on_next_commit_ = false;
+    hdcp_desired_in_kms_ = false;
+    if (hdcpcon_ != nullptr && hwc_ != nullptr) {
+      const auto hdcp_state = hdcpcon_->GetHdcpState();
+      if (hdcp_state == HdcpController::HdcpState::kDesired ||
+          hdcp_state == HdcpController::HdcpState::kRetry) {
+        hwc_->SendRefreshEventToClient(handle_);
+      }
+    }
+  } else if (a_args.hdcp_content_type.has_value() ||
+             a_args.content_protection.has_value()) {
+    clear_hdcp_on_next_commit_ = false;
+    if (a_args.content_protection == ContentProtection::kDesired) {
+      hdcp_desired_in_kms_ = true;
+    }
     if (a_args.hdcp_content_type.has_value()) {
       ALOGI("HDCP commit requested with Content Type %d for display %d",
             static_cast<int>(a_args.hdcp_content_type.value()),

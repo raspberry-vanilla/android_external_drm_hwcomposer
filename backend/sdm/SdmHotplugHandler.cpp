@@ -19,9 +19,9 @@
 #include "backend/sdm/SdmHotplugHandler.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
-#include <thread>
 #include <utility>
 
 #include "utils/log.h"
@@ -30,7 +30,7 @@ namespace android::drm_hwcomposer {
 
 void SdmHotplugHandler::SetHotplugHandler(HotplugHandler handler) {
   {
-    std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     handler_ = std::move(handler);
     if (!handler_) {
       if (!pending_events_.empty()) {
@@ -40,6 +40,11 @@ void SdmHotplugHandler::SetHotplugHandler(HotplugHandler handler) {
             pending_events_.size());
         pending_events_.clear();
       }
+      cv_.notify_all();
+      // Wait for any in-flight DispatchLoop() callback to finish before
+      // returning so ResourceManager teardown does not race with a stale
+      // hotplug callback.
+      cv_.wait(lock, [this]() { return !is_dispatching_; });
       return;
     }
     if (is_dispatching_) {
@@ -80,28 +85,42 @@ void SdmHotplugHandler::HandleHotplugEvent(uint32_t connector_id,
   DispatchLoop();
 }
 
+bool SdmHotplugHandler::WaitForDispatchStartedForTesting(
+    std::chrono::milliseconds timeout) {
+  std::unique_lock lock(mutex_);
+  return cv_.wait_for(lock, timeout, [this]() {
+    return is_dispatching_ && pending_events_.empty();
+  });
+}
+
 void SdmHotplugHandler::DispatchLoop() {
   while (true) {
     HotplugEvent next_event{};
     HotplugHandler current_handler;
     {
-      std::scoped_lock lock(mutex_);
+      std::unique_lock lock(mutex_);
       if (pending_events_.empty() || !handler_) {
         is_dispatching_ = false;
+        cv_.notify_all();
         return;
       }
       next_event = pending_events_.front();
       pending_events_.erase(pending_events_.begin());
+      cv_.notify_all();
+
+      // Delay hotplug events (200ms by default). This makes multi-display
+      // hotplug more reliable, by avoiding suspected issues in the Android
+      // Framework resulting in hotplug events being dropped or coalesced.
+      // Tested over multiple plug/unplug iterations.
+      if (cv_.wait_for(lock, hotplug_delay_, [this]() { return !handler_; })) {
+        is_dispatching_ = false;
+        cv_.notify_all();
+        return;
+      }
       current_handler = handler_;
     }
 
     if (current_handler) {
-      // Delay hotplug events for 200ms. This makes multi-display hotplug
-      // more reliable, by avoiding suspected issues in the Android Framework
-      // resulting in hotplug events being dropped or coalesced. Tested over
-      // multiple plug/unplug iterations.
-      constexpr int kHotplugDelayMs = 200;
-      std::this_thread::sleep_for(std::chrono::milliseconds(kHotplugDelayMs));
       current_handler(next_event.connector_id, next_event.connected);
     }
   }
