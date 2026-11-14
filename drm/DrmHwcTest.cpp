@@ -3471,12 +3471,47 @@ TEST_F(DrmHwcTest,
             uint64_t{DRM_MODE_CONTENT_PROTECTION_DESIRED});
 }
 
+TEST_F(DrmHwcTest, ResetConnectorsAndCrtcsResetsConnectorColorspace) {
+  constexpr uint64_t kBt2020RgbVal = 9;
+  auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
+  ASSERT_NE(ext_conn, nullptr);
+  ext_conn->SetColorspacePropertySupported(true, kBt2020RgbVal);
+
+  fake_device->ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(fake_device->GetLastResetReqPropertyValue(ext_conn->GetId(),
+                                                      kFakeColorspacePropId),
+            0U);
+}
+
+TEST_F(DrmHwcTest, ResetConnectorsAndCrtcsResetsIgnoredConnectorColorspace) {
+  constexpr uint64_t kBt2020RgbVal = 9;
+  constexpr uint32_t kIgnoredConnectorId = kFakeConnectorBaseId + 10;
+  auto ignored_conn = std::make_unique<FakeDrmConnector>(fake_device.get(),
+                                                         /*encoder_id=*/0,
+                                                         /*is_external=*/true,
+                                                         /*width=*/0,
+                                                         /*height=*/0,
+                                                         kIgnoredConnectorId);
+  auto* ignored_ptr = ignored_conn.get();
+  ignored_ptr->SetColorspacePropertySupported(true, kBt2020RgbVal);
+  fake_device->AddIgnoredConnector(std::move(ignored_conn));
+
+  fake_device->ResetConnectorsAndCrtcs();
+
+  EXPECT_EQ(fake_device->GetLastResetReqPropertyValue(ignored_ptr->GetId(),
+                                                      kFakeColorspacePropId),
+            0U);
+}
+
 TEST_F(DrmHwcTest,
        ResetConnectorsAndCrtcsSkipsInternalCrtcWhenPropertyEnabled) {
+  constexpr uint64_t kBt2020RgbVal = 9;
   const ScopedTestProperty
       skip_prop("vendor.hwc.drm.skip_internal_display_reset", "true");
   auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
   ASSERT_NE(int_conn, nullptr);
+  int_conn->SetColorspacePropertySupported(true, kBt2020RgbVal);
   auto* fake_crtc = fake_device->GetCrtcs().front().get();
   ASSERT_NE(fake_crtc, nullptr);
   InitFakeDrmProperty(int_conn->GetCrtcIdProperty(), int_conn->GetId(),
@@ -3488,6 +3523,10 @@ TEST_F(DrmHwcTest,
   EXPECT_FALSE(fake_device
                    ->GetLastResetReqPropertyValue(fake_crtc->GetId(),
                                                   kFakeCrtcActivePropId)
+                   .has_value());
+  EXPECT_FALSE(fake_device
+                   ->GetLastResetReqPropertyValue(int_conn->GetId(),
+                                                  kFakeColorspacePropId)
                    .has_value());
   EXPECT_EQ(int_conn->GetCrtcIdProperty().GetValue(),
             uint64_t{fake_crtc->GetId()});

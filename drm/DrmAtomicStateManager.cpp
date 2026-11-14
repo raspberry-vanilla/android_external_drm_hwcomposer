@@ -509,9 +509,20 @@ bool DrmAtomicStateManager::SetColorSpaceIfNeeded(const AtomicCommitArgs &args,
                                                   bool full_modeset,
                                                   DrmAtomicRequest &request) {
   auto *connector = pipe_->connector->Get();
-  if (connector == nullptr || connector->IsDeleted() || args.teardown ||
-      !args.colorspace || !connector->GetColorspaceProperty()) {
+  if (connector == nullptr || connector->IsDeleted() ||
+      (!args.teardown && !args.colorspace) ||
+      !connector->GetColorspaceProperty()) {
     return true;
+  }
+
+  if (args.teardown) {
+    // Restore Default so the next DRM master does not inherit a BT2020
+    // Colorspace after HDR_OUTPUT_METADATA has been cleared. The tracked
+    // value stays reset, so the next activation re-stages Colorspace.
+    const uint64_t default_val = connector->GetColorspacePropertyValue(
+        DrmColorspace::kDefault);
+    return connector->GetColorspaceProperty().AtomicSet(*request.property_set,
+                                                        default_val);
   }
 
   DrmColorspace drm_colorspace = ColorUtil::ToDrmColorspace(*args.colorspace);

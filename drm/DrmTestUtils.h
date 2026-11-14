@@ -610,11 +610,24 @@ class FakeDrmConnector : public DrmConnector {
     }
   }
 
-  void SetColorspacePropertySupported(bool supported) {
+  // Mirrors the kernel's Colorspace enum (DRM_MODE_COLORIMETRY_*) and fills
+  // the connector's enum map, as DrmConnector::Init() does on hardware.
+  void SetColorspacePropertySupported(bool supported, uint64_t value = 0) {
     if (supported) {
-      InitFakeDrmProperty(colorspace_property_, connector_id_,
-                          kFakeColorspacePropId, "Colorspace",
-                          DRM_MODE_PROP_ENUM, 0);
+      constexpr uint64_t kBt2020RgbVal = 9;
+      uint64_t values[] = {0, kBt2020RgbVal};
+      drm_mode_property_enum enums[] = {{0, "Default"},
+                                        {kBt2020RgbVal, "BT2020_RGB"}};
+      drmModePropertyRes raw_prop{};
+      raw_prop.prop_id = kFakeColorspacePropId;
+      raw_prop.flags = DRM_MODE_PROP_ENUM;
+      std::strncpy(raw_prop.name, "Colorspace", DRM_PROP_NAME_LEN - 1);
+      raw_prop.count_values = 2;
+      raw_prop.values = values;
+      raw_prop.count_enums = 2;
+      raw_prop.enums = enums;
+      colorspace_property_.Init(nullptr, connector_id_, &raw_prop, value);
+      PopulateColorspaceEnumMap(colorspace_property_, colorspace_enum_map_);
     }
   }
 
