@@ -270,6 +270,10 @@ struct DrmHwcTest : public ::testing::Test {
     hwc.GetResMan().CancelDeferredHotplugSettle();
   }
 
+  void ReloadPropertiesForTest() {
+    hwc.hdcp_on_hotplug_enabled_ = Properties::EnableHdcpOnHotplug();
+  }
+
   void InitResManForTest() {
     hwc.GetResMan().Init();
   }
@@ -429,7 +433,37 @@ TEST_F(DrmHwcTest, ActiveDisplayCountsAndDumpState) {
   hwc.FinalizeDisplayBinding();
 }
 
+TEST_F(DrmHwcTest, HotplugHdcpNegotiationDisabledByDefault) {
+  auto primary_pipe = CreatePipeline(/*is_external=*/false);
+  auto external_pipe = CreatePipeline(/*is_external=*/true);
+
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* external_connector = static_cast<FakeDrmConnector*>(
+      external_pipe->connector->Get());
+  external_connector->SetContentProtectionPropertySupported(true);
+  external_connector->SetHdcpContentTypePropertySupported(true);
+
+  EXPECT_TRUE(hwc.BindDisplay(primary_pipe));
+  EXPECT_TRUE(hwc.BindDisplay(external_pipe));
+  hwc.FinalizeDisplayBinding();
+  hwc.FlushHotplugEvents();
+
+  auto* external_display = hwc.GetDisplay(1);
+  ASSERT_NE(external_display, nullptr);
+  const auto* external_hdcp_controller = external_display->GetHdcpController();
+  ASSERT_NE(external_hdcp_controller, nullptr);
+  EXPECT_EQ(external_hdcp_controller->GetHdcpState(),
+            HdcpController::HdcpState::kUndesired);
+
+  EXPECT_TRUE(hwc.UnbindDisplay(external_pipe));
+  EXPECT_TRUE(hwc.UnbindDisplay(primary_pipe));
+  hwc.FinalizeDisplayBinding();
+}
+
 TEST_F(DrmHwcTest, HotplugHdcpNegotiationStartsOnlyOnExternalSstDisplays) {
+  const ScopedTestProperty
+      enable_hdcp_prop("vendor.hwc.drm.enable_hdcp_on_hotplug", "1");
+  ReloadPropertiesForTest();
   auto primary_pipe = CreatePipeline(/*is_external=*/false);
   auto external_pipe = CreatePipeline(/*is_external=*/true);
 
@@ -3770,6 +3804,9 @@ TEST_F(DrmHwcTest, DetachClientResetsClientInitiatedHdcp) {
 TEST_F(DrmHwcTest, ReplayHotplugHdcpStatusNotifiesReattachedClient) {
   const ScopedTestProperty device_prop("vendor.hwc.drm.device",
                                        "/nonexistent_drm_device");
+  const ScopedTestProperty
+      enable_hdcp_prop("vendor.hwc.drm.enable_hdcp_on_hotplug", "1");
+  ReloadPropertiesForTest();
   auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
   auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
   ASSERT_NE(int_conn, nullptr);
@@ -3806,6 +3843,9 @@ TEST_F(DrmHwcTest, ReplayHotplugHdcpStatusNotifiesReattachedClient) {
 TEST_F(DrmHwcTest, ReplayHotplugHdcpStatusTriggersRefreshDuringRetry) {
   const ScopedTestProperty device_prop("vendor.hwc.drm.device",
                                        "/nonexistent_drm_device");
+  const ScopedTestProperty
+      enable_hdcp_prop("vendor.hwc.drm.enable_hdcp_on_hotplug", "1");
+  ReloadPropertiesForTest();
   auto* int_conn = fake_device->AddPipelineResources(/*is_external=*/false);
   auto* ext_conn = fake_device->AddPipelineResources(/*is_external=*/true);
   ASSERT_NE(int_conn, nullptr);

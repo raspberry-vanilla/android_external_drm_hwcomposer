@@ -147,6 +147,8 @@ class DrmHwc : public PipelineToFrontendBindingInterface, public StatsProvider {
   void StopEarlyBootAnimation();
 
  private:
+  friend struct DrmHwcTest;
+
   // An additional layer to isolate the critical region for invoking hotplug
   // event callbacks from the main mutex.
   class HotplugEventQueue {
