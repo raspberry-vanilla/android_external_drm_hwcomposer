@@ -1725,6 +1725,38 @@ TEST_F(DrmAtomicStateManagerTest,
             0U);
 }
 
+TEST_F(DrmAtomicStateManagerTest, TeardownResetsConnectorColorspaceToDefault) {
+  constexpr uint64_t kBt2020RgbVal = 9;
+  ASSERT_NE(fake_connector, nullptr);
+  fake_connector->SetColorspacePropertySupported(true, kBt2020RgbVal);
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.teardown = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  auto req = state_manager->GetAtomicModeReqForArgs(teardown_args);
+  ASSERT_NE(req, nullptr);
+  auto* prop_set = AsDrmRequest(req)->property_set.get();
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, fake_connector->GetId(),
+                                      kFakeColorspacePropId),
+            0U);
+}
+
+TEST_F(DrmAtomicStateManagerTest, TeardownSucceedsWithoutColorspaceProperty) {
+  ASSERT_NE(fake_connector, nullptr);
+  ASSERT_FALSE(fake_connector->GetColorspaceProperty());
+
+  AtomicCommitArgs teardown_args{};
+  teardown_args.blocking = true;
+  teardown_args.teardown = true;
+  teardown_args.power_mode = PowerMode::kOff;
+  teardown_args.composition = std::make_shared<LayerToPlaneJoiningPlan>();
+
+  EXPECT_NE(state_manager->GetAtomicModeReqForArgs(teardown_args), nullptr);
+}
+
 TEST_F(DrmAtomicStateManagerTest, FullModesetClearsResidualCrtcDegammaLut) {
   const ScopedTestProperty enable_cp("vendor.hwc.drm.enable_color_pipeline",
                                      "true");

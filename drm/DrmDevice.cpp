@@ -51,6 +51,7 @@
 #include "bufferinfo/BufferInfo.h"
 #include "bufferinfo/BufferInfoGetter.h"
 #include "compositor/DisplayInfo.h"
+#include "drm/DrmColorspace.h"
 #include "drm/DrmConnector.h"
 #include "drm/DrmCrtc.h"
 #include "drm/DrmEncoder.h"
@@ -765,6 +766,23 @@ auto DrmDevice::RefreshConnectors()
   return ApplyProbedConnectorsUnderLock(std::move(probed));
 }
 
+// Clears the connector color state a previous DRM master may have left, so
+// HDR metadata and the Colorspace it describes are always reset together.
+static void ResetConnectorColorProperties(DrmConnector &conn,
+                                          drmModeAtomicReq &pset) {
+  if (conn.GetColorspaceProperty()) {
+    const uint64_t default_val = conn.GetColorspacePropertyValue(
+        DrmColorspace::kDefault);
+    if (!conn.GetColorspaceProperty().AtomicSet(pset, default_val)) {
+      ALOGW("Failed to clear Colorspace for Conn = %d", conn.GetId());
+    }
+  }
+  if (conn.GetHdrOutputMetadataProperty() &&
+      !conn.GetHdrOutputMetadataProperty().AtomicSet(pset, 0)) {
+    ALOGW("Failed to clear HDR_OUTPUT_METADATA for Conn = %d", conn.GetId());
+  }
+}
+
 auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
   auto pset = MakeDrmModeAtomicReqUnique();
   if (!pset) {
@@ -802,10 +820,7 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
       ALOGE("Failed to Set Crtc Id Prop to Null for Conn = %d", conn->GetId());
       return;
     }
-    if (conn->GetHdrOutputMetadataProperty() &&
-        !conn->GetHdrOutputMetadataProperty().AtomicSet(*pset.get(), 0)) {
-      ALOGW("Failed to clear HDR_OUTPUT_METADATA for Conn = %d", conn->GetId());
-    }
+    ResetConnectorColorProperties(*conn, *pset);
     if (conn->GetContentProtectionProperty() &&
         !conn->GetContentProtectionProperty()
              .AtomicSet(*pset.get(),
@@ -827,11 +842,7 @@ auto DrmDevice::ResetConnectorsAndCrtcs() -> void {
             conn->GetId());
       return;
     }
-    if (conn->GetHdrOutputMetadataProperty() &&
-        !conn->GetHdrOutputMetadataProperty().AtomicSet(*pset.get(), 0)) {
-      ALOGW("Failed to clear HDR_OUTPUT_METADATA for Ignored Conn = %d",
-            conn->GetId());
-    }
+    ResetConnectorColorProperties(*conn, *pset);
     if (conn->GetContentProtectionProperty() &&
         !conn->GetContentProtectionProperty()
              .AtomicSet(*pset.get(),

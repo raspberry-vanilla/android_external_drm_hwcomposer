@@ -232,6 +232,10 @@ Lut1D<T> CreateLut(TransferFunction tf, uint32_t lut_size,
       signal *= ColorUtil::BoostHdrMultiplier(signal);
     }
 
+    if (is_degamma) {
+      signal *= std::clamp(lut_scale, kSignalMin, kSignalMax);
+    }
+
     if constexpr (std::is_same_v<T, drm_color_lut32>) {
       lut[i].red = lut[i].green = lut[i].blue = SignalToUint32(signal);
     } else {
