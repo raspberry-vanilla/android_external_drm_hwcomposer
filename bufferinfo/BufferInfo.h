@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace android::drm_hwcomposer {
 
@@ -66,6 +67,8 @@ struct BufferInfo {
   uint32_t sizes[kBufferMaxPlanes];
   int prime_fds[kBufferMaxPlanes];
   uint64_t modifiers[kBufferMaxPlanes];
+
+  std::string name;
 
   BufferColorEncoding color_encoding = BufferColorEncoding::kUndefined;
   BufferSampleRange sample_range = BufferSampleRange::kUndefined;
