@@ -589,7 +589,7 @@ TEST(ColorUtilTest, CreateGammaLutHdrScaleRangeCalculatesExpectedScale) {
 TEST(ColorUtilTest, CalculateDegammaScale) {
   for (auto tf : {TransferFunction::kPq, TransferFunction::kHlg}) {
     EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, std::nullopt), 1.0F);
-    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 0.0F), 1.0F);
+    EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 0.0F), 0.0F);
     EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 1.0F), 1.0F);
     EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, -0.5F), 1.0F);
     EXPECT_FLOAT_EQ(ColorUtil::CalculateDegammaScale(tf, 1.5F), 1.0F);

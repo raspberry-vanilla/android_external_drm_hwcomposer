@@ -270,7 +270,7 @@ class ColorUtil {
     }
     constexpr float kDefaultSignal = 1.F;
     float brightness = layer_brightness.value_or(kDefaultSignal);
-    if (brightness > kSignalMin && brightness < kSignalMax) {
+    if (brightness >= kSignalMin && brightness < kSignalMax) {
       return brightness;
     }
     return static_cast<float>(kSignalMax);
