@@ -430,6 +430,61 @@ TEST(ColorUtilTest, CreateDegammaLutValid) {
   EXPECT_GT(lut[kLutSize - 1].red, 0U);
 }
 
+TEST(ColorUtilTest, CreateDegammaLutScalesLinearOutputByLayerBrightness) {
+  static constexpr size_t kLutSize = 256;
+  static constexpr float kHalfBrightness = 0.5F;
+  static constexpr size_t kMidIndex = kLutSize / 2;
+
+  const auto lut_full = ColorUtil::CreateDegammaLut(TransferFunction::kPq,
+                                                    kLutSize, 1.0F);
+  const auto lut_dimmed = ColorUtil::CreateDegammaLut(TransferFunction::kPq,
+                                                      kLutSize,
+                                                      kHalfBrightness);
+
+  ASSERT_EQ(lut_full.size(), kLutSize);
+  ASSERT_EQ(lut_dimmed.size(), kLutSize);
+  EXPECT_GT(lut_full[kMidIndex].red, 0U);
+  EXPECT_LT(lut_full[kMidIndex].red, UINT32_MAX);
+  EXPECT_NEAR(static_cast<double>(lut_dimmed[kMidIndex].red),
+              static_cast<double>(lut_full[kMidIndex].red) * kHalfBrightness,
+              1.0);
+}
+
+TEST(ColorUtilTest, CreateDegammaLutZeroLayerBrightnessProducesZeroSignal) {
+  static constexpr size_t kLutSize = 256;
+
+  const auto lut_zero = ColorUtil::CreateDegammaLut(TransferFunction::kPq,
+                                                    kLutSize, 0.0F);
+
+  ASSERT_EQ(lut_zero.size(), kLutSize);
+  EXPECT_EQ(lut_zero[0].red, 0U);
+  EXPECT_EQ(lut_zero[kLutSize / 2].red, 0U);
+  EXPECT_EQ(lut_zero[kLutSize - 1].red, 0U);
+}
+
+TEST(ColorUtilTest, CreateDegammaLutScalesHdrLinearOutputBeforeUnitClamp) {
+  static constexpr size_t kLutSize = 256;
+  static constexpr float kHalfBrightness = 0.5F;
+  // Index 192 (PQ ~0.7529 -> ~1010 nits) boosts to ~1.5925 (clipped to
+  // UINT32_MAX at 1.0F brightness), which scales to ~0.7963 (3419968745) at
+  // 0.5F brightness before clamping rather than clamping to 1.0 first.
+  static constexpr size_t kHighlightIndex = 192;
+  static constexpr uint32_t kExpectedDimmedHighlight = 3419968745U;
+
+  const auto lut_full = ColorUtil::CreateDegammaLut(TransferFunction::kPq,
+                                                    kLutSize, 1.0F);
+  const auto lut_dimmed = ColorUtil::CreateDegammaLut(TransferFunction::kPq,
+                                                      kLutSize,
+                                                      kHalfBrightness);
+
+  ASSERT_EQ(lut_full.size(), kLutSize);
+  ASSERT_EQ(lut_dimmed.size(), kLutSize);
+  EXPECT_EQ(lut_full[kHighlightIndex].red, UINT32_MAX);
+  EXPECT_NEAR(static_cast<double>(lut_dimmed[kHighlightIndex].red),
+              static_cast<double>(kExpectedDimmedHighlight), 2.0);
+  EXPECT_EQ(lut_dimmed[kLutSize - 1].red, UINT32_MAX);
+}
+
 // Tests for CreateGammaLut
 TEST(ColorUtilTest, CreateGammaLutInvalidLutSize) {
   const auto lut = ColorUtil::CreateGammaLut(TransferFunction::kHlg, 1, 1.F);
