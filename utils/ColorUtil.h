@@ -263,7 +263,11 @@ class ColorUtil {
           &color_transform_matrix);
 
   static float CalculateDegammaScale(
+      TransferFunction tf,
       std::optional<float> layer_brightness = std::nullopt) {
+    if (!NeedsTonemapping(tf)) {
+      return static_cast<float>(kSignalMax);
+    }
     constexpr float kDefaultSignal = 1.F;
     float brightness = layer_brightness.value_or(kDefaultSignal);
     if (brightness > kSignalMin && brightness < kSignalMax) {
@@ -273,9 +277,13 @@ class ColorUtil {
   }
 
   static float CalculateGammaScale(
+      TransferFunction tf,
       std::optional<float> display_brightness = std::nullopt,
       std::optional<float> hdr_headroom = std::nullopt) {
     auto lut_scale = static_cast<float>(kSignalMax);
+    if (!NeedsTonemapping(tf)) {
+      return lut_scale;
+    }
     if (display_brightness.has_value() && *display_brightness >= kSignalMin &&
         *display_brightness < kSignalMax) {
       lut_scale = *display_brightness;

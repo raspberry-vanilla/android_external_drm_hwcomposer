@@ -465,20 +465,23 @@ bool DrmAtomicStateManager::SetGammaIfNeeded(const AtomicCommitArgs &args,
     return true;
   }
 
-  float lut_scale = ColorUtil::CalculateGammaScale(args.brightness,
+  float lut_scale = ColorUtil::CalculateGammaScale(args.transfer_func.value(),
+                                                   args.brightness,
                                                    args.hdr_headroom);
 
   std::shared_ptr<DrmModeUserPropertyBlobUnique> gamma_blob;
   if (use_log_gamma) {
     GammaBlobKey key{args.transfer_func.value(), 0, lut_scale};
     gamma_blob = GetOrCreateBlob(key, [&] {
-      return ColorUtil::GetLogGammaLut(args.transfer_func.value(), lut_scale);
+      return ColorUtil::GetLogGammaLut(args.transfer_func.value(),
+                                       args.brightness, args.hdr_headroom);
     });
   } else {
     GammaBlobKey key{args.transfer_func.value(), lut_size.value(), lut_scale};
     gamma_blob = GetOrCreateBlob(key, [&] {
       return ColorUtil::CreateGammaLut(args.transfer_func.value(),
-                                       lut_size.value(), lut_scale);
+                                       lut_size.value(), args.brightness,
+                                       args.hdr_headroom);
     });
   }
 
@@ -725,7 +728,9 @@ bool DrmAtomicStateManager::SetCompositionIfNeeded(const AtomicCommitArgs &args,
                                             ColorUtil::HasOffset(
                                                 *args.color_matrix);
         if (!has_translation_offset) {
-          float lut_scale = ColorUtil::CalculateDegammaScale(layer.brightness);
+          float lut_scale = ColorUtil::CalculateDegammaScale(layer
+                                                                 .transfer_func,
+                                                             layer.brightness);
           DegammaBlobKey degamma_key{layer.transfer_func,
                                      plane->GetDegamma1DLutSize(), lut_scale};
           auto degamma_blob = GetOrCreateBlob(degamma_key, [&] {
