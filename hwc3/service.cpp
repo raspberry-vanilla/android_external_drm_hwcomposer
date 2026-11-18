@@ -43,6 +43,9 @@ int main(int /*argc*/, char* argv[]) {
     ALOGE("Couldn't set SCHED_FIFO: %d", errno);
   }
 
+  ABinderProcess_setThreadPoolMaxThreadCount(1);
+  ABinderProcess_startThreadPool();
+
   auto composer = ndk::SharedRefBase::make<Composer>();
   if (!composer) {
     ALOGE("Failed to create composer");

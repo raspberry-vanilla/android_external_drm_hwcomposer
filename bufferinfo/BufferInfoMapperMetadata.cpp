@@ -156,6 +156,9 @@ auto BufferInfoMapperMetadata::GetBoInfo(buffer_handle_t handle)
     bi.sizes[i] = layouts[i].totalSizeInBytes;
   }
 
+  err = mapper.getName(handle, &bi.name);
+  ALOGE_IF(err != 0, "Failed to get Name err=%d", err);
+
   uint64_t usage = 0;
   err = mapper.getUsage(handle, &usage);
   if (err != 0) {
