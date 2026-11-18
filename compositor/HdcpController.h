@@ -57,12 +57,14 @@ class HdcpController {
     kThreadExit
   };
 
-  // Initiates the HDCP enablement process.
+  // Initiates the HDCP enablement process with |initial_type|.
   //
-  // Sets the internal state to kDesired if it's not currently in a retry state.
-  // This signals the display pipeline to include HDCP properties in the next
-  // commit.
-  void Start();
+  // Sets the internal state to kDesired if it's not currently enabled,
+  // infeasible, requested, or retrying. This signals the display pipeline to
+  // include HDCP properties with |initial_type| in the next commit. When
+  // |initial_type| is kType0, timeout transitions directly to kInfeasible
+  // without a retry frame.
+  void Start(HdcpContentType initial_type = HdcpContentType::kType1);
 
   // Signals that an HDCP enablement request has been sent to the kernel.
   //
@@ -76,6 +78,10 @@ class HdcpController {
   //
   // Returns the current state of the HDCP state machine.
   HdcpState GetHdcpState() const;
+
+  // Returns the HDCP content type to attach to the next atomic commit when
+  // negotiation is pending (kDesired or kRetry), or std::nullopt otherwise.
+  std::optional<HdcpContentType> GetPendingContentType() const;
 
   // Returns true and populates |out_level| when the controller has settled in
   // kEnabled or kInfeasible so a newly attached client can be notified.
@@ -102,13 +108,13 @@ class HdcpController {
   // enabled content protection for |expected_generation|.
   //
   // State transitions:
-  // - Success: Transitions to kEnabled. Notifies client with kType1 (or kType0
-  // if retrying).
+  // - Success: Transitions to kEnabled. Notifies client with
+  // target_content_type_.
   // - Failure (when !only_if_enabled):
-  //   - If first attempt: Transitions to kRetry and triggers a retry frame
-  //   (fallback to Type 0).
-  //   - If retry attempt: Transitions to kInfeasible and notifies client of
-  //   failure.
+  //   - If targeting kType1: Transitions to kRetry with target_content_type_ =
+  //   kType0 and triggers a retry frame.
+  //   - If targeting kType0: Transitions directly to kInfeasible and notifies
+  //   client of failure without retrying.
   void SetContentProtectionStatus(uint64_t expected_generation,
                                   bool only_if_enabled) EXCLUDES(mutex_);
 
@@ -125,7 +131,8 @@ class HdcpController {
   HdcpState hdcp_state_ GUARDED_BY(mutex_) = HdcpState::kUndesired;
   uint64_t request_generation_ GUARDED_BY(mutex_) = 0;
 
-  bool was_retry_ GUARDED_BY(mutex_) = false;
+  HdcpContentType target_content_type_ GUARDED_BY(mutex_) =
+      HdcpContentType::kType1;
   std::optional<HdcpContentType> enabled_content_type_ GUARDED_BY(mutex_) =
       std::nullopt;
 

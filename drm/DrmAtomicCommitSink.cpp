@@ -101,12 +101,12 @@ CommitStatus DrmAtomicCommitSink::CommitFrame(
       return CommitStatus::InternalFailure();
     }
 
-    err = drmModeAtomicMerge(
-        pset.get(),
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
-        (static_cast<DrmAtomicStateManager::DrmAtomicRequest *>(request.get()))
-            ->property_set.get());
-    nonblock &= !arg.blocking && !arg.power_mode;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    auto *drm_request = static_cast<DrmAtomicStateManager::DrmAtomicRequest *>(
+        request.get());
+    err = drmModeAtomicMerge(pset.get(), drm_request->property_set.get());
+    nonblock &= !arg.blocking && !arg.power_mode &&
+                !drm_request->hdcp_only_request;
     if (err != 0) {
       ALOGE("Failed to append request");
       return CommitStatus::InternalFailure();
@@ -212,8 +212,9 @@ void DrmAtomicCommitSink::CleanUpFailedRequest(
   for (const auto &[atomic_state_manager, arg] : args) {
     // Only disable planes when an ordinary pageflip composition commit fails on
     // an already-active display.
-    if (!atomic_state_manager->IsActive() || arg.display_mode.has_value() ||
-        arg.power_mode.has_value() || arg.teardown) {
+    if (!atomic_state_manager->IsActive() || !arg.composition ||
+        arg.display_mode.has_value() || arg.power_mode.has_value() ||
+        arg.teardown) {
       continue;
     }
     AtomicCommitArgs cl_arg{};

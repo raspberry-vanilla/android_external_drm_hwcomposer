@@ -846,6 +846,29 @@ std::unique_ptr<AtomicRequest> DrmAtomicStateManager::GetAtomicModeReqForArgs(
   // helpers.
   atomic_request->new_frame_state = committed_frame_state_;
 
+  const bool hdcp_only_request = !args.display_mode && !args.power_mode &&
+                                 !args.composition && !args.teardown &&
+                                 !args.writeback &&
+                                 args.content_protection.has_value() &&
+                                 args.hdcp_content_type.has_value();
+  if (hdcp_only_request) {
+    auto *connector = pipe_->connector->Get();
+    if (connector == nullptr || connector->IsDeleted() ||
+        !connector->GetContentProtectionProperty() ||
+        !connector->GetHdcpContentTypeProperty()) {
+      ALOGE(
+          "Cannot create HDCP-only request without active connector HDCP "
+          "properties");
+      return nullptr;
+    }
+    if (!SetContentProtectionIfNeeded(args, *atomic_request)) {
+      ALOGE("Failed to set Content Protection and HDCP Content Type");
+      return nullptr;
+    }
+    atomic_request->hdcp_only_request = true;
+    return atomic_request;
+  }
+
   if (!SetWriteBackFenceIfNeeded(args, *atomic_request)) {
     ALOGE("Failed to set writeback fence");
     return nullptr;
@@ -944,6 +967,13 @@ AtomicCommitResult DrmAtomicStateManager::FinishPendingRequest(
       atomic_request.get());
 
   AtomicCommitResult result;
+  if (request->hdcp_only_request) {
+    for (const auto &[prop, value] : request->property_updates) {
+      prop->UpdateValue(value);
+    }
+    return result;
+  }
+
   result.present_fence = MakeSharedFd(request->out_fence_address);
   committed_frame_state_ = std::move(request->new_frame_state);
   for (const auto &[prop, value] : request->property_updates) {

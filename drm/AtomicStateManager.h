@@ -70,7 +70,8 @@ struct AtomicCommitArgs {
 
   /* helpers */
   auto HasInputs() const -> bool {
-    return display_mode || power_mode || composition;
+    return display_mode || power_mode || composition ||
+           (content_protection.has_value() && hdcp_content_type.has_value());
   }
 };
 

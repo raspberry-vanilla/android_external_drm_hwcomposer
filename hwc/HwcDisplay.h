@@ -408,6 +408,8 @@ class HwcDisplay : public ICompositorDisplay {
 
  private:
   bool HasPhysicalConnector() const;
+  std::optional<bool> ProbeHdcpType1Support();
+  void ResolvePendingHdcpContentType();
 
   bool IsDozeSupported() const;
   bool IsDozeSuspendSupported() const;
@@ -501,6 +503,7 @@ class HwcDisplay : public ICompositorDisplay {
   bool defer_commits_until_power_on_ = false;
   bool clear_hdcp_on_next_commit_ = false;
   bool hdcp_desired_in_kms_ = false;
+  std::optional<bool> hdcp_type1_supported_;
 
   std::shared_ptr<DrmDisplayPipeline> pipeline_;
 
