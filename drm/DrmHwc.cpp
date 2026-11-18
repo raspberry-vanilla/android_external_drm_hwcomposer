@@ -465,6 +465,7 @@ bool DrmHwc::DestroyVirtualDisplay(DisplayHandle display) {
 
 auto DrmHwc::PullCompositionStats()
     -> std::map<CompositionAttributes, CompositionStats> {
+  std::scoped_lock lock(resource_manager_.GetMainLock());
   std::map<CompositionAttributes, CompositionStats> stats;
   for (const auto &[display_handle, display] : displays_) {
     stats.insert(display->comp_stats().begin(), display->comp_stats().end());
@@ -473,6 +474,7 @@ auto DrmHwc::PullCompositionStats()
 }
 
 auto DrmHwc::PullActiveDisplayCounts() -> ActiveDisplayCounts {
+  std::scoped_lock lock(resource_manager_.GetMainLock());
   ActiveDisplayCounts counts;
   for (const auto &[_, display] : displays_) {
     if (!display->GetDisplayEnabled()) {
@@ -493,6 +495,7 @@ auto DrmHwc::PullActiveDisplayCounts() -> ActiveDisplayCounts {
 }
 
 std::string DrmHwc::DumpState() {
+  std::scoped_lock dump_lock(dump_mutex_);
   std::stringstream output;
 
   output << "-- drm_hwcomposer --\n\n";
@@ -515,13 +518,16 @@ std::string DrmHwc::DumpState() {
   };
   dump_stats_tracker_.ReportCompositionStats(callback);
 
-  for (const auto &[display_handle, display_stats] : total_stats) {
-    const auto *display = GetDisplay(display_handle);
-    ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found",
-             display_handle);
-    if (display != nullptr) {
-      output << DumpDisplayStats(display, display_stats.first,
-                                 display_stats.second);
+  {
+    std::scoped_lock lock(resource_manager_.GetMainLock());
+    for (const auto &[display_handle, display_stats] : total_stats) {
+      const auto *display = GetDisplay(display_handle);
+      ALOGE_IF(display == nullptr, "Display %" PRIu64 " not found",
+               display_handle);
+      if (display != nullptr) {
+        output << DumpDisplayStats(display, display_stats.first,
+                                   display_stats.second);
+      }
     }
   }
   return output.str();

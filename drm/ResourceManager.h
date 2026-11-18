@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <thread>
 
 #include <cstdint>
@@ -80,6 +82,9 @@ class ResourceManager {
   void DeInit();
 
   [[nodiscard]] bool IsInitialized() const {
+    // Atomic for unlocked callers (e.g. ComposerClient::registerCallback(),
+    // ~DrmHwcThree()); writes occur under (init_mutex_, hotplug_mutex_,
+    // main_lock_).
     return initialized_;
   }
 
@@ -116,6 +121,7 @@ class ResourceManager {
   }
 
   auto GetVirtualDisplayPipeline() -> std::shared_ptr<DrmDisplayPipeline>;
+  // Requires GetMainLock() to be held by the caller.
   auto GetWritebackConnectorsCount() -> uint32_t;
   auto GetInternalDisplayNames() -> const std::set<std::string>&;
   std::optional<std::string> DumpBackends();
@@ -128,6 +134,9 @@ class ResourceManager {
   friend struct HwcDisplayTest;
 
   void ReloadProperties();
+
+  auto CreateDrmDevice(const std::string &path, uint32_t index)
+      -> std::unique_ptr<DrmDevice>;
 
   auto GetOrderedConnectors() -> std::vector<DrmConnector *>;
   void StartUEventListener();
@@ -165,6 +174,10 @@ class ResourceManager {
 
   std::shared_ptr<UEventListener> uevent_listener_;
 
+  // Serializes Init() and DeInit() across threads.
+  // Lock hierarchy: acquire init_mutex_ -> hotplug_mutex_ -> main_lock_.
+  std::mutex init_mutex_;
+
   // Serializes off-lock DRM connector probing during hotplugs.
   // Lock hierarchy: acquire hotplug_mutex_ before main_lock_.
   std::mutex hotplug_mutex_;
@@ -185,6 +198,10 @@ class ResourceManager {
   };
   std::optional<DeferredHotplugEvent> deferred_bootanim_hotplug_;
 
+  // Test-only override for DrmDevice creation; null in production.
+  std::function<std::unique_ptr<DrmDevice>(const std::string &, uint32_t)>
+      device_factory_hook_;
+
   PipelineToFrontendBindingInterface *const frontend_interface_;
 
   // Delayed-EDID recovery thread state
@@ -201,7 +218,7 @@ class ResourceManager {
   bool deferred_settle_cancelled_{};
   bool deferred_settle_pending_{};
 
-  bool initialized_{};
+  std::atomic<bool> initialized_{false};
   bool deinitializing_{};
 };
 
