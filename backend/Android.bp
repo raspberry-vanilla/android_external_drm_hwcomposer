@@ -16,26 +16,13 @@ soong_config_module_type {
     name: "drm_hwcomposer_backend_defaults",
     module_type: "cc_defaults",
     config_namespace: "DRMHWC",
-    variables: [
-        "backend",
-        "desktop_variant",
+    value_variables: [
+        "sdm_defaults",
     ],
     properties: [
+        "defaults",
         "header_libs",
-        "shared_libs",
         "srcs",
-    ],
-}
-
-soong_config_string_variable {
-    name: "backend",
-    values: ["sdm"],
-}
-
-soong_config_string_variable {
-    name: "desktop_variant",
-    values: [
-        "stub",
     ],
 }
 
@@ -59,15 +46,8 @@ drm_hwcomposer_backend_defaults {
         "backend/sdm/sdm_error.cpp",
     ],
     soong_config_variables: {
-        desktop_variant: {
-            stub: {
-                srcs: [
-                    "backend/sdm/stubs/sdm_stubs.cpp",
-                ],
-                header_libs: [
-                    "drm_hwcomposer_sdm_stub_headers",
-                ],
-            },
+        sdm_defaults: {
+            defaults: ["%s"],
             conditions_default: {
                 srcs: [
                     "backend/sdm/stubs/sdm_stubs.cpp",
