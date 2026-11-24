@@ -23,11 +23,13 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -137,8 +139,30 @@ class TestDrmHwc : public DrmHwc {
   void SendHdcpLevelsChangedEventToClient(
       DisplayHandle /*display_handle*/,
       std::optional<HdcpContentType> current_hdcp_level) override {
-    last_hdcp_level = current_hdcp_level;
-    hdcp_callback_count++;
+    {
+      const std::lock_guard<std::mutex> lock(hdcp_mutex_);
+      last_hdcp_level_ = current_hdcp_level;
+      ++hdcp_callback_count_;
+    }
+    hdcp_cv_.notify_all();
+  }
+
+  int GetHdcpCallbackCount() const {
+    const std::lock_guard<std::mutex> lock(hdcp_mutex_);
+    return hdcp_callback_count_;
+  }
+
+  std::optional<HdcpContentType> GetLastHdcpLevel() const {
+    const std::lock_guard<std::mutex> lock(hdcp_mutex_);
+    return last_hdcp_level_;
+  }
+
+  bool WaitForHdcpCallbackCount(int expected_count,
+                                std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(hdcp_mutex_);
+    return hdcp_cv_.wait_for(lock, timeout, [this, expected_count]() {
+      return hdcp_callback_count_ >= expected_count;
+    });
   }
 
   void ResetVsyncCount() const {
@@ -165,12 +189,11 @@ class TestDrmHwc : public DrmHwc {
     return hotplug_count_.load();
   }
 
-  // NOLINTBEGIN(cppcoreguidelines-non-private-member-variables-in-classes)
-  std::optional<HdcpContentType> last_hdcp_level;
-  int hdcp_callback_count = 0;
-  // NOLINTEND(cppcoreguidelines-non-private-member-variables-in-classes)
-
  private:
+  mutable std::mutex hdcp_mutex_;
+  std::condition_variable hdcp_cv_;
+  std::optional<HdcpContentType> last_hdcp_level_;
+  int hdcp_callback_count_ = 0;
   mutable std::atomic<int> vsync_count_{0};
   std::atomic<int> refresh_count_{0};
   std::atomic<int> hotplug_count_{0};
@@ -1188,19 +1211,16 @@ TEST_F(HwcDisplayTest, StartHdcpRepeatedNotifications) {
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   const_cast<HdcpController*>(display.GetHdcpController())->Requested();
 
-  // Wait for the background thread to process the callback
-  
-  
-  for (int i = 0; i < kMaxRetries; ++i) {
-    if (hwc.last_hdcp_level == HdcpContentType::kType1)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-  }
+  // Wait for the background thread to process the callback.
+  ASSERT_TRUE(
+      hwc.WaitForHdcpCallbackCount(1, std::chrono::milliseconds(
+                                          kMaxRetries * kRetryDelayMs)));
+  EXPECT_EQ(hwc.GetLastHdcpLevel(), HdcpContentType::kType1);
 
-  int count_before = hwc.hdcp_callback_count;
+  const int count_before = hwc.GetHdcpCallbackCount();
   EXPECT_TRUE(display.StartHdcp());
-  EXPECT_EQ(hwc.hdcp_callback_count, count_before + 1);
-  EXPECT_EQ(hwc.last_hdcp_level, HdcpContentType::kType1);
+  EXPECT_EQ(hwc.GetHdcpCallbackCount(), count_before + 1);
+  EXPECT_EQ(hwc.GetLastHdcpLevel(), HdcpContentType::kType1);
 }
 
 TEST_F(HwcDisplayTest, StopHdcpTeardown) {
@@ -1251,24 +1271,18 @@ TEST_F(HwcDisplayTest, StopHdcpTeardown) {
   ASSERT_NE(display.GetHdcpController(), nullptr);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   const_cast<HdcpController*>(display.GetHdcpController())->Requested();
-  
-  
-  for (int i = 0; i < kMaxRetries; ++i) {
-    if (hwc.last_hdcp_level == HdcpContentType::kType1)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-  }
 
+  ASSERT_TRUE(
+      hwc.WaitForHdcpCallbackCount(1, std::chrono::milliseconds(
+                                          kMaxRetries * kRetryDelayMs)));
+  EXPECT_EQ(hwc.GetLastHdcpLevel(), HdcpContentType::kType1);
+
+  const int callbacks_before_stop = hwc.GetHdcpCallbackCount();
   EXPECT_TRUE(display.StopHdcp());
-  
-  
-  for (int i = 0; i < kMaxRetries; ++i) {
-    if (hwc.last_hdcp_level == std::nullopt)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-  }
-
-  EXPECT_EQ(hwc.last_hdcp_level, std::nullopt);
+  ASSERT_TRUE(hwc.WaitForHdcpCallbackCount(callbacks_before_stop + 1,
+                                           std::chrono::milliseconds(
+                                               kMaxRetries * kRetryDelayMs)));
+  EXPECT_EQ(hwc.GetLastHdcpLevel(), std::nullopt);
 
   fake_device->GetFakeAtomicCommitSink()->ClearHistory();
   display.ValidateStagedComposition();
@@ -5317,6 +5331,284 @@ TEST_F(HwcDisplayTest, ResetClientStatePreservesEarlyBootAnimationBrightness) {
     }
     EXPECT_GT(*args->brightness, 0.0F);
   }
+}
+
+TEST_F(HwcDisplayTest, StartHdcpProbesType1WithTestCommitAndUsesType1OnPass) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.GetPipe().atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  std::optional<AtomicCommitArgs> probe_args;
+  sink->SetTestCommitHook(
+      [&probe_args](
+          const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+              args) {
+        if (args.size() == 1U && args[0].second.content_protection &&
+            args[0].second.hdcp_content_type && !args[0].second.composition) {
+          probe_args = args[0].second;
+        }
+        return CommitStatus::Success();
+      });
+
+  ASSERT_TRUE(display.StartHdcp());
+  if (!probe_args.has_value()) {
+    ADD_FAILURE() << "Expected HDCP Type 1 TEST_ONLY probe args";
+    return;
+  }
+  EXPECT_EQ(probe_args->content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(probe_args->hdcp_content_type, HdcpContentType::kType1);
+  EXPECT_FALSE(probe_args->seamless);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(display.GetHdcpController()->GetPendingContentType(),
+            HdcpContentType::kType1);
+
+  sink->SetTestCommitHook(nullptr);
+  StageSingleDeviceLayer(display);
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& frame_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(frame_args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(frame_args.hdcp_content_type, HdcpContentType::kType1);
+}
+
+TEST_F(
+    HwcDisplayTest,
+    StartHdcpFallsBackDirectlyToType0WithoutRetryWhenTestCommitRejectsType1) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+  fake_conn->SetContentProtectionEnabled(false);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.GetPipe().atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+             args) {
+        if (args.size() == 1U &&
+            args[0].second.hdcp_content_type == HdcpContentType::kType1 &&
+            !args[0].second.composition) {
+          return CommitStatus::Failure(-EINVAL);
+        }
+        return CommitStatus::Success();
+      });
+
+  ASSERT_TRUE(display.StartHdcp());
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+  auto* hdcp = const_cast<HdcpController*>(display.GetHdcpController());
+  ASSERT_NE(hdcp, nullptr);
+  EXPECT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(hdcp->GetPendingContentType(), HdcpContentType::kType0);
+
+  sink->SetTestCommitHook(nullptr);
+  StageSingleDeviceLayer(display);
+  sink->ClearHistory();
+  hwc.ResetRefreshCount();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& frame_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(frame_args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(frame_args.hdcp_content_type, HdcpContentType::kType0);
+
+  // Timeout on the direct Type 0 attempt must transition straight to
+  // kInfeasible without requesting a retry refresh.
+  const int callbacks_before = hwc.GetHdcpCallbackCount();
+  hdcp->ExpireRequestTimeoutForTesting();
+  ASSERT_TRUE(hwc.WaitForHdcpCallbackCount(callbacks_before + 1,
+                                           std::chrono::milliseconds(
+                                               kMaxRetries * kRetryDelayMs)));
+  EXPECT_EQ(hdcp->GetHdcpState(), HdcpController::HdcpState::kInfeasible);
+  EXPECT_EQ(hwc.GetRefreshCount(), 0);
+  EXPECT_EQ(hwc.GetHdcpCallbackCount(), callbacks_before + 1);
+  EXPECT_EQ(hwc.GetLastHdcpLevel(), std::nullopt);
+}
+
+TEST_F(HwcDisplayTest,
+       StartHdcpKeepsType1OnTransientOrInternalTestCommitFailure) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.GetPipe().atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&) {
+        return CommitStatus::InternalFailure();
+      });
+  ASSERT_TRUE(display.StartHdcp());
+  EXPECT_EQ(display.GetHdcpController()->GetPendingContentType(),
+            HdcpContentType::kType1);
+
+  display.ResetClientState(/*reset_hdcp=*/true);
+  // Flush the pending UNDESIRED clear commit so the subsequent StartHdcp()
+  // probe runs against a clean KMS state.
+  StageSingleDeviceLayer(display);
+  sink->SetTestCommitHook(nullptr);
+  ValidateAcceptAndPresent(display);
+
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&) {
+        return CommitStatus::Failure(-EBUSY);
+      });
+  ASSERT_TRUE(display.StartHdcp());
+  EXPECT_EQ(display.GetHdcpController()->GetPendingContentType(),
+            HdcpContentType::kType1);
+
+  // Because -EBUSY is transient and not cached, presenting a frame once the
+  // kernel starts returning -EINVAL for Type 1 must re-probe and downgrade to
+  // Type 0 before committing.
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+             args) {
+        if (args.size() == 1U &&
+            args[0].second.hdcp_content_type == HdcpContentType::kType1) {
+          return CommitStatus::Failure(-EINVAL);
+        }
+        return CommitStatus::Success();
+      });
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& frame_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(frame_args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(frame_args.hdcp_content_type, HdcpContentType::kType0);
+  sink->SetTestCommitHook(nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       StartHdcpDefersProbeWhileInactiveAndDowngradesOnPowerOnFrame) {
+  constexpr DisplayHandle kExternalHandle = 1;
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+
+  HwcDisplay display(kExternalHandle, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_FALSE(display.GetPipe().atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  sink->ClearHistory();
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&
+             args) {
+        if (args.size() == 1U &&
+            args[0].second.hdcp_content_type == HdcpContentType::kType1) {
+          return CommitStatus::Failure(-EINVAL);
+        }
+        return CommitStatus::Success();
+      });
+
+  // Display is inactive: probe is deferred and StartHdcp() stages kType1.
+  ASSERT_TRUE(display.StartHdcp());
+  EXPECT_EQ(sink->GetTestCommitCount(), 0U);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(display.GetHdcpController()->GetPendingContentType(),
+            HdcpContentType::kType1);
+
+  // Power the external display on, then validate & present a frame. The
+  // deferred Type 1 probe must run once active, cache unsupported, and commit
+  // Content Type 0 cleanly without hitting a permanent -EINVAL loop.
+  ASSERT_EQ(display.SetPowerMode(PowerMode::kOn), HwcDisplay::Error::kNone);
+  ASSERT_TRUE(display.GetPipe().atomic_state_manager->IsActive());
+
+  StageSingleDeviceLayer(display);
+  sink->ClearHistory();
+  ValidateAcceptAndPresent(display);
+  ASSERT_FALSE(sink->GetCommitHistory().empty());
+  const auto& frame_args = sink->GetCommitHistory().back().front();
+  EXPECT_EQ(frame_args.content_protection, ContentProtection::kDesired);
+  EXPECT_EQ(frame_args.hdcp_content_type, HdcpContentType::kType0);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kRequested);
+  sink->SetTestCommitHook(nullptr);
+}
+
+TEST_F(HwcDisplayTest,
+       StartHdcpSkipsType1ProbeDuringLinkRecoveryAndRequestedState) {
+  auto pipeline = CreatePipelineWithModes(
+      {CreateFakeDrmMode(kFhdWidth, kFhdHeight, kRefresh60Hz,
+                         DRM_MODE_TYPE_PREFERRED, "1080p60")},
+      /*is_external=*/true);
+  ASSERT_NE(pipeline, nullptr);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_conn = static_cast<FakeDrmConnector*>(pipeline->connector->Get());
+  fake_conn->SetContentProtectionPropertySupported(true);
+  fake_conn->SetHdcpContentTypePropertySupported(true);
+  fake_conn->SetContentProtectionEnabled(false);
+
+  HwcDisplay display(kPrimaryDisplay, /*is_virtual=*/false, &hwc);
+  ASSERT_TRUE(display.SetPipeline(pipeline));
+  ASSERT_TRUE(display.GetPipe().atomic_state_manager->IsActive());
+
+  auto* sink = fake_device->GetFakeAtomicCommitSink();
+  // Simulate a link-recovery reprobe: RefreshConfigsFromConnector() sets
+  // link_recovery_modeset_required_ and clears any cached Type 1 probe result.
+  ASSERT_TRUE(display.RefreshConfigsFromConnector());
+  sink->ClearHistory();
+  sink->SetTestCommitHook(
+      [](const std::vector<std::pair<AtomicStateManager*, AtomicCommitArgs>>&) {
+        return CommitStatus::Failure(-EINVAL);
+      });
+
+  ASSERT_TRUE(display.StartHdcp());
+  EXPECT_EQ(sink->GetTestCommitCount(), 0U);
+  EXPECT_EQ(display.GetHdcpController()->GetPendingContentType(),
+            HdcpContentType::kType1);
+
+  // Recover the link via SetConfig(), then present a frame with Type 1 passing.
+  sink->SetTestCommitHook(nullptr);
+  ASSERT_EQ(display.SetConfig(display.GetLastRequestedConfig()->id),
+            HwcDisplay::ConfigError::kNone);
+  StageSingleDeviceLayer(display);
+  ValidateAcceptAndPresent(display);
+  ASSERT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kRequested);
+
+  // A duplicate StartHdcp() while kRequested must not issue a probe or reset
+  // the in-flight authentication back to kDesired.
+  sink->ClearHistory();
+  ASSERT_TRUE(display.StartHdcp());
+  EXPECT_EQ(sink->GetTestCommitCount(), 0U);
+  EXPECT_EQ(display.GetHdcpController()->GetHdcpState(),
+            HdcpController::HdcpState::kRequested);
 }
 
 }  // namespace android::drm_hwcomposer

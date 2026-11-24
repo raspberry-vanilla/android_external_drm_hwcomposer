@@ -155,13 +155,50 @@ TEST_F(HdcpControllerTest, Type1NegotiationSuccess) {
   CreateController();
   controller_->Start();
   EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(controller_->GetPendingContentType(), HdcpContentType::kType1);
 
   connector_->SetContentProtectionEnabled(true);
   controller_->Requested();
+  EXPECT_EQ(controller_->GetPendingContentType(), std::nullopt);
 
   auto type = WaitForNotification();
   EXPECT_EQ(type, HdcpContentType::kType1);
   EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kEnabled);
+}
+
+TEST_F(HdcpControllerTest, DirectType0NegotiationSuccess) {
+  CreateController();
+  controller_->Start(HdcpContentType::kType0);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(controller_->GetPendingContentType(), HdcpContentType::kType0);
+
+  connector_->SetContentProtectionEnabled(true);
+  controller_->Requested();
+  EXPECT_EQ(controller_->GetPendingContentType(), std::nullopt);
+
+  auto type = WaitForNotification();
+  EXPECT_EQ(type, HdcpContentType::kType0);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kEnabled);
+}
+
+TEST_F(HdcpControllerTest, DirectType0FailureMarksInfeasibleWithoutRetry) {
+  CreateController();
+  controller_->Start(HdcpContentType::kType0);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kDesired);
+  EXPECT_EQ(controller_->GetPendingContentType(), HdcpContentType::kType0);
+
+  connector_->SetContentProtectionEnabled(false);
+  controller_->Requested();
+
+  auto type = WaitForNotification();
+  EXPECT_EQ(type, std::nullopt);
+  EXPECT_EQ(controller_->GetHdcpState(),
+            HdcpController::HdcpState::kInfeasible);
+  EXPECT_EQ(controller_->GetPendingContentType(), std::nullopt);
+  {
+    auto cbk_lock = LockCallbacks();
+    EXPECT_FALSE(retry_frame_triggered_);
+  }
 }
 
 TEST_F(HdcpControllerTest, Type0RetryFallback) {
@@ -179,6 +216,50 @@ TEST_F(HdcpControllerTest, Type0RetryFallback) {
 
   auto type = WaitForNotification();
   EXPECT_EQ(type, HdcpContentType::kType0);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kEnabled);
+}
+
+TEST_F(HdcpControllerTest, StartDuringRequestedPreservesInFlightNegotiation) {
+  constexpr int kLongTimeoutMs = 5000;
+  CreateController(std::chrono::milliseconds(kLongTimeoutMs));
+
+  // Duplicate Start() while Type 1 authentication is in flight must not reset
+  // kRequested back to kDesired or overwrite target_content_type_.
+  controller_->Start(HdcpContentType::kType1);
+  connector_->SetContentProtectionEnabled(false);
+  controller_->Requested();
+  ASSERT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kRequested);
+
+  controller_->Start(HdcpContentType::kType0);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kRequested);
+  EXPECT_EQ(controller_->GetPendingContentType(), std::nullopt);
+
+  connector_->SetContentProtectionEnabled(true);
+  EXPECT_EQ(WaitForNotification(), HdcpContentType::kType1);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kEnabled);
+
+  // Also verify duplicate Start(kType1) during a Type 0 fallback's kRequested
+  // window does not clobber target_content_type_ back to kType1.
+  controller_->Terminate();
+  ClearNotifications();
+  connector_->SetContentProtectionEnabled(false);
+
+  controller_->Start(HdcpContentType::kType1);
+  controller_->Requested();
+  controller_->ExpireRequestTimeoutForTesting();
+  ASSERT_TRUE(WaitForRetryFrame());
+  ASSERT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kRetry);
+  ASSERT_EQ(controller_->GetPendingContentType(), HdcpContentType::kType0);
+
+  controller_->Requested();
+  ASSERT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kRequested);
+
+  controller_->Start(HdcpContentType::kType1);
+  EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kRequested);
+  EXPECT_EQ(controller_->GetPendingContentType(), std::nullopt);
+
+  connector_->SetContentProtectionEnabled(true);
+  EXPECT_EQ(WaitForNotification(), HdcpContentType::kType0);
   EXPECT_EQ(controller_->GetHdcpState(), HdcpController::HdcpState::kEnabled);
 }
 

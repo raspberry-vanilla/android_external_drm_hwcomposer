@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -257,6 +258,7 @@ bool HwcDisplay::RefreshConfigsFromConnector() {
   ClearStagedModeConfig();
   staged_mode_config_id_ = configs_.preferred_config_id;
   link_recovery_modeset_required_ = true;
+  hdcp_type1_supported_.reset();
   return true;
 }
 
@@ -572,6 +574,8 @@ auto HwcDisplay::ValidateStagedComposition() -> ValidateResult {
         "out-fence; resetting writeback");
     writeback_.reset();
   }
+
+  ResolvePendingHdcpContentType();
 
   auto [composition,
         short_circuited] = pipeline_->planner->ValidateDisplay(this);
@@ -1159,6 +1163,7 @@ void HwcDisplay::Deinit() {
   defer_commits_until_power_on_ = false;
   clear_hdcp_on_next_commit_ = false;
   hdcp_desired_in_kms_ = false;
+  hdcp_type1_supported_.reset();
 
   if (vsync_worker_) {
     vsync_worker_->StopThread();
@@ -1243,14 +1248,17 @@ void HwcDisplay::ResetClientState(bool reset_hdcp) {
     }
   }
 
-  if (reset_hdcp && hdcpcon_ != nullptr) {
-    const auto state = hdcpcon_->GetHdcpState();
-    if (state != HdcpController::HdcpState::kUndesired &&
-        state != HdcpController::HdcpState::kInfeasible) {
-      hdcpcon_->Reset();
-      clear_hdcp_on_next_commit_ = true;
-    } else if (hdcp_desired_in_kms_) {
-      clear_hdcp_on_next_commit_ = true;
+  if (reset_hdcp) {
+    hdcp_type1_supported_.reset();
+    if (hdcpcon_ != nullptr) {
+      const auto state = hdcpcon_->GetHdcpState();
+      if (state != HdcpController::HdcpState::kUndesired &&
+          state != HdcpController::HdcpState::kInfeasible) {
+        hdcpcon_->Reset();
+        clear_hdcp_on_next_commit_ = true;
+      } else if (hdcp_desired_in_kms_) {
+        clear_hdcp_on_next_commit_ = true;
+      }
     }
   }
 }
@@ -1374,6 +1382,7 @@ bool HwcDisplay::Init() {
 
   requires_reprobe_on_power_on_ = false;
   defer_commits_until_power_on_ = false;
+  hdcp_type1_supported_.reset();
   if (!IsInHeadlessMode()) {
     if (Properties::FlatteningEnabled()) {
       auto flatcbk = (struct FlatConCallbacks){
@@ -1707,6 +1716,56 @@ auto HwcDisplay::IsHdcpPropertyPresent() -> bool {
   return true;
 }
 
+std::optional<bool> HwcDisplay::ProbeHdcpType1Support() {
+  if (hdcp_type1_supported_.has_value()) {
+    return hdcp_type1_supported_;
+  }
+  if (IsInHeadlessMode() || defer_commits_until_power_on_ ||
+      link_recovery_modeset_required_ || staged_power_mode_.has_value() ||
+      clear_hdcp_on_next_commit_ ||
+      !GetPipe().atomic_state_manager->IsActive()) {
+    return std::nullopt;
+  }
+  auto *connector = GetPipe().connector ? GetPipe().connector->Get() : nullptr;
+  if (connector == nullptr || connector->IsDeleted() ||
+      !IsHdcpPropertyPresent()) {
+    return std::nullopt;
+  }
+
+  AtomicCommitArgs test_args{};
+  test_args.content_protection = ContentProtection::kDesired;
+  test_args.hdcp_content_type = HdcpContentType::kType1;
+
+  const CommitStatus
+      status = GetPipe().device->GetAtomicCommitSink().TestAtomicCommit(
+          {{GetPipe().atomic_state_manager.get(), test_args}});
+  if (status.success) {
+    hdcp_type1_supported_ = true;
+    return true;
+  }
+  if (status.error_code == -EINVAL || status.error_code == -EOPNOTSUPP) {
+    ALOGI(
+        "HDCP Content Type 1 TEST_ONLY commit rejected (err=%d) on display %d; "
+        "starting directly with Content Type 0",
+        status.error_code, static_cast<int>(handle_));
+    hdcp_type1_supported_ = false;
+    return false;
+  }
+  return std::nullopt;
+}
+
+void HwcDisplay::ResolvePendingHdcpContentType() {
+  if (hdcpcon_ == nullptr || hdcp_type1_supported_.has_value() ||
+      hdcpcon_->GetHdcpState() != HdcpController::HdcpState::kDesired ||
+      hdcpcon_->GetPendingContentType() != HdcpContentType::kType1) {
+    return;
+  }
+  const auto type1_supported = ProbeHdcpType1Support();
+  if (type1_supported.has_value() && !*type1_supported) {
+    hdcpcon_->Start(HdcpContentType::kType0);
+  }
+}
+
 auto HwcDisplay::StartHdcp() -> bool {
   if (hdcpcon_ == nullptr) {
     const int forced_level = Properties::ForceHdcpLevel();
@@ -1734,7 +1793,17 @@ auto HwcDisplay::StartHdcp() -> bool {
         "display");
     return false;
   }
-  hdcpcon_->Start();
+
+  const auto hdcp_state = hdcpcon_->GetHdcpState();
+  auto initial_type = HdcpContentType::kType1;
+  if (hdcp_state == HdcpController::HdcpState::kUndesired ||
+      hdcp_state == HdcpController::HdcpState::kDesired) {
+    const auto type1_supported = ProbeHdcpType1Support();
+    if (type1_supported.has_value() && !*type1_supported) {
+      initial_type = HdcpContentType::kType0;
+    }
+  }
+  hdcpcon_->Start(initial_type);
   return true;
 }
 
@@ -2001,20 +2070,18 @@ std::optional<AtomicCommitArgs> HwcDisplay::CreateFrameUpdateCommit(
     a_args.blocking = true;
   }
 
-  auto hdcp_state = hdcpcon_ ? hdcpcon_->GetHdcpState()
-                             : HdcpController::HdcpState::kUndesired;
   // Flush a pending UNDESIRED transition before any new DESIRED request so the
   // kernel latches the new HDCP Content Type on UNDESIRED -> DESIRED rather
   // than reusing an active Type 0 session from the detached client.
   if (clear_hdcp_on_next_commit_) {
     a_args.content_protection = ContentProtection::kUndesired;
     a_args.hdcp_content_type = HdcpContentType::kType0;
-  } else if (hdcp_state == HdcpController::HdcpState::kDesired) {
-    a_args.content_protection = ContentProtection::kDesired;
-    a_args.hdcp_content_type = HdcpContentType::kType1;
-  } else if (hdcp_state == HdcpController::HdcpState::kRetry) {
-    a_args.content_protection = ContentProtection::kDesired;
-    a_args.hdcp_content_type = HdcpContentType::kType0;
+  } else if (hdcpcon_ != nullptr && !staged_power_mode_.has_value()) {
+    if (auto pending_type = hdcpcon_->GetPendingContentType();
+        pending_type.has_value()) {
+      a_args.content_protection = ContentProtection::kDesired;
+      a_args.hdcp_content_type = pending_type;
+    }
   }
 
   a_args.composition = composition.composition_plan
@@ -2136,6 +2203,8 @@ CommitStatus HwcDisplay::CommitStagedComposition(SharedFd &out_present_fence) {
     ALOGE("%s: No composition is staged. Cannot commit.", __func__);
     return CommitStatus::InternalFailure();
   }
+
+  ResolvePendingHdcpContentType();
 
   PrepareCompositionForCommit(validated_composition_.value());
   auto a_args = CreateFrameUpdateCommit(validated_composition_.value());

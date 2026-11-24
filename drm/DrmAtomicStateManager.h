@@ -108,6 +108,7 @@ class DrmAtomicStateManager : public AtomicStateManager {
     KmsObjects used_kms_objects;
     KmsState new_frame_state;
     std::vector<std::pair<DrmProperty *, uint64_t>> property_updates;
+    bool hdcp_only_request = false;
 
     void RecordPropertyUpdate(DrmProperty &prop, uint64_t value) {
       property_updates.emplace_back(&prop, value);

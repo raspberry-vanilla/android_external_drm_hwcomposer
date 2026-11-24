@@ -1837,4 +1837,175 @@ TEST_F(DrmAtomicStateManagerTest,
           .has_value());
 }
 
+TEST_F(DrmAtomicStateManagerTest,
+       HdcpOnlyArgsSetsOnlyHdcpConnectorPropertiesAndTestsWithAllowModeset) {
+  ActivateWithConnectorProps(*this);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+  auto* fake_crtc = static_cast<FakeDrmCrtc*>(pipeline->crtc->Get());
+  ASSERT_NE(fake_crtc, nullptr);
+  constexpr uint64_t kLutSize = 256;
+  fake_crtc->SetCtmPropertySupported(true);
+  fake_crtc->SetGammaLutProperties(kLutSize, kFakeBlobBaseId);
+
+  AtomicCommitArgs hdcp_args{};
+  hdcp_args.content_protection = ContentProtection::kDesired;
+  hdcp_args.hdcp_content_type = HdcpContentType::kType1;
+  EXPECT_TRUE(hdcp_args.HasInputs());
+
+  auto req = state_manager->GetAtomicModeReqForArgs(hdcp_args);
+  ASSERT_NE(req, nullptr);
+  EXPECT_FALSE(hdcp_args.power_mode.has_value());
+
+  const uint32_t conn_id = fake_connector->GetId();
+  auto* prop_set = AsDrmRequest(req)->property_set.get();
+  const auto items = GetAtomicReqItems(prop_set);
+  constexpr size_t kExpectedHdcpPropCount = 2;
+  EXPECT_EQ(items.size(), kExpectedHdcpPropCount);
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kFakeContentProtectionPropId),
+            static_cast<uint64_t>(ContentProtection::kDesired));
+  EXPECT_EQ(GetAtomicReqPropertyValue(prop_set, conn_id,
+                                      kFakeHdcpContentTypePropId),
+            static_cast<uint64_t>(HdcpContentType::kType1));
+
+  uint32_t observed_flags = 0;
+  FakeKernelDrmAtomicCommitSink sink_impl(
+      [&observed_flags](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t flags,
+                        void* /*user_data*/, size_t /*attempt*/) -> int {
+        observed_flags = flags;
+        return -EINVAL;
+      });
+  AtomicCommitSink& sink = sink_impl;
+  const CommitStatus status = sink.TestAtomicCommit(
+      {{state_manager.get(), hdcp_args}});
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 1U);
+  EXPECT_EQ(observed_flags,
+            static_cast<uint32_t>(DRM_MODE_ATOMIC_ALLOW_MODESET |
+                                  DRM_MODE_ATOMIC_TEST_ONLY));
+  EXPECT_FALSE(status.success);
+  EXPECT_EQ(status.error_code, -EINVAL);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       HdcpOnlyLiveCommitIsSynchronousAndPreservesActiveScanoutBuffers) {
+  ActivateWithConnectorProps(*this);
+
+  // Stage an active scanout framebuffer and retain only a weak reference so we
+  // can verify FinishPendingRequest() does not drop it on HDCP-only commits.
+  auto active_fb = std::make_shared<FakeFbIdHandle>(kTestFbId2);
+  const std::weak_ptr<FakeFbIdHandle> weak_fb = active_fb;
+  auto plan = std::make_shared<LayerToPlaneJoiningPlan>();
+  LayerData layer = CreateTestLayerData(kTestFbId2);
+  layer.fb = std::move(active_fb);
+  plan->plan.emplace_back(std::move(layer), pipeline->primary_plane, 0);
+
+  AtomicCommitArgs flip_args{};
+  flip_args.blocking = true;
+  flip_args.composition = std::move(plan);
+  auto flip_req = state_manager->GetAtomicModeReqForArgs(flip_args);
+  ASSERT_NE(flip_req, nullptr);
+  state_manager->FinishPendingRequest(flip_args, std::move(flip_req));
+  flip_args.composition.reset();
+  ASSERT_FALSE(weak_fb.expired());
+
+  // 1. Standalone non-blocking-flagged HDCP-only commit must execute
+  // synchronously (without DRM_MODE_ATOMIC_NONBLOCK) and preserve active FBs.
+  uint32_t observed_flags = 0;
+  FakeKernelDrmAtomicCommitSink sink_impl(
+      [&observed_flags](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t flags,
+                        void* /*user_data*/, size_t /*attempt*/) -> int {
+        observed_flags = flags;
+        return 0;
+      });
+  AtomicCommitSink& sink = sink_impl;
+
+  AtomicCommitArgs hdcp_args{};
+  hdcp_args.content_protection = ContentProtection::kDesired;
+  hdcp_args.hdcp_content_type = HdcpContentType::kType1;
+  const auto res1 = sink.ExecuteAtomicCommit(
+      {{state_manager.get(), hdcp_args}});
+  ASSERT_TRUE(res1.IsSuccess());
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 1U);
+  EXPECT_EQ(sink_impl.GetNonBlockCalls(), 0U);
+  EXPECT_EQ(observed_flags,
+            static_cast<uint32_t>(DRM_MODE_ATOMIC_ALLOW_MODESET));
+  EXPECT_FALSE(weak_fb.expired());
+
+  // 2. A blocking commit whose redundant power_mode is cleared by
+  // CheckDoubleSettingState() becomes an hdcp_only_request and must also
+  // preserve active scanout buffers in FinishPendingRequest().
+  AtomicCommitArgs redundant_power_args{};
+  redundant_power_args.blocking = true;
+  redundant_power_args.power_mode = PowerMode::kOn;
+  redundant_power_args.content_protection = ContentProtection::kUndesired;
+  redundant_power_args.hdcp_content_type = HdcpContentType::kType0;
+  const auto res2 = sink.ExecuteAtomicCommit(
+      {{state_manager.get(), redundant_power_args}});
+  ASSERT_TRUE(res2.IsSuccess());
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 2U);
+  EXPECT_FALSE(weak_fb.expired());
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       DrmAtomicCommitSinkSkipsPlaneCleanupOnFailedHdcpOnlyCommit) {
+  ActivateWithConnectorProps(*this);
+  RecordingAtomicStateManager recording_manager(pipeline.get());
+
+  AtomicCommitArgs modeset0{};
+  modeset0.blocking = true;
+  modeset0.power_mode = PowerMode::kOn;
+  modeset0.display_mode = CreateFakeDrmMode(kTestWidth, kTestHeight,
+                                            kTestVRefresh);
+  modeset0.composition = CreateSinglePlanePlan(kTestFbId1);
+  auto req0 = recording_manager.GetAtomicModeReqForArgs(modeset0);
+  ASSERT_NE(req0, nullptr);
+  recording_manager.FinishPendingRequest(modeset0, std::move(req0));
+  ASSERT_TRUE(recording_manager.IsActive());
+  ASSERT_EQ(recording_manager.GetRecordedArgs().size(), 1U);
+
+  FakeKernelDrmAtomicCommitSink sink_impl(
+      [](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+         void* /*user_data*/, size_t /*attempt*/) -> int { return -EINVAL; });
+  AtomicCommitSink& sink = sink_impl;
+
+  AtomicCommitArgs hdcp_args{};
+  hdcp_args.content_protection = ContentProtection::kDesired;
+  hdcp_args.hdcp_content_type = HdcpContentType::kType1;
+  const auto res = sink.ExecuteAtomicCommit({{&recording_manager, hdcp_args}});
+  EXPECT_FALSE(res.IsSuccess());
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 1U);
+  // Only the initial modeset and the failed HDCP-only commit should be
+  // recorded; CleanUpFailedRequest() must not issue a plane-disabling commit.
+  EXPECT_EQ(recording_manager.GetRecordedArgs().size(), 2U);
+}
+
+TEST_F(DrmAtomicStateManagerTest,
+       HdcpOnlyArgsFailsWithoutIoctlWhenConnectorDeletedOrMissingProps) {
+  FakeKernelDrmAtomicCommitSink sink_impl(
+      [](int /*fd*/, drmModeAtomicReqPtr /*req*/, uint32_t /*flags*/,
+         void* /*user_data*/, size_t /*attempt*/) -> int { return 0; });
+  AtomicCommitSink& sink = sink_impl;
+
+  AtomicCommitArgs hdcp_args{};
+  hdcp_args.content_protection = ContentProtection::kDesired;
+  hdcp_args.hdcp_content_type = HdcpContentType::kType1;
+
+  // Connector has no HDCP properties registered yet.
+  EXPECT_EQ(state_manager->GetAtomicModeReqForArgs(hdcp_args), nullptr);
+  const CommitStatus missing_status = sink.TestAtomicCommit(
+      {{state_manager.get(), hdcp_args}});
+  EXPECT_FALSE(missing_status.success);
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 0U);
+
+  // Register HDCP properties and activate, then delete the connector (e.g.
+  // unregistered MST connector).
+  ActivateWithConnectorProps(*this);
+  fake_connector->MarkDeleted();
+  EXPECT_EQ(state_manager->GetAtomicModeReqForArgs(hdcp_args), nullptr);
+  const CommitStatus deleted_status = sink.TestAtomicCommit(
+      {{state_manager.get(), hdcp_args}});
+  EXPECT_FALSE(deleted_status.success);
+  EXPECT_EQ(sink_impl.GetTotalCalls(), 0U);
+}
+
 }  // namespace android::drm_hwcomposer

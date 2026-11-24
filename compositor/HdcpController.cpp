@@ -53,7 +53,7 @@ HdcpController::~HdcpController() {
 }
 
 // Set the HDCP state to desired if not already requested
-void HdcpController::Start() {
+void HdcpController::Start(HdcpContentType initial_type) {
   bool changed = false;
   bool should_notify = false;
   std::optional<HdcpContentType> notify_type;
@@ -68,13 +68,21 @@ void HdcpController::Start() {
         should_notify = true;
         notify_type = std::nullopt;
         break;
+      case HdcpState::kRequested:
       case HdcpState::kRetry:
+      case HdcpState::kThreadExit:
         break;
-      default:
-        ALOGI("HDCP requested to start");
-        hdcp_state_ = HdcpState::kDesired;
-        enabled_content_type_ = std::nullopt;
-        changed = true;
+      case HdcpState::kUndesired:
+      case HdcpState::kDesired:
+        if (hdcp_state_ != HdcpState::kDesired ||
+            target_content_type_ != initial_type) {
+          ALOGI("HDCP requested to start with Content Type %d",
+                static_cast<int>(initial_type));
+          hdcp_state_ = HdcpState::kDesired;
+          target_content_type_ = initial_type;
+          enabled_content_type_ = std::nullopt;
+          changed = true;
+        }
         break;
     }
   }
@@ -99,7 +107,6 @@ void HdcpController::Requested() {
   }
 
   ++request_generation_;
-  was_retry_ = (hdcp_state_ == HdcpState::kRetry);
   hdcp_state_ = HdcpState::kRequested;
 
   sleep_until_ = std::chrono::system_clock::now() + timeout_;
@@ -134,21 +141,18 @@ void HdcpController::SetContentProtectionStatus(uint64_t expected_generation,
       if (cp_enabled) {
         hdcp_state_ = HdcpState::kEnabled;
         should_notify_hdcp_status = true;
-        if (was_retry_) {
-          was_retry_ = false;
-          notify_type = HdcpContentType::kType0;
-        } else {
-          notify_type = HdcpContentType::kType1;
-        }
+        notify_type = target_content_type_;
         enabled_content_type_ = notify_type;
       } else {
-        if (was_retry_) {
-          was_retry_ = false;
+        if (target_content_type_ == HdcpContentType::kType0) {
           hdcp_state_ = HdcpState::kInfeasible;
           notify_type = std::nullopt;
-          ALOGI("HDCP negotiation failed after retry. Marking as infeasible.");
+          ALOGI(
+              "HDCP negotiation failed for Content Type 0. Marking as "
+              "infeasible.");
           should_notify_hdcp_status = true;
         } else {
+          target_content_type_ = HdcpContentType::kType0;
           hdcp_state_ = HdcpState::kRetry;
           trigger_retry = true;
         }
@@ -168,6 +172,14 @@ void HdcpController::SetContentProtectionStatus(uint64_t expected_generation,
 HdcpController::HdcpState HdcpController::GetHdcpState() const {
   auto lock = std::lock_guard<std::mutex>(mutex_);
   return hdcp_state_;
+}
+
+std::optional<HdcpContentType> HdcpController::GetPendingContentType() const {
+  auto lock = std::lock_guard<std::mutex>(mutex_);
+  if (hdcp_state_ == HdcpState::kDesired || hdcp_state_ == HdcpState::kRetry) {
+    return target_content_type_;
+  }
+  return std::nullopt;
 }
 
 bool HdcpController::GetSettledNotification(
@@ -192,7 +204,7 @@ void HdcpController::Terminate() {
     }
     ++request_generation_;
     hdcp_state_ = HdcpState::kUndesired;
-    was_retry_ = false;
+    target_content_type_ = HdcpContentType::kType1;
     enabled_content_type_ = std::nullopt;
   }
   cbks_.notify_hdcp_status(std::nullopt);
@@ -211,7 +223,7 @@ void HdcpController::Reset() {
     }
     ++request_generation_;
     hdcp_state_ = HdcpState::kUndesired;
-    was_retry_ = false;
+    target_content_type_ = HdcpContentType::kType1;
     enabled_content_type_ = std::nullopt;
   }
   cv_.notify_all();
